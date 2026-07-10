@@ -1103,6 +1103,14 @@ def open_browser_when_ready(host, port, kiosk=False, delay_max_s=5.0):
                 except Exception:
                     pass
             print("[Browser] kiosk requested but no Chrome/Edge found — falling back to default browser")
+        # macOS: the `open` command is reliable inside frozen .app bundles,
+        # where the webbrowser module's launcher detection can silently fail.
+        if sys.platform == "darwin":
+            try:
+                subprocess.Popen(["open", url])
+                return
+            except Exception:
+                pass
         try:
             webbrowser.open(url, new=2)
         except Exception:

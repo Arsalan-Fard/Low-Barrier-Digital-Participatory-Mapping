@@ -326,6 +326,34 @@
     #fsBtn.is-fs .fs-expand { display: none; }
     #fsBtn.is-fs .fs-compress { display: block; }
 
+    #warpNotice {
+      position: fixed;
+      left: 16px;
+      bottom: 12px;
+      z-index: 20001;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      font-size: 12.5px;
+      box-shadow: 0 4px 12px rgba(31, 114, 107, 0.12);
+    }
+    #warpNotice[hidden] { display: none; }
+    #warpNotice button {
+      border: 1px solid var(--green);
+      background: var(--green-tint);
+      color: var(--green-dark);
+      border-radius: 8px;
+      padding: 4px 10px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #warpNotice button:hover { background: var(--green); color: #fff; }
+
     #note {
       position: fixed;
       bottom: 8px;
@@ -524,8 +552,8 @@
   </style>
 </head>
 <body>
-  <button id="helpBtn" type="button" title="Show the setup guide again" aria-label="Show setup guide">?</button>
-  <button id="fsBtn" type="button" title="Toggle fullscreen (F11)" aria-label="Toggle fullscreen">
+  <button id="helpBtn" type="button" data-page-warp-exclude title="Show the setup guide again" aria-label="Show setup guide">?</button>
+  <button id="fsBtn" type="button" data-page-warp-exclude title="Toggle fullscreen (F11)" aria-label="Toggle fullscreen">
     <svg class="fs-expand" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/></svg>
     <svg class="fs-compress" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v5H3M21 8h-5V3M16 21v-5h5M3 16h5v5"/></svg>
   </button>
@@ -592,7 +620,14 @@
     </nav>
   </main>
 
-  <div id="note">F11 toggles fullscreen</div>
+  <div id="note" data-page-warp-exclude>F11 toggles fullscreen</div>
+
+  <!-- Shown when a saved projection warp is skewing this page (e.g. a stale
+       table calibration from an earlier workshop) so it can be cleared. -->
+  <div id="warpNotice" data-page-warp-exclude hidden>
+    <span>Projection alignment from a previous session is applied to this page.</span>
+    <button id="warpReset" type="button">Reset</button>
+  </div>
 
   <!-- Auto-calibration grid: full-screen white field of AprilTags in raw
        projector pixels (excluded from the page warp). Populated by JS from
@@ -600,7 +635,7 @@
   <div id="calibGrid" data-page-warp-exclude aria-hidden="true"></div>
 
   <!-- ==================== first-run intro ==================== -->
-  <div id="introOverlay" hidden role="dialog" aria-modal="true" aria-label="Setup guide">
+  <div id="introOverlay" data-page-warp-exclude hidden role="dialog" aria-modal="true" aria-label="Setup guide">
     <div class="intro-grid">
       <figure class="intro-photo">
         <img class="setup" src="/images/Setup2.png" alt="The physical setup in use: a projector mounted on a board above a table projects a map onto the tabletop while a participant moves a cardboard pointer on it" />
@@ -1155,6 +1190,37 @@
       });
       document.addEventListener('fullscreenchange', sync);
       sync();
+    })();
+  </script>
+
+  <script>
+    // Offer a reset when a saved projection warp meaningfully distorts this
+    // page (stale table calibration from an earlier workshop in this browser).
+    (function () {
+      'use strict';
+      var notice = document.getElementById('warpNotice');
+      var reset = document.getElementById('warpReset');
+      if (!notice || !reset) return;
+      var KEYS = ['compact-workshop-page-warp-v1', 'compact-workshop-maptastic-layout-v1'];
+      function warpIsSignificant() {
+        var raw = null;
+        try { raw = window.localStorage.getItem(KEYS[0]) || window.localStorage.getItem(KEYS[1]); } catch (_e) {}
+        if (!raw) return false;
+        var p;
+        try { p = JSON.parse(raw); } catch (_e) { return false; }
+        var s = p && p.sourcePointsNormalized;
+        var t = p && p.targetPointsNormalized;
+        if (!Array.isArray(s) || !Array.isArray(t) || s.length !== 4 || t.length !== 4) return false;
+        for (var i = 0; i < 4; i++) {
+          if (Math.abs(s[i][0] - t[i][0]) > 0.01 || Math.abs(s[i][1] - t[i][1]) > 0.01) return true;
+        }
+        return false;
+      }
+      if (warpIsSignificant()) notice.hidden = false;
+      reset.addEventListener('click', function () {
+        try { KEYS.forEach(function (k) { window.localStorage.removeItem(k); }); } catch (_e) {}
+        window.location.reload();
+      });
     })();
   </script>
 </body>
