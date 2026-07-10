@@ -1,0 +1,82 @@
+name: Release
+
+# Push a tag like v1.0.0 to build both standalone apps and publish a GitHub
+# release with the asset names the README promises. Run manually from the
+# Actions tab (workflow_dispatch) to test the builds without releasing —
+# the zips are then available as workflow artifacts.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          pip install -r requirements.txt
+      - name: Build standalone app
+        run: python -m PyInstaller --clean --noconfirm packaging/DigitalMappingWorkshop.spec
+      - name: Zip (DigitalMappingWorkshop/ as the zip's top-level folder)
+        working-directory: dist
+        run: 7z a DigitalMappingWorkshop-windows.zip DigitalMappingWorkshop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DigitalMappingWorkshop-windows
+          path: dist/DigitalMappingWorkshop-windows.zip
+
+  build-macos:
+    runs-on: macos-latest # Apple Silicon; switch to macos-13 for an Intel build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          pip install -r requirements.txt
+      - name: Build standalone app
+        run: python -m PyInstaller --clean --noconfirm packaging/DigitalMappingWorkshop.spec
+      - name: Zip app bundle
+        working-directory: dist
+        run: ditto -c -k --keepParent DigitalMappingWorkshop.app DigitalMappingWorkshop-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DigitalMappingWorkshop-macos
+          path: dist/DigitalMappingWorkshop-macos.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            DigitalMappingWorkshop-windows.zip DigitalMappingWorkshop-macos.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "DigitalMappingWorkshop $GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes "Standalone apps — no Python needed.
+
+          **Windows:** unzip \`DigitalMappingWorkshop-windows.zip\` and run \`DigitalMappingWorkshop.exe\`.
+          **macOS:** unzip \`DigitalMappingWorkshop-macos.zip\`; on first launch right-click \`DigitalMappingWorkshop.app\` → Open (the app is unsigned, so Gatekeeper warns once). Apple Silicon build.
+
+          Optional: place a \`token.txt\` with your Mapbox/Google keys next to the executable."
