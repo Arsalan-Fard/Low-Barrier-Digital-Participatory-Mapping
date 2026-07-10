@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="100mm"
+   height="100mm"
+   viewBox="0 0 100 100"
+   version="1.1"
+   id="svg1"
+   inkscape:version="1.4.2 (f4327f4, 2025-05-13)"
+   sodipodi:docname="Pointer1.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm"
+     inkscape:zoom="1.0015858"
+     inkscape:cx="377.90072"
+     inkscape:cy="282.05272"
+     inkscape:window-width="1920"
+     inkscape:window-height="991"
+     inkscape:window-x="-9"
+     inkscape:window-y="-9"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1" />
+  <defs
+     id="defs1" />
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <path
+       style="vector-effect:non-scaling-stroke;fill:none;stroke:#000000;stroke-width:0.264583;stroke-linejoin:bevel;-inkscape-stroke:hairline"
+       d="M 80.1809,83.733683 V 53.73369 h 10.00001 v -40 H 10.180907 v 40 H 20.18091 v 29.999993 h 25 L 50,50 55.18091,83.733683 Z"
+       id="path13" />
+    <g
+       id="g27"
+       transform="matrix(0.4375,0,0,0.4375,12.354147,15.529167)">
+      <path
+         style="fill:#ffffff;stroke:none"
+         d="M 0,0 V 80 H 80 V 0 Z"
+         id="path1-0" />
+      <path
+         style="fill:#000000;stroke:none"
+         d="M 10,10 V 70 H 70 V 10 Z"
+         id="path2-9" />
+      <path
+         style="fill:#ffffff;stroke:none"
+         d="M 40,20 V 30 H 20 V 50 H 30 V 60 H 40 V 50 H 50 V 60 H 60 V 50 H 50 V 20 Z"
+         id="path3-4" />
+      <path
+         style="fill:#000000;stroke:none"
+         d="M 30,40 V 50 H 40 V 40 Z"
+         id="path4-8" />
+    </g>
+    <g
+       id="g28"
+       transform="matrix(0.4375,0,0,0.4375,52.64585,15.529167)">
+      <path
+         style="fill:#ffffff;stroke:none"
+         d="M 0,0 V 80 H 80 V 0 Z"
+         id="path1-8" />
+      <path
+         style="fill:#000000;stroke:none"
+         d="M 10,10 V 70 H 70 V 10 Z"
+         id="path2-2" />
+      <path
+         style="fill:#ffffff;stroke:none"
+         d="M 40,20 V 40 H 50 V 50 H 40 V 60 H 60 V 30 H 50 V 20 H 40 M 20,50 V 60 H 30 V 50 Z"
+         id="path3-45" />
+    </g>
+    <path
+       style="vector-effect:non-scaling-stroke;fill:none;stroke:#000000;stroke-width:0.17321;stroke-linejoin:bevel;-inkscape-stroke:hairline"
+       d="m 50.18091,43.73369 v -30"
+       id="path28" />
+  </g>
+</svg>

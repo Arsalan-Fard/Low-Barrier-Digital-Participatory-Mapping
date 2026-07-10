@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Digital Mapping Workshop Map</title>
+  <link href="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.js" crossorigin="anonymous"></script>
+  <script src="src/util.js"></script>
+  <script src="src/maplibreCompat.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/glowbox/maptastic@master/build/maptastic.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      background: #000;
+      overflow: hidden;
+    }
+
+    #main_container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background-color: #000;
+      transform-origin: 0 0;
+      display: flex !important;
+      flex-direction: column;
+    }
+
+    .general-annotation-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 7;
+      pointer-events: none;
+    }
+
+    .general-annotation-wrap {
+      position: absolute;
+      pointer-events: none;
+    }
+
+    .general-annotation-wrap.side-top {
+      top: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .general-annotation-wrap.side-bottom {
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .general-annotation-wrap.side-left {
+      left: 18px;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+
+    .general-annotation-wrap.side-right {
+      right: 18px;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+
+    .keyboard-annotation-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 8;
+      pointer-events: none;
+      overflow: hidden;
+      --keyboard-annotation-color: #082f49;
+    }
+
+    .keyboard-annotation-overlay.hidden {
+      display: none;
+    }
+
+    .keyboard-annotation-svg,
+    .keyboard-annotation-canvas,
+    .keyboard-annotation-html {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+      pointer-events: none;
+    }
+
+    .keyboard-annotation-canvas {
+      z-index: 2;
+    }
+
+    .keyboard-annotation-svg,
+    .keyboard-annotation-html {
+      z-index: 1;
+    }
+
+    #map {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    .street-view-inset {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 16.666vw;
+      height: 50vh;
+      min-width: 220px;
+      min-height: 270px;
+      max-width: 340px;
+      max-height: 630px;
+      z-index: 9;
+      border-radius: 18px;
+      overflow: hidden;
+      background: rgba(8, 10, 12, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow: 0 22px 48px rgba(0, 0, 0, 0.35);
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, calc(-100% - 12px)) scale(0.98);
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+
+    .street-view-inset.visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(-50%, calc(-100% - 12px)) scale(1);
+    }
+
+    .street-view-inset__frame {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+      background: #111;
+    }
+
+    .street-view-inset__pano {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: #111;
+    }
+    /* Once the JS panorama is live, hide the embed-iframe fallback so they
+       don't stack — the JS one updates in place without reloading. */
+    .street-view-inset.pano-ready .street-view-inset__frame {
+      display: none;
+    }
+    .street-view-inset:not(.pano-ready) .street-view-inset__pano {
+      display: none;
+    }
+
+    @media (max-width: 900px) {
+      .street-view-inset {
+        width: min(42vw, 280px);
+        height: min(45vh, 360px);
+        min-width: 180px;
+        min-height: 225px;
+      }
+    }
+
+    .custom-object-marker {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      pointer-events: auto;
+      cursor: grab;
+      user-select: none;
+      transition: gap 120ms ease;
+    }
+
+    .custom-object-marker.dragging { cursor: grabbing; }
+
+    .custom-object-marker.is-compact {
+      gap: 0;
+    }
+
+    .custom-object-marker__icon {
+        width: var(--custom-object-icon-size, 24px);
+        height: var(--custom-object-icon-size, 24px);
+        flex-shrink: 0;
+        background: var(--custom-object-color, #ff4d4f);
+        opacity: 0.6;
+        filter: drop-shadow(0 0 6px var(--custom-object-color, #ff4d4f))
+                drop-shadow(0 0 16px rgba(255, 255, 255, 0.18));
+        transition: width 120ms ease, height 120ms ease, opacity 120ms ease;
+      }
+
+    .custom-object-marker.is-compact .custom-object-marker__icon {
+        width: var(--custom-object-icon-compact-size, 12px);
+        height: var(--custom-object-icon-compact-size, 12px);
+      }
+
+    .custom-object-marker__text {
+      font-family: Arial, sans-serif;
+      font-size: var(--custom-object-text-size, 18px);
+      font-weight: 700;
+      color: rgba(205, 205, 205, 0.88);
+      white-space: nowrap;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.7),
+                     0 0 20px rgba(0, 0, 0, 0.35);
+      transition: opacity 120ms ease, font-size 120ms ease;
+    }
+
+    .custom-object-marker.is-compact .custom-object-marker__text {
+      opacity: 0;
+      width: 0;
+      overflow: hidden;
+    }
+
+    #calibOverlay {
+      position: absolute;
+      inset: 0;
+      z-index: 8;
+      pointer-events: none;
+      display: none;
+    }
+
+    #calibOverlay.active { display: block; }
+
+    .calib-crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 40px;
+      height: 40px;
+      pointer-events: none;
+    }
+
+    .calib-crosshair::before,
+    .calib-crosshair::after {
+      content: '';
+      position: absolute;
+      background: rgba(255, 50, 50, 0.85);
+    }
+
+    .calib-crosshair::before {
+      top: 0;
+      left: 50%;
+      width: 2px;
+      height: 100%;
+      transform: translateX(-50%);
+    }
+
+    .calib-crosshair::after {
+      left: 0;
+      top: 50%;
+      height: 2px;
+      width: 100%;
+      transform: translateY(-50%);
+    }
+
+    #hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.74);
+      color: #fff;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.35;
+      min-width: 320px;
+      max-width: calc(100% - 28px);
+    }
+
+    #viewFilterPanel {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 12;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: min(320px, calc(100vw - 24px));
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.78);
+      color: #fff;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+    }
+
+    .view-filter-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .view-filter-row {
+      display: grid;
+      grid-template-columns: 88px 1fr 56px;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .view-filter-label,
+    .view-filter-value {
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .view-filter-slider {
+      width: 100%;
+      accent-color: #f5f5f5;
+      cursor: pointer;
+    }
+
+    .view-filter-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .view-filter-reset {
+      border: 0;
+      border-radius: 6px;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.16);
+      color: #fff;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .view-filter-reset:hover {
+      background: rgba(255, 255, 255, 0.24);
+    }
+
+
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #ff2222;
+      border: 2px solid #fff;
+      box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+    }
+
+    .calib-panel {
+      position: absolute;
+      bottom: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.82);
+      color: #fff;
+      padding: 14px 20px;
+      border-radius: 10px;
+      pointer-events: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 360px;
+      max-width: min(420px, calc(100vw - 24px));
+      max-height: min(70vh, 560px);
+      overflow-y: auto;
+      z-index: 20;
+    }
+
+    .calib-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .calib-section:first-child {
+      padding-top: 0;
+      border-top: none;
+    }
+
+    .calib-section-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: rgba(255, 255, 255, 0.92);
+      letter-spacing: 0.03em;
+    }
+
+    .calib-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .calib-label {
+      font-weight: 700;
+      font-size: 15px;
+      width: 20px;
+      text-align: right;
+    }
+
+    .calib-slider {
+      flex: 1;
+      cursor: pointer;
+      accent-color: #4caf50;
+    }
+
+    .calib-value {
+      font-size: 14px;
+      min-width: 40px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* The marker element itself is a 0x0 anchor point at the tag's lng/lat.
+       Children are absolutely positioned around it so the marker's anchor stays
+       fixed regardless of how much UI (drafts, chips) is attached. */
+    .tag-sticker-anchor {
+      position: relative;
+      width: 0;
+      height: 0;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    .tag-sticker-dot {
+      position: absolute;
+      left: 0;
+      top: 0;
+      transform: translate(-50%, -50%);
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      transform-origin: 50% 50%;
+      pointer-events: none;
+    }
+
+    /* Dwell-progress ring drawn around the live sticker preview. The SVG is
+       larger than the dot so the arc reads clearly outside the sticker's
+       border. Only shown after ~0.5s of hold; fills to 100% at 2s. */
+    .tag-sticker-progress {
+      position: absolute;
+      left: 0;
+      top: 0;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 120ms linear;
+      overflow: visible;
+    }
+    .tag-sticker-progress__bg {
+      fill: none;
+      stroke: rgba(255, 255, 255, 0.18);
+      stroke-width: 3;
+    }
+    .tag-sticker-progress__arc {
+      fill: none;
+      stroke: var(--sticker-color, #ff5b5b);
+      stroke-width: 3;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 80ms linear;
+    }
+
+    .tag-sticker-live.tag-sticker-dot {
+      background: transparent;
+      opacity: 1;
+      box-shadow: none;
+    }
+
+    .tag-sticker-live.armed {
+      opacity: 1;
+    }
+
+    .tag-sticker.tag-sticker-dot {
+      border: 2px solid #fff;
+      background: var(--sticker-color, #ff5b5b);
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.32);
+    }
+
+    .sticker-comment-editor.tag-annotation-live {
+      position: absolute;
+      left: 0;
+      bottom: 24px;
+      transform: translateX(-50%);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 120ms linear;
+      z-index: 3;
+    }
+
+    .sticker-comment-editor.visible {
+      opacity: 1;
+      transition-duration: 120ms;
+    }
+
+    .sticker-comment-editor.fading {
+      opacity: 0;
+      transition-duration: 2000ms;
+    }
+
+    .sticker-comment-editor__field {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      max-width: 520px;
+      min-width: 160px;
+      height: 42px;
+      min-height: 42px;
+      max-height: 42px;
+      pointer-events: none;
+      user-select: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sticker-comment-editor.is-empty .sticker-comment-editor__field {
+      font-style: italic;
+      opacity: 0.92;
+    }
+
+    .sticker-comment-placed {
+      position: absolute;
+      left: 0;
+      bottom: 24px;
+      transform: translateX(-50%);
+      z-index: 2;
+      max-width: 520px;
+    }
+
+    .tag-sticker-dot.commented {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .tag-annotation-live {
+      position: relative;
+      display: inline-block;
+      width: max-content;
+      width: fit-content;
+      transform-origin: 50% 100%;
+    }
+
+    .tag-annotation-live__box {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: max-content;
+      width: fit-content;
+      transform-origin: 50% 100%;
+      will-change: transform;
+    }
+
+    .tag-annotation-input {
+      width: 180px;
+      height: 42px;
+      min-height: 42px;
+      max-height: 42px;
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid rgba(0, 0, 0, 0.28);
+      background: #ffffff;
+      color: #111;
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.2;
+      font-family: inherit;
+      resize: none;
+      outline: none;
+      overflow: hidden;
+      text-align: center;
+      white-space: nowrap;
+      box-sizing: border-box;
+      box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
+    }
+
+    .tag-annotation-input:focus {
+      border-color: rgba(0, 0, 0, 0.35);
+      box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.10);
+    }
+
+    .tag-annotation-input::placeholder {
+      color: var(--annotation-placeholder, rgba(0, 0, 0, 0.55));
+      font-weight: 700;
+    }
+
+    .general-annotation-input {
+      width: min(320px, calc(100vw - 80px));
+      min-height: 96px;
+      resize: none;
+      pointer-events: auto;
+      transform-origin: 50% 50%;
+    }
+
+    .general-annotation-wrap.side-left .general-annotation-input,
+    .general-annotation-wrap.side-right .general-annotation-input {
+      width: min(240px, calc(100vw - 80px));
+      min-height: 120px;
+    }
+
+    .general-annotation-wrap.side-top .general-annotation-input {
+      transform: rotate(180deg);
+    }
+
+    .general-annotation-wrap.side-right .general-annotation-input {
+      transform: rotate(-90deg);
+    }
+
+    .general-annotation-wrap.side-bottom .general-annotation-input {
+      transform: rotate(0deg);
+    }
+
+    .general-annotation-wrap.side-left .general-annotation-input {
+      transform: rotate(90deg);
+    }
+
+    .tag-annotation-chip {
+      max-width: 520px;
+      min-width: 24px;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+      color: #ffffff;
+      display: block;
+      pointer-events: none;
+      transform-origin: 50% 100%;
+      will-change: transform;
+    }
+
+    .tag-annotation-chip__rotor {
+      display: block;
+      transform-origin: 50% 100%;
+      will-change: transform;
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1.18;
+      font-family: inherit;
+      text-align: center;
+      white-space: nowrap;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+    }
+
+    .tag-annotation-chip__text {
+      display: block;
+    }
+
+    .tag-annotation-chip__icon {
+      position: relative;
+      width: 12px;
+      height: 14px;
+      border: 2px solid currentColor;
+      border-radius: 2px;
+      background: #ffffff;
+      box-sizing: border-box;
+      color: #111111;
+    }
+
+    .tag-annotation-chip__icon::before {
+      content: '';
+      position: absolute;
+      left: 2px;
+      right: 2px;
+      top: 3px;
+      height: 1px;
+      background: currentColor;
+      box-shadow: 0 3px 0 currentColor, 0 6px 0 currentColor;
+    }
+
+    .hidden { display: none !important; }
+
+    #customObjectModal {
+      position: fixed;
+      inset: 0;
+      z-index: 110;
+      background: rgba(0, 0, 0, 0.52);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #customObjectModal.hidden { display: none !important; }
+
+    #customObjectModalBox {
+      width: min(92vw, 360px);
+      background: #fff;
+      border-radius: 10px;
+      padding: 18px;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.32);
+    }
+
+    #customObjectModalBox h2 {
+      margin: 0 0 14px;
+      font-size: 19px;
+      color: #111;
+    }
+
+    .custom-object-form-row {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .custom-object-form-row label {
+      font-size: 13px;
+      font-weight: 700;
+      color: #333;
+    }
+
+    .custom-object-form-row input,
+    .custom-object-form-row select {
+      width: 100%;
+      border: 1px solid #cfcfcf;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 14px;
+      color: #111;
+      background: #fff;
+      box-sizing: border-box;
+    }
+
+    .custom-object-form-row input[type="color"] {
+      padding: 4px;
+      height: 42px;
+      cursor: pointer;
+    }
+
+    .custom-object-form-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .custom-object-form-btn {
+      border: 1px solid #d0d0d0;
+      border-radius: 6px;
+      padding: 9px 16px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .custom-object-form-btn--cancel {
+      background: #f4f4f4;
+      color: #444;
+    }
+
+    .custom-object-form-btn--submit {
+      background: #1e88e5;
+      border-color: #1e88e5;
+      color: #fff;
+    }
+
+  </style>
+</head>
+<body>
+  <div id="main_container">
+    <div id="map"></div>
+    <div id="hud">Waiting for backend...</div>
+    <div id="viewFilterPanel" class="hidden" aria-label="Light settings controls">
+      <div class="view-filter-title">Light Settings</div>
+      <label class="view-filter-row" for="viewBrightness">
+        <span class="view-filter-label">Brightness</span>
+        <input id="viewBrightness" class="view-filter-slider" type="range" min="0.5" max="2" step="0.05" value="1" />
+        <span id="viewBrightnessValue" class="view-filter-value">1.00x</span>
+      </label>
+      <label class="view-filter-row" for="viewSaturation">
+        <span class="view-filter-label">Saturation</span>
+        <input id="viewSaturation" class="view-filter-slider" type="range" min="0" max="2" step="0.05" value="1" />
+        <span id="viewSaturationValue" class="view-filter-value">1.00x</span>
+      </label>
+      <label class="view-filter-row" for="viewContrast">
+        <span class="view-filter-label">Contrast</span>
+        <input id="viewContrast" class="view-filter-slider" type="range" min="0.5" max="2" step="0.05" value="1" />
+        <span id="viewContrastValue" class="view-filter-value">1.00x</span>
+      </label>
+      <label class="view-filter-row" for="viewInvert">
+        <span class="view-filter-label">Invert</span>
+        <input id="viewInvert" class="view-filter-slider" type="range" min="0" max="1" step="0.05" value="0" />
+        <span id="viewInvertValue" class="view-filter-value">0%</span>
+      </label>
+      <label class="view-filter-row" for="viewSepia">
+        <span class="view-filter-label">Sepia</span>
+        <input id="viewSepia" class="view-filter-slider" type="range" min="0" max="1" step="0.05" value="0" />
+        <span id="viewSepiaValue" class="view-filter-value">0%</span>
+      </label>
+      <div class="view-filter-actions">
+        <button id="viewFilterClose" class="view-filter-reset" type="button">Hide</button>
+        <button id="viewFilterReset" class="view-filter-reset" type="button">Reset</button>
+      </div>
+    </div>
+    <div id="streetViewInset" class="street-view-inset" aria-hidden="true">
+      <!-- Preferred renderer: JS Street View panorama. Updated in-place when
+           the tag moves or rotates so neither the page nor the iframe ever
+           reloads on rotation. -->
+      <div id="streetViewPanorama" class="street-view-inset__pano"></div>
+      <!-- Fallback iframe used until the Maps SDK loads (or if it fails). -->
+      <iframe
+        id="streetViewFrame"
+        class="street-view-inset__frame"
+        loading="lazy"
+        allowfullscreen
+        referrerpolicy="no-referrer-when-downgrade"
+        title="Telecom Paris Street View">
+      </iframe>
+    </div>
+    <div id="calibOverlay"></div>
+  </div><!-- end #main_container -->
+
+  <div id="customObjectModal" class="hidden">
+    <div id="customObjectModalBox">
+      <h2>Add Object</h2>
+      <form id="customObjectForm">
+        <div class="custom-object-form-row">
+          <label for="customObjectText">Text</label>
+          <input id="customObjectText" type="text" maxlength="120" placeholder="Label" />
+        </div>
+        <div class="custom-object-form-row">
+          <label for="customObjectMode">Mode</label>
+          <select id="customObjectMode">
+            <option value="transportation">Transportation</option>
+            <option value="landmark">Landmark</option>
+            <option value="amenities">Amenities</option>
+          </select>
+        </div>
+        <div class="custom-object-form-row">
+          <label for="customObjectColor">Color</label>
+          <input id="customObjectColor" type="color" value="#ff4d4f" />
+        </div>
+        <div class="custom-object-form-actions">
+          <button id="customObjectCancel" class="custom-object-form-btn custom-object-form-btn--cancel" type="button">Cancel</button>
+          <button class="custom-object-form-btn custom-object-form-btn--submit" type="submit">Add</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Shared page warp initializes here before app scripts read window.maptastic. -->
+  <script src="src/pageWarp.js"></script>
+  <script src="src/config.js"></script>
+  <script src="src/mapSetup.js"></script>
+  <script src="src/mapWarp.js"></script>
+  <script src="src/calibration.js"></script>
+  <script src="src/tagAssignments.js?v=5"></script>
+  <script src="src/workshopRuntime.js"></script>
+  <script src="src/workshopEditor.js?v=2"></script>
+  <script src="src/pageFlow.js"></script>
+  <script src="src/overlays.js"></script>
+  <script src="src/foldGeometry.js"></script>
+  <script src="src/drawing.js?v=4"></script>
+  <script src="src/roadSnapGeometry.js"></script>
+  <script src="src/roadSnapping.js"></script>
+  <script src="src/stickerPlacement.js"></script>
+  <script src="src/annotationPlacement.js"></script>
+  <script src="src/keyboardAnnotationPlacement.js"></script>
+  <script src="src/generalAnnotationPlacement.js"></script>
+  <script src="src/customMapObjects.js"></script>
+  <script src="src/dataExport.js"></script>
+  <script src="src/isochrone.js"></script>
+  <script src="src/routing.js"></script>
+  <script src="src/osmnxNetwork.js"></script>
+  <script src="src/floorplanIsovist.js"></script>
+  <script src="src/driftMonitor.js"></script>
+  <script src="src/script.js?v=11"></script>
+</body>
+</html>

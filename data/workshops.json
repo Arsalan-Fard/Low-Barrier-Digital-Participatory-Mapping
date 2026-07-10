@@ -1,0 +1,237 @@
+{
+  "workshops": [
+    {
+      "id": "ws_mppl13s62b3oe",
+      "name": "Palaiseau Campus",
+      "steps": [
+        {
+          "id": 1,
+          "label": "Step 1",
+          "mapView": {
+            "bearing": 0,
+            "center": [
+              2.199804682709555,
+              48.712118970377475
+            ],
+            "pitch": 0,
+            "zoom": 13.994549456578685
+          },
+          "theme": "streets",
+          "labels": []
+        },
+        {
+          "id": 2,
+          "indoor": true,
+          "label": "Step 2",
+          "mapView": {
+            "bearing": 10.315518563441856,
+            "center": [
+              2.203572008439778,
+              48.71264973990512
+            ],
+            "pitch": 0,
+            "zoom": 16.07621248462657
+          },
+          "theme": "streets",
+          "labels": []
+        },
+        {
+          "id": 3,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 3",
+          "mapView": {
+            "bearing": 0,
+            "center": [
+              2.207351684403875,
+              48.712791083846156
+            ],
+            "pitch": 0,
+            "zoom": 15.186503936356743
+          },
+          "theme": "streets",
+          "labels": []
+        },
+        {
+          "id": 4,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 4",
+          "mapView": null,
+          "theme": "streets",
+          "labels": []
+        },
+        {
+          "id": 5,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 5",
+          "mapView": null,
+          "theme": "streets",
+          "labels": []
+        },
+        {
+          "id": 6,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 6",
+          "mapView": null,
+          "theme": "streets",
+          "labels": []
+        },
+        {
+          "id": 7,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 7",
+          "mapView": null,
+          "theme": "streets",
+          "labels": []
+        },
+        {
+          "id": 8,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 8",
+          "mapView": null,
+          "theme": "streets",
+          "labels": []
+        },
+        {
+          "id": 9,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 9",
+          "mapView": null,
+          "theme": "streets",
+          "labels": []
+        }
+      ]
+    },
+    {
+      "id": "ws_mppljow42ue63",
+      "name": "Saclay",
+      "steps": [
+        {
+          "id": 1,
+          "label": "Step 1",
+          "mapView": null,
+          "theme": "streets",
+          "labels": []
+        }
+      ]
+    },
+    {
+      "id": "ws_mq9hw9vlptrn5",
+      "name": "academie",
+      "steps": [
+        {
+          "id": 1,
+          "indoor": true,
+          "indoorId": "",
+          "label": "Step 1",
+          "labels": [
+            {
+              "bgOpacity": 0.6,
+              "fontSize": 16,
+              "text": "i7fiuyf",
+              "xPct": 0.12223268959020255,
+              "yPct": 0.21286993712482608
+            },
+            {
+              "bgOpacity": 0.6,
+              "fontSize": 16,
+              "text": "Text",
+              "xPct": 0.5,
+              "yPct": 0.5
+            }
+          ],
+          "mapView": {
+            "bearing": 0,
+            "center": [
+              2.2089431013266676,
+              48.71119194268107
+            ],
+            "pitch": 0,
+            "zoom": 14.497461343916216
+          },
+          "theme": "streets"
+        },
+        {
+          "id": 2,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 2",
+          "mapView": {
+            "bearing": 0,
+            "center": [
+              2.2078133544964658,
+              48.71277936369381
+            ],
+            "pitch": 0,
+            "zoom": 15
+          },
+          "theme": "satellite",
+          "labels": []
+        },
+        {
+          "id": 3,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 3",
+          "mapView": {
+            "bearing": 0,
+            "center": [
+              2.2085,
+              48.7116
+            ],
+            "pitch": 0,
+            "zoom": 15
+          },
+          "theme": "streets",
+          "labels": []
+        }
+      ]
+    },
+    {
+      "id": "ws_ayn9nn87za",
+      "name": "www",
+      "steps": [
+        {
+          "id": 1,
+          "label": "Step 1",
+          "theme": "streets",
+          "indoor": false,
+          "indoorId": "",
+          "mapView": null,
+          "labels": []
+        },
+        {
+          "id": 2,
+          "label": "Tesssxt",
+          "theme": "satellite",
+          "indoor": false,
+          "indoorId": "",
+          "mapView": {
+            "center": [
+              2.1990994784026725,
+              48.71300798880603
+            ],
+            "zoom": 15.235890286128397,
+            "bearing": 0,
+            "pitch": 0
+          },
+          "labels": [
+            {
+              "text": "Tesssxt",
+              "xPct": 0.5,
+              "yPct": 0.5,
+              "fontSize": 20,
+              "bgOpacity": 0.6
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

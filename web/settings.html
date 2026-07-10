@@ -1,0 +1,1671 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Settings — Digital Participatory Mapping</title>
+  <style>
+    :root {
+      --paper: #f4efe6;
+      --paper-2: #fbf8f1;
+      --ink: #1c1c1c;
+      --ink-soft: #4a4a4a;
+      --line: #2c2c2c;
+      --accent: #1a1a1a;
+      --danger: #7a1f1f;
+      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--font-ui);
+      overflow: hidden;
+    }
+
+    #app {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      height: 100vh;
+    }
+
+    /* ---------- Sidebar ---------- */
+    aside#sidebar {
+      padding: 28px 20px;
+      border-right: 2px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      background: var(--paper);
+    }
+
+    .home-link {
+      font-family: var(--font-ui);
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--ink);
+      text-decoration: none;
+      padding: 4px 8px;
+      border-bottom: 1px dashed rgba(0,0,0,0.25);
+      margin-bottom: 4px;
+      cursor: pointer;
+      align-self: flex-start;
+    }
+    .home-link:hover { background: rgba(0,0,0,0.04); border-radius: 6px; }
+
+    .sidebar-heading {
+      font-family: var(--font-ui);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+      margin: 6px 4px -4px;
+    }
+
+    .nav-btn {
+      font-family: var(--font-ui);
+      font-size: 15px;
+      font-weight: 500;
+      padding: 16px 12px;
+      background: rgba(255, 252, 246, 0.9);
+      color: var(--ink);
+      border: 2px solid var(--line);
+      border-radius: 12px;
+      cursor: pointer;
+      letter-spacing: 0.3px;
+      text-align: center;
+      box-shadow: 1px 2px 0 rgba(0,0,0,0.15);
+      transition: transform 0.08s ease, background 0.15s ease;
+    }
+    .nav-btn:hover { background: var(--paper-2); }
+    .nav-btn:active { transform: translate(1px, 1px); }
+    .nav-btn.active { background: #d9d4ca; }
+    .nav-btn.disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    /* Camera / Screen nav buttons pulse with a teal tint until configured, so
+       the user knows what still needs setting up — including the tab they're
+       currently on (it keeps blinking until that piece is actually set). */
+    @keyframes nav-btn-pulse {
+      0%, 100% { transform: scale(1); }
+      50%      { transform: scale(1.07); }
+    }
+    .nav-btn.needs-setup {
+      background: rgba(190, 235, 232, 0.95);
+      border-color: #2f8f86;
+      color: #15514b;
+      animation: nav-btn-pulse 1.1s ease-in-out infinite;
+    }
+
+    /* ---------- Main ---------- */
+    main#content {
+      padding: 28px 36px;
+      overflow-y: auto;
+    }
+
+    .pane { display: none; height: 100%; }
+    .pane.active { display: flex; flex-direction: column; }
+
+    .pane-title {
+      font-family: var(--font-ui);
+      font-weight: 600;
+      font-size: 22px;
+      text-align: center;
+      margin: 0 0 22px;
+      color: var(--ink);
+    }
+
+    /* ---------- Camera: selection state ---------- */
+    .source-tiles {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 22px;
+      min-height: 360px;
+    }
+    .source-tile {
+      font-family: var(--font-ui);
+      font-size: 17px;
+      background: rgba(255, 252, 246, 0.85);
+      color: var(--ink);
+      border: 2px solid var(--line);
+      border-radius: 18px;
+      cursor: pointer;
+      box-shadow: 2px 3px 0 rgba(0,0,0,0.18);
+      transition: transform 0.08s ease, background 0.15s ease;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 24px;
+    }
+    .source-tile:hover { background: var(--paper-2); }
+    .source-tile:active { transform: translate(1px, 1px); }
+    .source-tile img {
+      max-width: 70%;
+      max-height: 60%;
+      object-fit: contain;
+      pointer-events: none;
+      filter: drop-shadow(0 4px 8px rgba(0,0,0,0.18));
+    }
+    .source-tile .tile-label {
+      font-family: var(--font-ui);
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .source-tile .tile-sub {
+      font-family: var(--font-ui);
+      font-size: 13px;
+      color: var(--ink-soft);
+      opacity: 0.85;
+    }
+    .source-tile.soon {
+      cursor: not-allowed;
+      opacity: 0.55;
+      box-shadow: none;
+    }
+    .source-tile.soon:hover { background: rgba(255, 252, 246, 0.85); }
+    .source-tile.soon:active { transform: none; }
+
+    /* ---------- Camera: selected state ---------- */
+    .source-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 22px;
+      margin-bottom: 18px;
+    }
+    .source-pill {
+      font-family: var(--font-ui);
+      font-size: 15px;
+      font-weight: 500;
+      padding: 12px;
+      text-align: center;
+      background: rgba(255, 252, 246, 0.85);
+      color: var(--ink);
+      border: 2px solid var(--line);
+      border-radius: 12px;
+      cursor: pointer;
+      box-shadow: 1px 2px 0 rgba(0,0,0,0.16);
+    }
+    .source-pill:hover { background: var(--paper-2); }
+    .source-pill.active { background: #d9d4ca; }
+    .source-pill.soon {
+      cursor: not-allowed;
+      opacity: 0.5;
+      box-shadow: none;
+    }
+    .source-pill.soon:hover { background: rgba(255, 252, 246, 0.85); }
+
+    .corner-btn {
+      font-family: var(--font-ui);
+      font-size: 16px;
+      font-weight: 600;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      background: rgba(255, 252, 246, 0.9);
+      color: var(--ink);
+      border: 2px solid var(--line);
+      border-radius: 10px;
+      cursor: pointer;
+      box-shadow: 1px 2px 0 rgba(0,0,0,0.16);
+    }
+    .corner-btn:hover { background: var(--paper-2); }
+    .corner-btn:active { transform: translate(1px, 1px); }
+    .corner-btn.set {
+      background: #d9e8d5;
+      border-color: #3e7a3e;
+      color: #1a4a1a;
+    }
+    .corner-btn.active {
+      background: #2c2c2c;
+      color: #fff;
+      border-color: #000;
+    }
+
+    .source-content {
+      flex: 1;
+      background: rgba(255, 252, 246, 0.85);
+      border: 2px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 2px 3px 0 rgba(0,0,0,0.18);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      overflow: hidden;
+      min-height: 360px;
+    }
+
+    .instructions {
+      font-family: var(--font-ui);
+      font-size: 16px;
+      color: var(--ink);
+      line-height: 1.65;
+      max-width: 640px;
+    }
+    .instructions ol {
+      margin: 0;
+      padding-left: 0;
+      list-style: none;
+      counter-reset: instr;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .instructions li {
+      counter-increment: instr;
+      padding-left: 2.2em;
+      position: relative;
+    }
+    .instructions li::before {
+      content: counter(instr) ".";
+      position: absolute;
+      left: 0;
+      top: 0;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .row-buttons {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .action-btn {
+      font-family: var(--font-ui);
+      font-size: 14px;
+      font-weight: 500;
+      padding: 9px 20px;
+      background: rgba(255, 252, 246, 0.9);
+      color: var(--ink);
+      border: 2px solid var(--line);
+      border-radius: 10px;
+      cursor: pointer;
+      box-shadow: 1px 2px 0 rgba(0,0,0,0.16);
+    }
+    .action-btn:hover { background: var(--paper-2); }
+    .action-btn:active { transform: translate(1px, 1px); }
+    .action-btn.danger { color: var(--danger); border-color: var(--danger); }
+
+    .field {
+      font-family: var(--font-ui);
+      font-size: 14px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .field select, .field input[type="text"], .field input[type="number"] {
+      font-family: inherit;
+      font-size: 14px;
+      padding: 6px 10px;
+      border: 2px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--ink);
+      min-width: 80px;
+    }
+
+    .camera-view {
+      width: 100%;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 220px;
+    }
+    .camera-view img {
+      max-width: 100%;
+      max-height: 100%;
+      border-radius: 12px;
+      border: 2px solid var(--line);
+      background: #111;
+      object-fit: contain;
+    }
+    .camera-view .placeholder {
+      font-family: var(--font-ui);
+      font-size: 15px;
+      color: var(--ink-soft);
+    }
+
+    #projectorFps {
+      position: absolute; top: 8px; right: 10px; z-index: 5;
+      padding: 3px 8px; border-radius: 6px;
+      background: rgba(0, 0, 0, 0.55); color: #6cff9e;
+      font: 600 13px/1 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      letter-spacing: .02em; pointer-events: none;
+    }
+
+    #arucoTuning { margin-top: 14px; display: grid; gap: 8px; }
+    #arucoTuning:empty { display: none; }
+    .aruco-tuning__title {
+      font-family: var(--font-ui); font-size: 13px; font-weight: 700; color: var(--ink-soft);
+    }
+    .aruco-tuning__sub {
+      display: flex; align-items: center; gap: 8px; margin-top: 6px;
+      font-family: var(--font-ui); font-size: 13px; font-weight: 600; color: var(--ink-soft);
+    }
+    .aruco-tuning__sub input { width: 15px; height: 15px; }
+    .aruco-row {
+      display: grid; grid-template-columns: 120px 1fr 46px 88px;
+      align-items: center; gap: 10px; font-family: var(--font-ui); font-size: 13px;
+    }
+    .aruco-row__label { font-weight: 600; }
+    .aruco-row__slider { width: 100%; }
+    .aruco-row__val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .aruco-row__def { text-align: right; font-size: 11px; color: var(--ink-soft); }
+    .aruco-row__select { width: 100%; font-family: var(--font-ui); font-size: 13px; padding: 2px 4px; }
+    #cameraControls { margin-top: 14px; display: grid; gap: 8px; }
+    #cameraControls:empty { display: none; }
+    @media (max-width: 760px) {
+      .aruco-row { grid-template-columns: 96px 1fr 40px; }
+      .aruco-row__def { display: none; }
+    }
+
+    .status-line {
+      font-family: var(--font-ui);
+      font-size: 13px;
+      color: var(--ink-soft);
+      min-height: 20px;
+    }
+    .status-line.ok { color: #1f6b2f; }
+    .status-line.err { color: var(--danger); }
+
+    /* "Coming soon" placeholder for the other tabs. */
+    .pane-placeholder {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-ui);
+      font-size: 18px;
+      color: var(--ink-soft);
+      opacity: 0.7;
+    }
+
+    /* ---------- Marker editor ---------- */
+    .marker-settings {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      font-family: var(--font-ui);
+    }
+    .marker-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding-bottom: 12px;
+      border-bottom: 2px solid var(--line);
+    }
+    .marker-toolbar-text {
+      font-size: 16px;
+      margin-right: auto;
+    }
+    .marker-field {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .marker-field select,
+    .marker-field input[type="number"] {
+      height: 40px;
+      box-sizing: border-box;
+      border: 2px solid #777;
+      border-radius: 0;
+      background: var(--paper-2);
+      color: var(--ink);
+      font: inherit;
+      padding: 0 12px;
+    }
+    .marker-field input[type="number"] { width: 76px; text-align: center; }
+    .marker-body {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding-right: 8px;
+    }
+    .marker-section {
+      border-bottom: 2px solid var(--line);
+      padding-bottom: 12px;
+    }
+    .marker-section:last-child { border-bottom: 0; }
+    .marker-section h3 {
+      margin: 0 0 10px;
+      font-size: 21px;
+      line-height: 1.1;
+    }
+    .marker-section-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 210px;
+      gap: 16px;
+      align-items: start;
+    }
+    .marker-card-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px 16px;
+      align-items: flex-start;
+    }
+    .marker-card.wide { width: 176px; }
+    .marker-controls.comment-controls { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .marker-card {
+      position: relative;
+      width: 112px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .marker-preview,
+    .marker-add-card,
+    .marker-image-placeholder {
+      border: 2px solid #777;
+      border-radius: 8px;
+      background: rgba(255, 252, 246, 0.88);
+      box-sizing: border-box;
+    }
+    .marker-preview {
+      position: relative;
+      height: 108px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px;
+    }
+    .marker-preview img {
+      width: 86px;
+      height: 86px;
+      object-fit: contain;
+      image-rendering: pixelated;
+    }
+    .marker-empty {
+      color: var(--ink-soft);
+      font-size: 13px;
+      text-align: center;
+    }
+    .marker-card-label {
+      min-height: 16px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--ink-soft);
+      text-align: center;
+      line-height: 1.2;
+    }
+    .marker-delete {
+      position: absolute;
+      top: 5px;
+      left: 5px;
+      width: 24px;
+      height: 24px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      border: 2px solid var(--danger);
+      border-radius: 5px;
+      background: rgba(255, 252, 246, 0.95);
+      color: var(--danger);
+      cursor: pointer;
+      padding: 0;
+      z-index: 2;
+    }
+    .marker-card:hover .marker-delete { display: flex; }
+    .marker-delete:hover { background: rgba(176, 42, 42, 0.12); }
+    .marker-controls {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 34px;
+      gap: 6px;
+      align-items: center;
+    }
+    .marker-controls.draw-controls {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px;
+    }
+    /* eraser: two tag selects + offset, no color swatch */
+    .marker-controls.eraser-controls {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+    .marker-controls.no-color { grid-template-columns: minmax(0, 1fr); }
+    .marker-tag-select {
+      width: 100%;
+      height: 30px;
+      border: 2px solid #777;
+      border-radius: 3px;
+      background: var(--paper-2);
+      color: var(--ink);
+      font: 600 14px var(--font-ui);
+      text-align: center;
+      text-align-last: center;
+    }
+    .marker-tag-select option.taken { color: #b00000; font-weight: 700; }
+    .marker-color {
+      width: 34px;
+      height: 30px;
+      padding: 0;
+      border: 2px solid #777;
+      border-radius: 3px;
+      background: var(--paper-2);
+      cursor: pointer;
+    }
+    .marker-offset-wrap {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 5px;
+    }
+    .marker-offset {
+      width: 100%;
+      height: 30px;
+      min-width: 0;
+      border: 2px solid #777;
+      border-radius: 3px;
+      background: var(--paper-2);
+      color: var(--ink);
+      font: 600 13px var(--font-ui);
+      text-align: center;
+      box-sizing: border-box;
+    }
+    .marker-offset-unit {
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--ink-soft);
+      text-transform: uppercase;
+    }
+    .marker-add-card {
+      width: 112px;
+      height: 108px;
+      font-size: 24px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .marker-add-card:hover { background: var(--paper-2); }
+    .marker-image-placeholder {
+      height: 190px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 21px;
+      color: var(--ink);
+    }
+    .marker-bottom-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 28px;
+      align-items: start;
+    }
+    @media (max-width: 980px) {
+      .marker-section-layout,
+      .marker-bottom-grid { grid-template-columns: 1fr; }
+      .marker-image-placeholder { height: 120px; }
+    }
+
+    /* ---------- Corner tags pinned to the viewport edges ---------- */
+    /* Hidden until auto-detect is started. Each tag sits flush in a screen
+       corner so its OUTER corner lands exactly on the screen corner — the
+       point the camera maps to the surface. Drawn on top of everything,
+       leaving the centre (where the camera view sits) clear. */
+    #cornerTags {
+      display: none;
+      /* Keep the full white quiet-zone visible; the backend expands detected
+         black-square corners back out to this outer SVG corner. */
+      --tag-size: 16vmin;
+      --tag-pull: 0px;
+    }
+    #cornerTags.visible { display: block; }
+    #cornerTags .corner-tag {
+      position: fixed;
+      width: var(--tag-size);
+      height: var(--tag-size);
+      background: #fff;
+      image-rendering: pixelated;
+      z-index: 9999;
+      pointer-events: none;
+    }
+    #cornerTags .corner-tag.tl { top: var(--tag-pull); left: var(--tag-pull); }
+    #cornerTags .corner-tag.tr { top: var(--tag-pull); right: var(--tag-pull); }
+    #cornerTags .corner-tag.br { bottom: var(--tag-pull); right: var(--tag-pull); }
+    #cornerTags .corner-tag.bl { bottom: var(--tag-pull); left: var(--tag-pull); }
+
+    /* ---------- Auto-calibration tag grid (projected full-screen) ---------- */
+    /* Shown while grid auto-calibration runs: a white field with AprilTags at
+       known canvas fractions so the camera can fit a homography and recover the
+       screen corners. Excluded from the page warp (like #cornerTags) so it lands
+       in raw projector pixels. Tags are positioned by their centre; tag size is
+       cosmetic — the calibration matches tag centres, not corners. */
+    #calibGrid {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #fff;
+      z-index: 9998;
+      pointer-events: none;
+    }
+    #calibGrid.visible { display: block; }
+    #calibGrid .calib-tag {
+      position: absolute;
+      width: 11vmin;
+      height: 11vmin;
+      background: #fff;
+      image-rendering: pixelated;
+      transform: translate(-50%, -50%);
+    }
+    /* phone comment link + QR (moved from /camera) */
+    #sharePanel { display:flex; gap:22px; flex-wrap:wrap; align-items:flex-start; margin-top:18px; padding:18px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
+    #shareControls { flex:1; min-width:260px; display:flex; flex-direction:column; gap:10px; }
+    #shareTitle { margin:0; font-size:1rem; }
+    #shareHint { margin:0; font-size:13px; color:#64748b; line-height:1.4; }
+    #phoneAudioLink { width:100%; padding:12px 14px; font-size:14px; border:1px solid #cbd5e1; border-radius:8px; color:#0f172a; background:#fff; }
+    #shareBtnRow { display:flex; gap:10px; flex-wrap:wrap; }
+    .share-btn { padding:10px 14px; font-size:14px; border:none; border-radius:8px; cursor:pointer; color:#fff; background:#1976d2; }
+    .share-btn.secondary { background:#475569; }
+    #phoneAudioResolved { font-size:13px; line-height:1.4; color:#334155; word-break:break-all; min-height:18px; }
+    #phoneAudioQrWrap { display:flex; flex-direction:column; align-items:center; gap:8px; }
+    #phoneAudioQr { width:180px; min-height:180px; display:flex; align-items:center; justify-content:center; background:#fff; border:1px solid #cbd5e1; border-radius:10px; overflow:hidden; }
+    #phoneAudioQr img, #phoneAudioQr canvas { display:block; max-width:100%; max-height:100%; }
+    #phoneAudioQrEmpty { padding:16px; text-align:center; font-size:13px; line-height:1.4; color:#64748b; }
+    #phoneAudioQrCaption { font-size:12px; color:#475569; text-align:center; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <a class="home-link" href="/home?setup" title="Back to home">← Home</a>
+      <div class="sidebar-heading">Choose Section</div>
+      <button class="nav-btn active" type="button" data-pane="camera">Camera</button>
+      <button class="nav-btn" type="button" data-pane="screen">Screen</button>
+      <button class="nav-btn" type="button" data-pane="marker">Marker</button>
+    </aside>
+
+    <main id="content">
+      <!-- ============ CAMERA pane ============ -->
+      <section class="pane active" data-pane="camera">
+        <!-- Initial selection state -->
+        <div id="cameraSelect">
+          <h2 class="pane-title">Select your Camera</h2>
+          <div class="source-tiles">
+            <button class="source-tile" type="button" data-source="smartphone">
+              <img src="/images/Smartphone.png" alt="" />
+              <span class="tile-label">Smartphone</span>
+            </button>
+            <button class="source-tile" type="button" data-source="webcam">
+              <img src="/images/Webcam.png" alt="" />
+              <span class="tile-label">Webcam</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Detail state after a source is picked -->
+        <div id="cameraDetail" style="display:none; flex:1; flex-direction:column;">
+          <div class="source-row">
+            <button class="source-pill" type="button" data-source="smartphone">Smartphone</button>
+            <button class="source-pill" type="button" data-source="webcam">Webcam</button>
+          </div>
+
+          <!-- Smartphone instructions / view -->
+          <div class="source-content" id="smartphoneContent" style="display:none;">
+            <div class="instructions" id="smartphoneInstructions">
+              <ol>
+                <li>Install the <strong>IP Camera</strong> application on your smartphone.</li>
+                <li>Connect the smartphone to the laptop via USB (USB 2 or 3).</li>
+                <li>Enable USB Tethering (in the phone's hotspot settings).</li>
+                <li>Open the IP Camera application.</li>
+                <li>Place the smartphone so it can see the whole table.</li>
+              </ol>
+            </div>
+            <div class="row-buttons">
+              <button class="action-btn" type="button" id="smartphoneConnect">Connect</button>
+            </div>
+            <div class="status-line" id="smartphoneStatus"></div>
+            <div class="camera-view" id="smartphoneView" style="display:none;">
+              <img id="smartphoneFeed" alt="Smartphone camera feed" />
+            </div>
+          </div>
+
+          <!-- Webcam view -->
+          <div class="source-content" id="webcamContent" style="display:none;">
+            <div class="row-buttons">
+              <label class="field">Device index
+                <input type="number" id="webcamIndex" min="0" max="9" value="0" />
+              </label>
+              <button class="action-btn" type="button" id="webcamConnect">Connect</button>
+            </div>
+            <div class="status-line" id="webcamStatus"></div>
+            <div class="camera-view" id="webcamView">
+              <span class="placeholder">No webcam connected yet. Pick an index and click Connect.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ SCREEN pane ============ -->
+      <section class="pane" data-pane="screen">
+        <!-- Initial selection state -->
+        <div id="screenSelect">
+          <h2 class="pane-title">Select your Screen</h2>
+          <div class="source-tiles">
+            <button class="source-tile soon" type="button" data-screen="multitouch" title="Coming soon">
+              <img src="/images/Multi-Touch.png" alt="" />
+              <span class="tile-label">Multi-touch screen</span>
+              <span class="tile-sub">Coming soon</span>
+            </button>
+            <button class="source-tile" type="button" data-screen="projector">
+              <img src="/images/Projector.png" alt="" />
+              <span class="tile-label">Projector</span>
+            </button>
+          </div>
+        </div>
+
+
+        <!-- Detail state once Projector is picked -->
+        <div id="screenDetail" style="display:none; flex:1; flex-direction:column;">
+          <div class="source-row">
+            <button class="source-pill soon" type="button" data-screen="multitouch">Multi-touch screen</button>
+            <button class="source-pill active" type="button" data-screen="projector">Projector</button>
+          </div>
+
+          <div class="source-content">
+            <div class="row-buttons">
+              <button class="corner-btn" type="button" data-corner="0">1</button>
+              <button class="corner-btn" type="button" data-corner="1">2</button>
+              <button class="corner-btn" type="button" data-corner="2">3</button>
+              <button class="corner-btn" type="button" data-corner="3">4</button>
+              <button class="action-btn" type="button" id="cornerReset">Reset</button>
+              <button class="action-btn" type="button" id="autoDetectBtn">Auto-calibrate</button>
+            </div>
+            <div class="status-line" id="cornerStatus">Pick a corner number and click the camera feed.</div>
+            <div class="camera-view" id="projectorView">
+              <div id="projectorFeedWrap" style="position:relative; display:none; max-width:100%; max-height:100%;">
+                <img id="projectorFeed" alt="Projector camera feed" style="display:block;" />
+                <canvas id="projectorCanvas" style="position:absolute; inset:0; pointer-events:none; width:100%; height:100%;"></canvas>
+                <div id="projectorFps" aria-hidden="true">— fps</div>
+              </div>
+              <span class="placeholder" id="projectorEmpty">No camera connected — set one up in the Camera tab first.</span>
+            </div>
+            <div id="cameraControls" aria-label="Camera controls"></div>
+            <div id="arucoTuning" aria-label="AprilTag (ArUco) detector tuning"></div>
+          </div>
+        </div>
+
+        <!-- phone comment link + QR (moved here from the old /camera page) -->
+        <div id="sharePanel">
+          <div id="shareControls">
+            <h2 id="shareTitle">Phone comment link</h2>
+            <p id="shareHint">Paste the Cloudflare Quick Tunnel URL — it becomes the phone comment link and a QR code to scan. (Auto-fills when a tunnel is detected.)</p>
+            <input id="phoneAudioLink" type="text" placeholder="https://example.trycloudflare.com" autocomplete="off" spellcheck="false" />
+            <div id="shareBtnRow">
+              <button id="copyPhoneAudioLinkBtn" class="share-btn" type="button">Copy Phone Link</button>
+              <button id="clearPhoneAudioLinkBtn" class="share-btn secondary" type="button">Clear</button>
+            </div>
+            <div id="phoneAudioResolved"></div>
+          </div>
+          <div id="phoneAudioQrWrap">
+            <div id="phoneAudioQr"><div id="phoneAudioQrEmpty">Paste a tunnel link to generate a QR code.</div></div>
+            <div id="phoneAudioQrCaption">QR points to the phone comment page.</div>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- ============ MARKER pane ============ -->
+      <section class="pane" data-pane="marker">
+        <div id="markerSettings" class="marker-settings">
+          <div class="marker-toolbar">
+            <span class="marker-toolbar-text">You can select your marker for tools</span>
+            <label class="marker-field">Tag family
+              <select id="markerFamily"></select>
+            </label>
+            <label class="marker-field">Marker size
+              <input id="markerSizeCm" type="number" min="1" max="20" step="0.5" value="3" />
+              <span>cm</span>
+            </label>
+            <button class="action-btn" type="button" id="markerDownload">Download marker sheet</button>
+            <span class="status-line" id="markerSaveStatus"></span>
+          </div>
+          <div id="markerBody" class="marker-body"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Corner tags (25–28) pinned to the viewport corners. When shown, they are
+       projected at the screen edges; the camera detects them and the backend
+       auto-fills the surface corners. This overlay is excluded from the shared
+       page warp so it marks the raw projector/screen corners. -->
+  <div id="cornerTags" data-page-warp-exclude aria-hidden="true">
+    <img class="corner-tag tl" src="/apriltags/tag36h11_25.svg" alt="" />
+    <img class="corner-tag tr" src="/apriltags/tag36h11_26.svg" alt="" />
+    <img class="corner-tag br" src="/apriltags/tag36h11_27.svg" alt="" />
+    <img class="corner-tag bl" src="/apriltags/tag36h11_28.svg" alt="" />
+  </div>
+
+  <!-- Auto-calibration grid: a full-screen white field of AprilTags at known
+       canvas fractions, projected so the camera recovers the screen corners via
+       a homography over the tag centres. Populated by JS from
+       /api/auto-calibrate/layout. Excluded from the page warp so it lands in raw
+       projector pixels. -->
+  <div id="calibGrid" data-page-warp-exclude aria-hidden="true"></div>
+
+  <script src="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.js" crossorigin="anonymous"></script>
+  <link href="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.css" rel="stylesheet" crossorigin="anonymous" />
+  <script src="src/maplibreCompat.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/glowbox/maptastic@master/build/maptastic.min.js"></script>
+  <script src="src/pageWarp.js"></script>
+  <script src="src/config.js"></script>
+  <script src="src/mapSetup.js"></script>
+  <script>
+    (function () {
+      var navBtns = document.querySelectorAll('.nav-btn');
+      var panes = document.querySelectorAll('.pane');
+
+      function setPane(name) {
+        // Leaving the Screen pane stops projecting the corner tags.
+        if (name !== 'screen' && typeof stopAutoCalib === 'function') stopAutoCalib(false);
+        navBtns.forEach(function (b) {
+          b.classList.toggle('active', b.getAttribute('data-pane') === name);
+        });
+        panes.forEach(function (p) {
+          p.classList.toggle('active', p.getAttribute('data-pane') === name);
+        });
+      }
+
+      navBtns.forEach(function (b) {
+        if (b.classList.contains('disabled')) return;
+        b.addEventListener('click', function () { setPane(b.getAttribute('data-pane')); });
+      });
+
+      // Deep-link support: /settings#marker (etc.) opens that pane on load, and
+      // reacts to later hash changes. Used by the home page's "Marker Setting".
+      var VALID_PANES = { camera: 1, screen: 1, workshop: 1, marker: 1 };
+      function applyHashPane() {
+        var name = String(location.hash || '').replace(/^#/, '');
+        if (VALID_PANES[name]) setPane(name);
+      }
+      // Defer the initial apply so the rest of this IIFE (calibGrid etc., which
+      // setPane -> stopAutoCalib touches) is fully initialized first.
+      setTimeout(applyHashPane, 0);
+      window.addEventListener('hashchange', applyHashPane);
+
+      // Pulse the Camera / Screen nav buttons (teal) until each is configured:
+      // Camera = a camera is connected; Screen = all 4 corners set. The pulse
+      // stops per-button as soon as that piece is done (and never pulses the tab
+      // you're currently viewing — see CSS :not(.active)).
+      var cameraNavBtn = document.querySelector('.nav-btn[data-pane="camera"]');
+      var screenNavBtn = document.querySelector('.nav-btn[data-pane="screen"]');
+      function refreshSetupHints() {
+        Promise.all([
+          fetch('/api/camera/status', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return null; }),
+          fetch('/api/corners', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return null; })
+        ]).then(function (res) {
+          var cam = res[0];
+          var corners = res[1] && Array.isArray(res[1].corners) ? res[1].corners : [];
+          var cameraSet = !!(cam && cam.connected);
+          var cornersSet = corners.length === 4 && corners.every(function (c) { return !!c; });
+          if (cameraNavBtn) cameraNavBtn.classList.toggle('needs-setup', !cameraSet);
+          if (screenNavBtn) screenNavBtn.classList.toggle('needs-setup', !cornersSet);
+        });
+      }
+      refreshSetupHints();
+      setInterval(refreshSetupHints, 2500);
+
+      // ---------- Screen pane: Projector → in-page 4-corner picker ----------
+      var screenSelect = document.getElementById('screenSelect');
+      var screenDetail = document.getElementById('screenDetail');
+      var projectorFeedWrap = document.getElementById('projectorFeedWrap');
+      var projectorFeed = document.getElementById('projectorFeed');
+      var projectorCanvas = document.getElementById('projectorCanvas');
+      var projectorEmpty = document.getElementById('projectorEmpty');
+      var projectorFps = document.getElementById('projectorFps');
+      var arucoTuningEl = document.getElementById('arucoTuning');
+      var cameraControlsEl = document.getElementById('cameraControls');
+      var cameraControlsReady = false;
+      var cameraControlsBusy = false;
+      var cornerStatus = document.getElementById('cornerStatus');
+      var cornerBtns = document.querySelectorAll('.corner-btn');
+      var cornerResetBtn = document.getElementById('cornerReset');
+
+      var activeCornerIndex = null;
+      var lastCorners = [null, null, null, null];
+      var lastTags = [];
+      var lastFrame = { width: 0, height: 0 };
+      var screenPollTimer = 0;
+      var feedActive = false;
+
+      function showProjectorDetail() {
+        screenSelect.style.display = 'none';
+        screenDetail.style.display = 'flex';
+        startProjectorFeed();
+        startScreenPolling();
+      }
+
+      function hideProjectorDetail() {
+        // Currently the Multi-touch pill is "coming soon", so revert to the
+        // selection screen if it's clicked.
+        stopAutoCalib(false);
+        screenSelect.style.display = '';
+        screenDetail.style.display = 'none';
+        stopProjectorFeed();
+        stopScreenPolling();
+      }
+
+      function startProjectorFeed() {
+        if (feedActive) return;
+        projectorFeed.src = '/video_feed?q=70&t=' + Date.now();
+        feedActive = true;
+      }
+
+      function stopProjectorFeed() {
+        try { projectorFeed.removeAttribute('src'); } catch (_e) {}
+        feedActive = false;
+      }
+
+      // Screen-tab tile clicks
+      document.querySelectorAll('#screenSelect .source-tile[data-screen]').forEach(function (t) {
+        t.addEventListener('click', function () {
+          if (t.classList.contains('soon')) return;
+          if (t.getAttribute('data-screen') === 'projector') showProjectorDetail();
+        });
+      });
+      // Pill clicks inside the detail view
+      document.querySelectorAll('#screenDetail .source-pill').forEach(function (p) {
+        p.addEventListener('click', function () {
+          if (p.classList.contains('soon')) {
+            hideProjectorDetail();
+            return;
+          }
+        });
+      });
+
+      function setActiveCorner(idx) {
+        activeCornerIndex = idx;
+        cornerBtns.forEach(function (b) {
+          var ci = Number(b.getAttribute('data-corner'));
+          b.classList.toggle('active', ci === idx);
+        });
+        if (idx !== null) {
+          setStatus(cornerStatus, 'Corner ' + (idx + 1) + ' selected — click the camera feed where it sits.');
+        }
+      }
+
+      cornerBtns.forEach(function (b) {
+        b.addEventListener('click', function () {
+          var idx = Number(b.getAttribute('data-corner'));
+          setActiveCorner(activeCornerIndex === idx ? null : idx);
+        });
+      });
+
+      cornerResetBtn.addEventListener('click', function () {
+        fetch('/api/corners', { method: 'DELETE' }).then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data && Array.isArray(data.corners)) lastCorners = data.corners;
+            else lastCorners = [null, null, null, null];
+            setActiveCorner(null);
+            drawCornerOverlay();
+            refreshCornerButtons();
+            refreshCornerStatus();
+          })
+          .catch(function () { setStatus(cornerStatus, 'Could not reset.', 'err'); });
+      });
+
+      // ---------- Auto-calibrate via a projected tag grid ----------
+      // Projects a full-screen grid of AprilTags (raw projector pixels); the
+      // backend camera fits a homography over the detected tag centres and
+      // recovers the four screen corners with multi-frame confirmation. Status
+      // polls /api/auto-calibrate; the result lands in surface_corners and shows
+      // live in the camera box via the existing screen polling + the overlay.
+      var calibGrid = document.getElementById('calibGrid');
+      var autoDetectBtn = document.getElementById('autoDetectBtn');
+      var autoCalibActive = false;
+      var autoCalibTimer = 0;
+      var calibGridBuilt = false;
+
+      function buildCalibGrid() {
+        if (calibGridBuilt) return Promise.resolve(true);
+        return fetch('/api/auto-calibrate/layout', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data || data.ok !== true || !Array.isArray(data.tags)) return false;
+            var fam = data.family || 'tag36h11';
+            calibGrid.innerHTML = '';
+            data.tags.forEach(function (t) {
+              var img = document.createElement('img');
+              img.className = 'calib-tag';
+              img.alt = '';
+              img.src = '/api/apriltag-svg/' + encodeURIComponent(fam) + '/' + t.id + '.svg';
+              img.style.left = (t.cx * 100) + '%';
+              img.style.top = (t.cy * 100) + '%';
+              calibGrid.appendChild(img);
+            });
+            calibGridBuilt = true;
+            return true;
+          })
+          .catch(function () { return false; });
+      }
+
+      function stopAutoCalib(silent) {
+        var wasActive = autoCalibActive;
+        autoCalibActive = false;
+        if (autoCalibTimer) { clearInterval(autoCalibTimer); autoCalibTimer = 0; }
+        calibGrid.classList.remove('visible');
+        autoDetectBtn.classList.remove('active');
+        autoDetectBtn.textContent = 'Auto-calibrate';
+        if (!silent && wasActive) {
+          fetch('/api/auto-calibrate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: false })
+          }).catch(function () {});
+        }
+      }
+
+      function startAutoCalib() {
+        buildCalibGrid().then(function (ok) {
+          if (!ok) { setStatus(cornerStatus, 'Could not load the calibration grid.', 'err'); return; }
+          autoCalibActive = true;
+          calibGrid.classList.add('visible');
+          autoDetectBtn.classList.add('active');
+          autoDetectBtn.textContent = 'Cancel auto-calibrate';
+          setStatus(cornerStatus, 'Projecting grid — keep the whole screen in the camera view…');
+          fetch('/api/auto-calibrate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: true })
+          }).catch(function () {});
+          if (autoCalibTimer) clearInterval(autoCalibTimer);
+          autoCalibTimer = setInterval(pollAutoCalib, 200);
+        });
+      }
+
+      function pollAutoCalib() {
+        fetch('/api/auto-calibrate', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data || data.ok !== true) return;
+            if (Array.isArray(data.corners)) {
+              lastCorners = data.corners;
+              drawCornerOverlay();
+              refreshCornerButtons();
+            }
+            if (data.done) {
+              stopAutoCalib(true);
+              setStatus(cornerStatus, 'All 4 corners set ✓ (auto)', 'ok');
+              return;
+            }
+            var found = data.tags_found || 0;
+            var total = data.tags_total || 0;
+            var err = (typeof data.error === 'number') ? (', err ' + data.error.toFixed(1) + 'px') : '';
+            if (found < 4) {
+              setStatus(cornerStatus, 'Projecting grid — ' + found + '/' + total + ' tags visible' + err);
+            } else {
+              setStatus(cornerStatus, 'Calibrating — ' + found + '/' + total + ' tags, stabilizing '
+                + (data.stable || 0) + '/' + (data.confirm || 0) + err);
+            }
+          })
+          .catch(function () {});
+      }
+
+      autoDetectBtn.addEventListener('click', function () {
+        if (autoCalibActive) stopAutoCalib(false);
+        else startAutoCalib();
+      });
+      window.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && autoCalibActive) stopAutoCalib(false);
+      });
+
+      // Convert a click in client coords to camera-frame coords, accounting
+      // for the object-fit:contain letterboxing inside the <img>.
+      function clientToFrame(clientX, clientY) {
+        if (!lastFrame.width || !lastFrame.height) return null;
+        var rect = projectorFeed.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+        var scale = Math.min(rect.width / lastFrame.width, rect.height / lastFrame.height);
+        var drawW = lastFrame.width * scale;
+        var drawH = lastFrame.height * scale;
+        var ox = (rect.width - drawW) / 2;
+        var oy = (rect.height - drawH) / 2;
+        var px = clientX - rect.left - ox;
+        var py = clientY - rect.top - oy;
+        if (px < 0 || py < 0 || px > drawW || py > drawH) return null;
+        return { x: px / scale, y: py / scale };
+      }
+
+      projectorFeed.addEventListener('click', function (e) {
+        if (activeCornerIndex === null) return;
+        var p = clientToFrame(e.clientX, e.clientY);
+        if (!p) return;
+        var idx = activeCornerIndex;
+        fetch('/api/corners', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ index: idx, x: p.x, y: p.y })
+        }).then(function (r) { return r.json(); }).then(function (data) {
+          if (data && Array.isArray(data.corners)) lastCorners = data.corners;
+          // Auto-advance to the next unfilled corner for faster setup.
+          var nextIdx = null;
+          for (var i = 1; i <= 4; i++) {
+            var cand = (idx + i) % 4;
+            if (!lastCorners[cand]) { nextIdx = cand; break; }
+          }
+          setActiveCorner(nextIdx);
+          drawCornerOverlay();
+          refreshCornerButtons();
+          refreshCornerStatus();
+        }).catch(function () { setStatus(cornerStatus, 'Failed to save corner.', 'err'); });
+      });
+
+      function refreshCornerButtons() {
+        cornerBtns.forEach(function (b) {
+          var ci = Number(b.getAttribute('data-corner'));
+          b.classList.toggle('set', !!lastCorners[ci]);
+        });
+      }
+
+      function refreshCornerStatus() {
+        var n = 0;
+        for (var i = 0; i < 4; i++) if (lastCorners[i]) n++;
+        if (activeCornerIndex !== null) return; // status already shows the prompt
+        if (n === 4) setStatus(cornerStatus, 'All 4 corners set ✓', 'ok');
+        else setStatus(cornerStatus, n + '/4 corners set — pick a number then click the camera feed.');
+      }
+
+      // Draw set corners as numbered dots and, once all 4 are placed, the
+      // cyan quadrilateral they define (matches the previous camera overlay).
+      function drawCornerOverlay() {
+        if (!projectorCanvas || !projectorFeed) return;
+        var rect = projectorFeed.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        if (projectorCanvas.width !== Math.round(rect.width)) projectorCanvas.width = Math.round(rect.width);
+        if (projectorCanvas.height !== Math.round(rect.height)) projectorCanvas.height = Math.round(rect.height);
+        var ctx = projectorCanvas.getContext('2d');
+        ctx.clearRect(0, 0, projectorCanvas.width, projectorCanvas.height);
+        if (!lastFrame.width || !lastFrame.height) return;
+        var scale = Math.min(rect.width / lastFrame.width, rect.height / lastFrame.height);
+        var drawW = lastFrame.width * scale;
+        var drawH = lastFrame.height * scale;
+        var ox = (rect.width - drawW) / 2;
+        var oy = (rect.height - drawH) / 2;
+        function framePoint(pt) {
+          return { x: ox + Number(pt.x) * scale, y: oy + Number(pt.y) * scale };
+        }
+
+        // OpenCV-style detected marker outlines from /api/tags.
+        var tags = Array.isArray(lastTags) ? lastTags : [];
+        for (var ti = 0; ti < tags.length; ti++) {
+          var tag = tags[ti];
+          if (!tag || !Array.isArray(tag.corners) || tag.corners.length < 4) continue;
+
+          ctx.beginPath();
+          var valid = true;
+          for (var ci = 0; ci < 4; ci++) {
+            var tc = tag.corners[ci];
+            if (!tc || !Number.isFinite(Number(tc.x)) || !Number.isFinite(Number(tc.y))) {
+              valid = false;
+              break;
+            }
+            var tp = framePoint(tc);
+            if (ci === 0) ctx.moveTo(tp.x, tp.y);
+            else ctx.lineTo(tp.x, tp.y);
+          }
+          if (!valid) continue;
+          ctx.closePath();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#00ff66';
+          ctx.stroke();
+
+          if (tag.center && Number.isFinite(Number(tag.center.x)) && Number.isFinite(Number(tag.center.y))) {
+            var cp = framePoint(tag.center);
+            ctx.beginPath();
+            ctx.arc(cp.x, cp.y, 4, 0, Math.PI * 2);
+            ctx.fillStyle = '#ff2222';
+            ctx.fill();
+            ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+            ctx.strokeText('id ' + tag.id, cp.x + 7, cp.y - 7);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('id ' + tag.id, cp.x + 7, cp.y - 7);
+          }
+        }
+
+        var pts = [];
+        var allSet = true;
+        for (var i = 0; i < 4; i++) {
+          var c = lastCorners[i];
+          if (!c) { allSet = false; pts.push(null); continue; }
+          pts.push(framePoint(c));
+        }
+        // Surface polygon (cyan fill + outline) when all 4 corners are set.
+        if (allSet) {
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (var k = 1; k < 4; k++) ctx.lineTo(pts[k].x, pts[k].y);
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(0, 212, 255, 0.18)';
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#00d4ff';
+          ctx.stroke();
+        }
+        // Numbered corner dots on top of the surface fill.
+        for (var i2 = 0; i2 < 4; i2++) {
+          var p = pts[i2];
+          if (!p) continue;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffd000';
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#000';
+          ctx.stroke();
+          ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = '#000';
+          ctx.fillText(String(i2 + 1), p.x, p.y);
+        }
+      }
+
+      function startScreenPolling() {
+        if (screenPollTimer) return;
+        screenPollTimer = window.setInterval(function () {
+          fetch('/api/tags', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (data) {
+            if (!data) return;
+            if (data.frame) lastFrame = data.frame;
+            if (projectorFps) {
+              var fpsVal = lastFrame && Number.isFinite(Number(lastFrame.fps)) ? Number(lastFrame.fps) : null;
+              projectorFps.textContent = fpsVal != null ? (Math.round(fpsVal) + ' fps') : '— fps';
+            }
+            lastTags = Array.isArray(data.tags) ? data.tags : [];
+            if (Array.isArray(data.corners)) lastCorners = data.corners;
+            var connected = !!(lastFrame.width && lastFrame.height);
+            if (connected && !cameraControlsReady) initCameraControls();
+            projectorFeedWrap.style.display = connected ? 'block' : 'none';
+            projectorEmpty.style.display = connected ? 'none' : '';
+            if (connected) {
+              drawCornerOverlay();
+              refreshCornerButtons();
+              refreshCornerStatus();
+            }
+          }).catch(function () {});
+        }, 50);
+      }
+
+      function stopScreenPolling() {
+        if (!screenPollTimer) return;
+        window.clearInterval(screenPollTimer);
+        screenPollTimer = 0;
+      }
+
+      // AprilTag (ArUco) detector tuning sliders below the camera view —
+      // winMax / Poly / MinPerim / PixCell, built from /api/aruco-tuning so each
+      // slider shows its current + default value. Dragging PUTs the change, which
+      // rebuilds the detector live on the backend.
+      function initArucoTuning() {
+        if (!arucoTuningEl) return;
+
+        function putTuning(body) {
+          fetch('/api/aruco-tuning', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          }).catch(function () {});
+        }
+
+        function addSliderRow(c) {
+          var row = document.createElement('div');
+          row.className = 'aruco-row';
+
+          var label = document.createElement('label');
+          label.className = 'aruco-row__label';
+          label.textContent = c.label;
+          label.setAttribute('for', 'aruco-' + c.key);
+
+          var slider = document.createElement('input');
+          slider.type = 'range';
+          slider.className = 'aruco-row__slider';
+          slider.id = 'aruco-' + c.key;
+          slider.min = c.min; slider.max = c.max; slider.step = c.step; slider.value = c.value;
+
+          var val = document.createElement('span');
+          val.className = 'aruco-row__val';
+          val.textContent = c.value;
+
+          var def = document.createElement('span');
+          def.className = 'aruco-row__def';
+          def.textContent = 'default ' + c.default;
+
+          var timer = null;
+          slider.addEventListener('input', function () {
+            val.textContent = slider.value;
+            if (timer) clearTimeout(timer);
+            var body = {}; body[c.key] = Number(slider.value);
+            timer = setTimeout(function () { putTuning(body); }, 120);
+          });
+
+          row.appendChild(label);
+          row.appendChild(slider);
+          row.appendChild(val);
+          row.appendChild(def);
+          arucoTuningEl.appendChild(row);
+        }
+
+        fetch('/api/aruco-tuning', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data || !Array.isArray(data.controls)) return;
+            arucoTuningEl.innerHTML = '';
+
+            var title = document.createElement('div');
+            title.className = 'aruco-tuning__title';
+            title.textContent = 'AprilTag detection (ArUco)';
+            if (data.activeBackend && data.activeBackend !== 'aruco') {
+              title.textContent += ' — applies when --detector aruco (now: ' + data.activeBackend + ')';
+            }
+            arucoTuningEl.appendChild(title);
+
+            data.controls.forEach(addSliderRow);
+
+            // Second-pass adaptive upscale: an enable toggle + its own sliders.
+            if (Array.isArray(data.upscale)) {
+              var upHead = document.createElement('div');
+              upHead.className = 'aruco-tuning__sub';
+              var cb = document.createElement('input');
+              cb.type = 'checkbox';
+              cb.id = 'aruco-upEnabled';
+              cb.checked = !!data.upscaleEnabled;
+              cb.addEventListener('change', function () {
+                putTuning({ upEnabled: cb.checked ? 1 : 0 });
+              });
+              var cbLabel = document.createElement('label');
+              cbLabel.setAttribute('for', 'aruco-upEnabled');
+              cbLabel.textContent = 'Upscale small ROIs (rescue distant tags)';
+              upHead.appendChild(cb);
+              upHead.appendChild(cbLabel);
+              arucoTuningEl.appendChild(upHead);
+
+              data.upscale.forEach(addSliderRow);
+            }
+          })
+          .catch(function () {});
+      }
+      initArucoTuning();
+
+      // Live camera controls (focus / zoom / exposure / resolution) under the camera
+      // view, built from /api/camera/controls (IP Webcam settings or UVC cap.set on
+      // the backend). Re-runs when a camera connects (guarded by the ready/busy flags).
+      function initCameraControls() {
+        if (!cameraControlsEl || cameraControlsBusy) return;
+        cameraControlsBusy = true;
+        fetch('/api/camera/controls', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data || !data.ok || !Array.isArray(data.controls)) return;
+            if (data.kind === 'none') { cameraControlsEl.innerHTML = ''; cameraControlsReady = false; return; }
+            cameraControlsReady = true;
+            cameraControlsEl.innerHTML = '';
+
+            var title = document.createElement('div');
+            title.className = 'aruco-tuning__title';
+            title.textContent = 'Camera (' + (data.kind === 'ip' ? 'IP camera' : 'webcam') + ')';
+            cameraControlsEl.appendChild(title);
+
+            function putControl(name, value) {
+              fetch('/api/camera/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, value: value })
+              }).catch(function () {});
+            }
+
+            var autoCbByKey = {};
+            var pairedAuto = { exposure: 'exposureAuto', focus: 'focusAuto' };
+            data.controls.forEach(function (c) {
+              var row = document.createElement('div');
+              row.className = 'aruco-row';
+              var label = document.createElement('label');
+              label.className = 'aruco-row__label';
+              label.textContent = c.label;
+              row.appendChild(label);
+
+              if (c.type === 'select') {
+                var sel = document.createElement('select');
+                sel.className = 'aruco-row__select';
+                (c.options || []).forEach(function (opt) {
+                  var o = document.createElement('option');
+                  o.value = opt; o.textContent = opt;
+                  if (String(opt) === String(c.value)) o.selected = true;
+                  sel.appendChild(o);
+                });
+                sel.addEventListener('change', function () { putControl(c.key, sel.value); });
+                row.appendChild(sel);
+                row.appendChild(document.createElement('span'));
+                row.appendChild(document.createElement('span'));
+              } else if (c.type === 'toggle') {
+                var cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = Number(c.value) !== 0;
+                cb.style.justifySelf = 'start';
+                cb.addEventListener('change', function () { putControl(c.key, cb.checked ? 1 : 0); });
+                autoCbByKey[c.key] = cb;
+                row.appendChild(cb);
+                row.appendChild(document.createElement('span'));
+                row.appendChild(document.createElement('span'));
+              } else {
+                var slider = document.createElement('input');
+                slider.type = 'range'; slider.className = 'aruco-row__slider';
+                slider.min = c.min; slider.max = c.max; slider.step = c.step; slider.value = c.value;
+                var val = document.createElement('span');
+                val.className = 'aruco-row__val'; val.textContent = c.value;
+                var spacer = document.createElement('span'); spacer.className = 'aruco-row__def';
+                var timer = null;
+                slider.addEventListener('input', function () {
+                  val.textContent = slider.value;
+                  var ak = pairedAuto[c.key];
+                  if (ak && autoCbByKey[ak]) autoCbByKey[ak].checked = false;
+                  if (timer) clearTimeout(timer);
+                  timer = setTimeout(function () { putControl(c.key, Number(slider.value)); }, 150);
+                });
+                row.appendChild(slider); row.appendChild(val); row.appendChild(spacer);
+              }
+              cameraControlsEl.appendChild(row);
+            });
+          })
+          .catch(function () {})
+          .then(function () { cameraControlsBusy = false; });
+      }
+      initCameraControls();
+
+      window.addEventListener('resize', function () {
+        if (screenDetail.style.display !== 'none') drawCornerOverlay();
+      });
+
+      // ---------- Camera pane state ----------
+      var cameraSelect = document.getElementById('cameraSelect');
+      var cameraDetail = document.getElementById('cameraDetail');
+      var smartphoneContent = document.getElementById('smartphoneContent');
+      var webcamContent = document.getElementById('webcamContent');
+      var smartphoneView = document.getElementById('smartphoneView');
+      var smartphoneFeed = document.getElementById('smartphoneFeed');
+      var smartphoneStatus = document.getElementById('smartphoneStatus');
+      var smartphoneInstructions = document.getElementById('smartphoneInstructions');
+      var webcamView = document.getElementById('webcamView');
+      var webcamStatus = document.getElementById('webcamStatus');
+      var webcamIndex = document.getElementById('webcamIndex');
+      var pills = document.querySelectorAll('.source-pill');
+      var tiles = document.querySelectorAll('.source-tile');
+
+      var currentTab = '';
+
+      function detectSourceKind(src) {
+        var s = String(src || '');
+        if (/^https?:\/\//i.test(s)) return 'smartphone';
+        if (/^\d+$/.test(s)) return 'webcam';
+        return '';
+      }
+
+      function showSource(kind) {
+        currentTab = kind;
+        cameraSelect.style.display = 'none';
+        cameraDetail.style.display = 'flex';
+        smartphoneContent.style.display = (kind === 'smartphone') ? 'flex' : 'none';
+        webcamContent.style.display = (kind === 'webcam') ? 'flex' : 'none';
+        pills.forEach(function (p) {
+          p.classList.toggle('active', p.getAttribute('data-source') === kind);
+        });
+        // The preview is only shown when the backend is actually serving frames
+        // from THIS tab's kind. Otherwise reset to the empty / instruction state
+        // so a webcam doesn't leak into the smartphone tab (or vice versa).
+        syncPreviewForActiveTab();
+      }
+
+      tiles.forEach(function (t) {
+        t.addEventListener('click', function () { showSource(t.getAttribute('data-source')); });
+      });
+      pills.forEach(function (p) {
+        p.addEventListener('click', function () { showSource(p.getAttribute('data-source')); });
+      });
+
+      function setStatus(el, message, kind) {
+        if (!el) return;
+        el.textContent = message || '';
+        el.className = 'status-line' + (kind ? ' ' + kind : '');
+      }
+
+      function startSmartphonePreview() {
+        // Cache-bust so the MJPEG stream re-attaches after a reconnect.
+        smartphoneFeed.src = '/video_feed?q=70&t=' + Date.now();
+        smartphoneInstructions.style.display = 'none';
+        smartphoneView.style.display = 'flex';
+      }
+
+      function clearSmartphonePreview() {
+        // Stop the MJPEG socket so we don't keep streaming a webcam feed
+        // behind an invisible tab.
+        try { smartphoneFeed.removeAttribute('src'); } catch (_e) {}
+        smartphoneView.style.display = 'none';
+        smartphoneInstructions.style.display = '';
+      }
+
+      function startWebcamPreview() {
+        webcamView.innerHTML = '<img id="webcamFeed" alt="Webcam feed" />';
+        var img = document.getElementById('webcamFeed');
+        img.src = '/video_feed?q=70&t=' + Date.now();
+      }
+
+      function clearWebcamPreview(message) {
+        webcamView.innerHTML = '<span class="placeholder">' + (message || 'No webcam connected.') + '</span>';
+      }
+
+      function syncPreviewForActiveTab() {
+        // Ask the backend what source is currently live, and only show the
+        // matching tab's preview.
+        fetch('/api/camera/status').then(function (r) { return r.json(); }).then(function (data) {
+          var liveKind = (data && data.connected) ? detectSourceKind(data.source) : '';
+          if (currentTab === 'smartphone') {
+            if (liveKind === 'smartphone') startSmartphonePreview();
+            else clearSmartphonePreview();
+          } else if (currentTab === 'webcam') {
+            if (liveKind === 'webcam') startWebcamPreview();
+            else clearWebcamPreview('No webcam connected yet. Pick an index and click Connect.');
+          }
+        }).catch(function () {
+          if (currentTab === 'smartphone') clearSmartphonePreview();
+          else if (currentTab === 'webcam') clearWebcamPreview('Network error.');
+        });
+      }
+
+      function connect(kind, payload) {
+        return fetch('/api/camera/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(Object.assign({ kind: kind }, payload || {}))
+        }).then(function (r) {
+          return r.json().then(function (d) { return { status: r.status, data: d }; });
+        });
+      }
+
+      document.getElementById('smartphoneConnect').addEventListener('click', function () {
+        setStatus(smartphoneStatus, 'Looking for IP Camera on :8080…');
+        // Switching sources tears down the other tab's preview so it can't
+        // keep streaming old frames behind the scenes.
+        clearWebcamPreview('Switched to smartphone.');
+        setStatus(webcamStatus, '');
+        connect('smartphone').then(function (res) {
+          if (res.data && res.data.ok) {
+            setStatus(smartphoneStatus, 'Connected: ' + (res.data.source || ''), 'ok');
+            startSmartphonePreview();
+          } else {
+            setStatus(smartphoneStatus, 'No IP camera found. Check the steps above and try again.', 'err');
+            clearSmartphonePreview();
+          }
+        }).catch(function () {
+          setStatus(smartphoneStatus, 'Network error.', 'err');
+          clearSmartphonePreview();
+        });
+      });
+
+      document.getElementById('webcamConnect').addEventListener('click', function () {
+        var idx = parseInt(webcamIndex.value, 10);
+        if (!Number.isFinite(idx) || idx < 0) {
+          setStatus(webcamStatus, 'Invalid device index.', 'err');
+          return;
+        }
+        setStatus(webcamStatus, 'Opening webcam ' + idx + '…');
+        clearSmartphonePreview();
+        setStatus(smartphoneStatus, '');
+        connect('webcam', { index: idx }).then(function (res) {
+          if (res.data && res.data.ok) {
+            setStatus(webcamStatus, 'Connected to device ' + idx + '.', 'ok');
+            startWebcamPreview();
+          } else {
+            setStatus(webcamStatus, 'Could not open device ' + idx + '.', 'err');
+            clearWebcamPreview('Device ' + idx + ' could not be opened.');
+          }
+        }).catch(function () {
+          setStatus(webcamStatus, 'Network error.', 'err');
+        });
+      });
+
+      // Initial probe: if a camera is already attached, surface a status hint
+      // in the matching tab. We don't auto-open a tab — the wireframes specify
+      // a manual selection step.
+      fetch('/api/camera/status').then(function (r) { return r.json(); }).then(function (data) {
+        if (!data || !data.ok || !data.connected) return;
+        var src = String(data.source || '');
+        var liveKind = detectSourceKind(src);
+        if (liveKind === 'smartphone') {
+          setStatus(smartphoneStatus, 'Already connected: ' + src, 'ok');
+        } else if (liveKind === 'webcam') {
+          if (webcamIndex) webcamIndex.value = src;
+          setStatus(webcamStatus, 'Already connected to device ' + src + '.', 'ok');
+        }
+      }).catch(function () {});
+    })();
+  </script>
+
+  <!-- ---------- Marker editor ---------- -->
+  <script src="src/markerEditor.js?v=3"></script>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="src/phoneLinkShare.js"></script>
+</body>
+</html>

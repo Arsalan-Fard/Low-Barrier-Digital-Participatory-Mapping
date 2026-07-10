@@ -1,0 +1,18 @@
+# Core
+flask
+numpy
+opencv-python>=4.7      # cv2.aruco with AprilTag dictionaries ships in the main wheel since 4.7
+pupil-apriltags
+
+# Audio / video recording
+sounddevice
+imageio-ffmpeg
+
+# Optional: street-network analysis (isochrones, shortest paths, OSMnx network)
+osmnx
+networkx
+shapely
+concave_hull
+
+# Optional: screen capture
+mss

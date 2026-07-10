@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Paper → Map test</title>
+  <link href="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.js" crossorigin="anonymous"></script>
+  <script src="src/maplibreCompat.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #111; color: #eee; overflow: hidden;
+    }
+    /* Full-screen map (same as the real map page); the panel floats on top. */
+    #wrap { width: 100vw; height: 100vh; }
+    #map { position: fixed; inset: 0; }
+
+    #panel {
+      position: fixed; top: 0; right: 0; bottom: 0; z-index: 20;
+      width: 400px;
+      display: flex; flex-direction: column; gap: 12px;
+      padding: 14px; overflow-y: auto;
+      background: rgba(26, 26, 26, 0.96); border-left: 1px solid #333;
+      box-shadow: -14px 0 34px rgba(0, 0, 0, 0.45);
+      transition: transform 0.22s ease;
+    }
+    #panel.collapsed { transform: translateX(100%); }
+
+    /* Reopen tab, shown when the panel is tucked away. */
+    #panelTab {
+      position: fixed; top: 14px; right: 0; z-index: 21;
+      padding: 9px 14px; border-radius: 8px 0 0 8px;
+      background: rgba(26, 26, 26, 0.94); border: 1px solid #444; border-right: none;
+      color: #eee; font: 600 12.5px inherit; cursor: pointer;
+      display: none;
+    }
+    #panelTab.visible { display: block; }
+
+    /* Floating chip while picking map corners (panel is hidden then). */
+    #pickChip {
+      position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+      z-index: 22; display: none; align-items: center; gap: 10px;
+      padding: 9px 12px 9px 16px; border-radius: 999px;
+      background: rgba(20, 20, 20, 0.92); border: 1px solid #555;
+      font: 600 13px inherit; color: #fff; box-shadow: 0 8px 26px rgba(0,0,0,0.45);
+    }
+    #pickChip.visible { display: flex; }
+    #pickChip button { padding: 5px 12px; border-radius: 999px; }
+    h1 { font-size: 16px; font-weight: 700; }
+    .step {
+      border: 1px solid #333; border-radius: 10px; padding: 10px 12px;
+      display: flex; flex-direction: column; gap: 8px; background: #202020;
+    }
+    .step.done { border-color: #2f8f86; }
+    .step h2 { font-size: 13.5px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .step h2 .n {
+      width: 22px; height: 22px; border-radius: 50%; flex: 0 0 auto;
+      display: inline-flex; align-items: center; justify-content: center;
+      border: 1.5px solid #888; font-size: 12px;
+    }
+    .step.done h2 .n { border-color: #2f8f86; color: #6fe3d6; }
+    .hint { font-size: 12px; line-height: 1.45; color: #9a9a9a; }
+    .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    button {
+      font: 600 12.5px inherit; color: #fff; cursor: pointer;
+      background: #2c2c2c; border: 1px solid #555; border-radius: 7px; padding: 7px 12px;
+    }
+    button:hover { background: #383838; }
+    button.primary { background: #2f8f86; border-color: #1f6f68; }
+    button.primary:hover { background: #35a094; }
+    button.primary:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.armed { background: #8a6d00; border-color: #b89200; }
+    .status { font-size: 12px; min-height: 15px; color: #bbb; }
+    .status.ok { color: #6fe3d6; }
+    .status.err { color: #ff8d7e; }
+
+    #camBox {
+      position: relative; width: 100%; aspect-ratio: 4 / 3;
+      background: #000; border-radius: 8px; overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #camBox img { max-width: 100%; max-height: 100%; display: block; cursor: crosshair; }
+    #camOverlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    #camEmpty { position: absolute; font-size: 12px; color: #888; text-align: center; padding: 10px; }
+
+    label.slider { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    label.slider input[type="range"] { flex: 1; accent-color: #2f8f86; }
+    label.slider .val { min-width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
+    input[type="color"] { width: 34px; height: 26px; border: 1px solid #555; border-radius: 6px; background: #2c2c2c; padding: 2px; cursor: pointer; }
+    label.chk { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+    input[type="file"] { display: none; }
+
+    /* Numbered corner markers dropped on the map */
+    .map-corner-marker {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: #ffd000; border: 2px solid #000;
+      display: flex; align-items: center; justify-content: center;
+      font: 700 12px Arial, sans-serif; color: #000;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+    }
+    /* Hidden working canvases (rectified ink canvas must stay in the DOM for
+       the maplibre canvas source). */
+    #camCanvas, #inkCanvas { display: none; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="map"></div>
+
+    <aside id="panel">
+      <h1 style="display:flex;align-items:center;gap:8px;">Paper drawing → digital map
+        <span style="flex:1"></span>
+        <button type="button" id="panelHideBtn" title="Hide the panel to see the whole map">Hide →</button>
+      </h1>
+      <p class="hint">
+        Draw paths on a white sheet, then bring the drawing onto the live map.
+        Corner order matters: corner&nbsp;1 on the map is where corner&nbsp;1 of the
+        paper lands, and so on (clockwise from the paper's top-left works well).
+      </p>
+
+      <!-- Step 1: map corners -->
+      <section class="step" id="stepMap">
+        <h2><span class="n">1</span> Map corners <span style="flex:1"></span>
+          <button type="button" id="mapPickBtn">Pick on map</button>
+          <button type="button" id="mapResetBtn">Reset</button>
+        </h2>
+        <div class="hint">Click the 4 map points the paper's corners represent (the area the paper covers).</div>
+        <div class="status" id="mapStatus">0/4 set.</div>
+      </section>
+
+      <!-- Step 2: paper corners in the camera -->
+      <section class="step" id="stepCam">
+        <h2><span class="n">2</span> Paper corners <span style="flex:1"></span>
+          <button type="button" id="camSourceBtn">Use camera</button>
+          <label for="photoInput"><span class="hint" style="cursor:pointer;text-decoration:underline;">load photo</span></label>
+          <input type="file" id="photoInput" accept="image/*" />
+          <button type="button" id="camResetBtn">Reset</button>
+        </h2>
+        <div id="camBox">
+          <img id="camImg" alt="Camera view" style="display:none;" />
+          <canvas id="camOverlay"></canvas>
+          <span id="camEmpty">No image — click “Use camera” (needs a connected camera) or load a photo of the paper.</span>
+        </div>
+        <div class="status" id="camStatus">Click the paper's 4 corners in the image, same order as step 1.</div>
+      </section>
+
+      <!-- Step 3: extract + project -->
+      <section class="step" id="stepInk">
+        <h2><span class="n">3</span> Project the drawing</h2>
+        <label class="slider">Ink threshold
+          <input type="range" id="threshold" min="30" max="230" step="1" value="130" />
+          <span class="val" id="thresholdVal">130</span>
+        </label>
+        <div class="row">
+          <span class="hint">Stroke</span>
+          <input type="color" id="strokeColor" value="#d3302f" />
+          <label class="slider" style="flex:1">Opacity
+            <input type="range" id="inkOpacity" min="0.2" max="1" step="0.05" value="0.95" />
+            <span class="val" id="inkOpacityVal">0.95</span>
+          </label>
+        </div>
+        <div class="row">
+          <button type="button" class="primary" id="projectBtn" disabled>Project onto map</button>
+          <label class="chk"><input type="checkbox" id="liveChk" /> live (re-capture)</label>
+          <button type="button" id="clearBtn">Clear</button>
+        </div>
+        <div class="status" id="inkStatus"></div>
+      </section>
+
+      <p class="hint">
+        The paper needs no printed map — it is matched to the map purely by the
+        two sets of corners (camera quad → paper → map quad homography). Ink =
+        anything darker than the threshold.
+      </p>
+    </aside>
+  </div>
+
+  <button type="button" id="panelTab">◂ Panel</button>
+  <div id="pickChip">
+    <span id="pickChipText">Click map corner 1/4</span>
+    <button type="button" id="pickChipDone">Done</button>
+  </div>
+
+  <canvas id="camCanvas"></canvas>
+  <canvas id="inkCanvas" width="1000" height="707"></canvas>
+
+  <script src="src/config.js"></script>
+  <script src="src/mapSetup.js"></script>
+  <script>
+    (function () {
+      'use strict';
+
+      function $(id) { return document.getElementById(id); }
+      function setStatus(el, msg, kind) {
+        el.textContent = msg || '';
+        el.className = 'status' + (kind ? ' ' + kind : '');
+      }
+
+      // ==================== map (same view as the main map page) ====================
+      var CONFIG = window.CompactMapConfig.CONFIG;
+      var setup = window.CompactMapSetup.initMap({
+        config: CONFIG,
+        themeStyles: CONFIG.styles,
+        initialTheme: 'streets',
+        onStyleLoad: function () { reAddInkLayer(); }
+      });
+      var map = setup.map;
+
+      // ==================== homography (4-point DLT) ====================
+      // Returns H (row-major 9) mapping src[i] -> dst[i] for 4 point pairs.
+      function solveHomography(src, dst) {
+        // Build the 8x9 system A·h = 0 with h33 pinned to 1 → 8x8 linear solve.
+        var A = [];
+        var b = [];
+        for (var i = 0; i < 4; i++) {
+          var x = src[i][0], y = src[i][1];
+          var u = dst[i][0], v = dst[i][1];
+          A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+          A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+        }
+        // Gaussian elimination with partial pivoting.
+        for (var col = 0; col < 8; col++) {
+          var piv = col;
+          for (var r = col + 1; r < 8; r++) {
+            if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+          }
+          if (Math.abs(A[piv][col]) < 1e-12) return null;
+          var tmp = A[col]; A[col] = A[piv]; A[piv] = tmp;
+          var tb = b[col]; b[col] = b[piv]; b[piv] = tb;
+          for (var r2 = col + 1; r2 < 8; r2++) {
+            var f = A[r2][col] / A[col][col];
+            for (var c = col; c < 8; c++) A[r2][c] -= f * A[col][c];
+            b[r2] -= f * b[col];
+          }
+        }
+        var h = new Array(8);
+        for (var row = 7; row >= 0; row--) {
+          var s = b[row];
+          for (var c2 = row + 1; c2 < 8; c2++) s -= A[row][c2] * h[c2];
+          h[row] = s / A[row][row];
+        }
+        return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+      }
+
+      function applyH(H, x, y) {
+        var w = H[6] * x + H[7] * y + H[8];
+        return [
+          (H[0] * x + H[1] * y + H[2]) / w,
+          (H[3] * x + H[4] * y + H[5]) / w
+        ];
+      }
+
+      // ==================== panel show/hide ====================
+      var panel = $('panel');
+      var panelTab = $('panelTab');
+      var pickChip = $('pickChip');
+
+      function setPanelCollapsed(collapsed) {
+        panel.classList.toggle('collapsed', collapsed);
+        panelTab.classList.toggle('visible', collapsed && !pickingMap);
+      }
+      $('panelHideBtn').addEventListener('click', function () { setPanelCollapsed(true); });
+      panelTab.addEventListener('click', function () { setPanelCollapsed(false); });
+
+      // ==================== step 1: map corners ====================
+      var mapCorners = [];        // [ [lng,lat] x4 ]
+      var mapMarkers = [];
+      var pickingMap = false;
+      var mapPickBtn = $('mapPickBtn');
+
+      // While picking, the panel slides away so the WHOLE map is visible and
+      // clickable; a floating chip shows progress instead.
+      function setPickingMap(next) {
+        pickingMap = next;
+        mapPickBtn.classList.toggle('armed', next);
+        mapPickBtn.textContent = next ? 'Picking… (click map)' : 'Pick on map';
+        map.getCanvas().style.cursor = next ? 'crosshair' : '';
+        pickChip.classList.toggle('visible', next);
+        if (next) {
+          refreshPickChip();
+          setPanelCollapsed(true);
+        } else {
+          setPanelCollapsed(false);
+        }
+      }
+
+      function refreshPickChip() {
+        $('pickChipText').textContent = mapCorners.length >= 4
+          ? 'All 4 corners set ✓'
+          : 'Click map corner ' + (mapCorners.length + 1) + '/4';
+      }
+
+      $('pickChipDone').addEventListener('click', function () { setPickingMap(false); });
+      window.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && pickingMap) setPickingMap(false);
+      });
+
+      function refreshMapStep() {
+        $('stepMap').classList.toggle('done', mapCorners.length === 4);
+        setStatus($('mapStatus'), mapCorners.length + '/4 set.' +
+          (mapCorners.length === 4 ? ' ✓' : ''), mapCorners.length === 4 ? 'ok' : '');
+        refreshProjectBtn();
+      }
+
+      function clearMapCorners() {
+        mapCorners = [];
+        mapMarkers.forEach(function (m) { m.remove(); });
+        mapMarkers = [];
+        refreshMapStep();
+      }
+
+      mapPickBtn.addEventListener('click', function () {
+        if (!pickingMap && mapCorners.length === 4) clearMapCorners();
+        setPickingMap(!pickingMap);
+      });
+      $('mapResetBtn').addEventListener('click', function () {
+        clearMapCorners();
+        setPickingMap(false);
+      });
+
+      map.on('click', function (e) {
+        if (!pickingMap || mapCorners.length >= 4) return;
+        mapCorners.push([e.lngLat.lng, e.lngLat.lat]);
+        var el = document.createElement('div');
+        el.className = 'map-corner-marker';
+        el.textContent = String(mapCorners.length);
+        var marker = new mapboxgl.Marker({ element: el }).setLngLat(e.lngLat).addTo(map);
+        mapMarkers.push(marker);
+        refreshPickChip();
+        if (mapCorners.length === 4) setPickingMap(false);
+        refreshMapStep();
+      });
+
+      // ==================== step 2: camera / photo + paper corners ====================
+      var camImg = $('camImg');
+      var camOverlay = $('camOverlay');
+      var camEmpty = $('camEmpty');
+      var camStatus = $('camStatus');
+      var paperCorners = [];      // frame-pixel coords [ [x,y] x4 ]
+      var usingCamera = false;
+
+      function frameSize() {
+        return { w: camImg.naturalWidth || 0, h: camImg.naturalHeight || 0 };
+      }
+
+      function showCamImage() {
+        camImg.style.display = 'block';
+        camEmpty.style.display = 'none';
+      }
+
+      $('camSourceBtn').addEventListener('click', function () {
+        usingCamera = true;
+        camImg.src = '/video_feed?q=70&t=' + Date.now();
+        showCamImage();
+        clearPaperCorners();
+        setStatus(camStatus, 'Live camera. Click the paper\'s 4 corners.');
+      });
+
+      camImg.addEventListener('error', function () {
+        if (!usingCamera) return;
+        camImg.style.display = 'none';
+        camEmpty.style.display = '';
+        setStatus(camStatus, 'Camera stream failed — is a camera connected? (Set it up on /home.)', 'err');
+      });
+
+      $('photoInput').addEventListener('change', function (e) {
+        var f = e.target.files && e.target.files[0];
+        if (!f) return;
+        usingCamera = false;
+        camImg.src = URL.createObjectURL(f);
+        showCamImage();
+        clearPaperCorners();
+        setStatus(camStatus, 'Photo loaded. Click the paper\'s 4 corners.');
+      });
+
+      function clearPaperCorners() {
+        paperCorners = [];
+        drawCamOverlay();
+        refreshCamStep();
+      }
+      $('camResetBtn').addEventListener('click', clearPaperCorners);
+
+      // client coords -> frame pixels (letterboxed contain-fit image)
+      function clientToFrame(clientX, clientY) {
+        var fs = frameSize();
+        if (!fs.w || !fs.h) return null;
+        var rect = camImg.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+        var scale = Math.min(rect.width / fs.w, rect.height / fs.h);
+        var drawW = fs.w * scale, drawH = fs.h * scale;
+        var ox = (rect.width - drawW) / 2, oy = (rect.height - drawH) / 2;
+        var px = clientX - rect.left - ox, py = clientY - rect.top - oy;
+        if (px < 0 || py < 0 || px > drawW || py > drawH) return null;
+        return [px / scale, py / scale];
+      }
+
+      function frameToOverlay(p) {
+        var fs = frameSize();
+        var box = camOverlay.getBoundingClientRect();
+        var rect = camImg.getBoundingClientRect();
+        var scale = Math.min(rect.width / fs.w, rect.height / fs.h);
+        var drawW = fs.w * scale, drawH = fs.h * scale;
+        var ox = rect.left - box.left + (rect.width - drawW) / 2;
+        var oy = rect.top - box.top + (rect.height - drawH) / 2;
+        return [ox + p[0] * scale, oy + p[1] * scale];
+      }
+
+      camImg.addEventListener('click', function (e) {
+        if (paperCorners.length >= 4) return;
+        var p = clientToFrame(e.clientX, e.clientY);
+        if (!p) return;
+        paperCorners.push(p);
+        drawCamOverlay();
+        refreshCamStep();
+      });
+
+      function refreshCamStep() {
+        $('stepCam').classList.toggle('done', paperCorners.length === 4);
+        if (paperCorners.length < 4) {
+          setStatus(camStatus, paperCorners.length + '/4 paper corners — click corner ' + (paperCorners.length + 1) + '.');
+        } else {
+          setStatus(camStatus, 'Paper corners set ✓', 'ok');
+        }
+        refreshProjectBtn();
+      }
+
+      function drawCamOverlay() {
+        var box = camOverlay.getBoundingClientRect();
+        camOverlay.width = Math.round(box.width);
+        camOverlay.height = Math.round(box.height);
+        var ctx = camOverlay.getContext('2d');
+        ctx.clearRect(0, 0, camOverlay.width, camOverlay.height);
+        var fs = frameSize();
+        if (!fs.w || !fs.h || !paperCorners.length) return;
+        var pts = paperCorners.map(frameToOverlay);
+        if (pts.length === 4) {
+          ctx.beginPath();
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          for (var k = 1; k < 4; k++) ctx.lineTo(pts[k][0], pts[k][1]);
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(0, 212, 255, 0.15)';
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#00d4ff';
+          ctx.stroke();
+        }
+        pts.forEach(function (p, i) {
+          ctx.beginPath();
+          ctx.arc(p[0], p[1], 9, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffd000';
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#000';
+          ctx.stroke();
+          ctx.font = 'bold 12px Arial';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = '#000';
+          ctx.fillText(String(i + 1), p[0], p[1]);
+        });
+      }
+
+      // Keep the overlay in sync while the MJPEG stream resizes/first frame lands.
+      setInterval(drawCamOverlay, 800);
+
+      // ==================== step 3: rectify + ink extraction + overlay ====================
+      var camCanvas = $('camCanvas');
+      var inkCanvas = $('inkCanvas');
+      var INK_W = inkCanvas.width, INK_H = inkCanvas.height;
+      var EDGE_MARGIN = 0.015;      // skip outermost 1.5% (paper edge shadows)
+      var projected = false;
+      var liveTimer = 0;
+
+      var thresholdInput = $('threshold');
+      var strokeInput = $('strokeColor');
+      var opacityInput = $('inkOpacity');
+      thresholdInput.addEventListener('input', function () {
+        $('thresholdVal').textContent = thresholdInput.value;
+        if (projected) renderInk();
+      });
+      strokeInput.addEventListener('input', function () { if (projected) renderInk(); });
+      opacityInput.addEventListener('input', function () {
+        $('inkOpacityVal').textContent = opacityInput.value;
+        var lyr = map.getLayer('paper-ink-layer');
+        if (lyr) map.setPaintProperty('paper-ink-layer', 'raster-opacity', Number(opacityInput.value));
+      });
+
+      function refreshProjectBtn() {
+        $('projectBtn').disabled = !(mapCorners.length === 4 && paperCorners.length === 4);
+      }
+
+      function hexToRgb(hex) {
+        var m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+        if (!m) return [211, 48, 47];
+        var n = parseInt(m[1], 16);
+        return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+      }
+
+      // Grab the current frame/photo, warp the paper quad to the rectified ink
+      // canvas, and keep only pixels darker than the threshold.
+      function renderInk() {
+        var fs = frameSize();
+        if (!fs.w || !fs.h || paperCorners.length !== 4) return false;
+
+        camCanvas.width = fs.w;
+        camCanvas.height = fs.h;
+        var cctx = camCanvas.getContext('2d', { willReadFrequently: true });
+        try {
+          cctx.drawImage(camImg, 0, 0, fs.w, fs.h);
+        } catch (_e) { return false; }
+        var frame;
+        try {
+          frame = cctx.getImageData(0, 0, fs.w, fs.h);
+        } catch (_e) {
+          setStatus($('inkStatus'), 'Cannot read pixels from this image.', 'err');
+          return false;
+        }
+
+        // Homography: rectified unit square -> camera quad (inverse sampling).
+        var H = solveHomography(
+          [[0, 0], [1, 0], [1, 1], [0, 1]],
+          paperCorners.map(function (p) { return [p[0], p[1]]; })
+        );
+        if (!H) { setStatus($('inkStatus'), 'Degenerate paper corners.', 'err'); return false; }
+
+        var threshold = Number(thresholdInput.value);
+        var soft = 26;                            // soft edge below the threshold
+        var rgb = hexToRgb(strokeInput.value);
+        var ictx = inkCanvas.getContext('2d', { willReadFrequently: true });
+        var out = ictx.createImageData(INK_W, INK_H);
+        var od = out.data, fd = frame.data;
+
+        for (var yy = 0; yy < INK_H; yy++) {
+          var v = yy / (INK_H - 1);
+          var edgeV = (v < EDGE_MARGIN || v > 1 - EDGE_MARGIN);
+          for (var xx = 0; xx < INK_W; xx++) {
+            var u = xx / (INK_W - 1);
+            var oi = (yy * INK_W + xx) * 4;
+            if (edgeV || u < EDGE_MARGIN || u > 1 - EDGE_MARGIN) continue;
+            var cp = applyH(H, u, v);
+            var cx = Math.round(cp[0]), cy = Math.round(cp[1]);
+            if (cx < 0 || cy < 0 || cx >= fs.w || cy >= fs.h) continue;
+            var fi = (cy * fs.w + cx) * 4;
+            // Luminance → "how inky" (0 at threshold, 1 at threshold - soft).
+            var lum = 0.299 * fd[fi] + 0.587 * fd[fi + 1] + 0.114 * fd[fi + 2];
+            if (lum >= threshold) continue;
+            var a = Math.min(1, (threshold - lum) / soft);
+            od[oi] = rgb[0];
+            od[oi + 1] = rgb[1];
+            od[oi + 2] = rgb[2];
+            od[oi + 3] = Math.round(a * 255);
+          }
+        }
+        ictx.putImageData(out, 0, 0);
+        return true;
+      }
+
+      function inkCoordinates() {
+        // maplibre image/canvas coordinates: [top-left, top-right, bottom-right,
+        // bottom-left] of the canvas — which is exactly corner order 1..4.
+        return [mapCorners[0], mapCorners[1], mapCorners[2], mapCorners[3]];
+      }
+
+      function addOrUpdateInkSource() {
+        var src = map.getSource('paper-ink');
+        if (src && typeof src.setCoordinates === 'function') {
+          src.setCoordinates(inkCoordinates());
+          return;
+        }
+        map.addSource('paper-ink', {
+          type: 'canvas',
+          canvas: 'inkCanvas',
+          coordinates: inkCoordinates(),
+          animate: true
+        });
+        map.addLayer({
+          id: 'paper-ink-layer',
+          type: 'raster',
+          source: 'paper-ink',
+          paint: {
+            'raster-opacity': Number(opacityInput.value),
+            'raster-fade-duration': 0,
+            'raster-resampling': 'linear'
+          }
+        });
+      }
+
+      // Re-add after a basemap style switch wipes custom sources.
+      function reAddInkLayer() {
+        if (projected && mapCorners.length === 4 && !map.getSource('paper-ink')) {
+          try { addOrUpdateInkSource(); } catch (_e) {}
+        }
+      }
+
+      $('projectBtn').addEventListener('click', function () {
+        if (!renderInk()) return;
+        addOrUpdateInkSource();
+        projected = true;
+        setStatus($('inkStatus'), 'Drawing projected ✓ — tune the threshold if strokes are missing/noisy.', 'ok');
+      });
+
+      $('clearBtn').addEventListener('click', function () {
+        projected = false;
+        $('liveChk').checked = false;
+        stopLive();
+        if (map.getLayer('paper-ink-layer')) map.removeLayer('paper-ink-layer');
+        if (map.getSource('paper-ink')) map.removeSource('paper-ink');
+        setStatus($('inkStatus'), 'Cleared.');
+      });
+
+      function stopLive() {
+        if (liveTimer) { clearInterval(liveTimer); liveTimer = 0; }
+      }
+
+      $('liveChk').addEventListener('change', function (e) {
+        stopLive();
+        if (e.target.checked) {
+          liveTimer = setInterval(function () {
+            if (projected && usingCamera) renderInk();
+          }, 700);
+        }
+      });
+
+      refreshMapStep();
+      refreshCamStep();
+      refreshProjectBtn();
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,981 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "custom_mnfmvwv8_jsn83i",
+        "text": "École polytechnique",
+        "mode": "landmark",
+        "color": "#0080ff"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2099688631736853,
+          48.7132883282253
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "custom_mnfmwtau_qtuuzz",
+        "text": "Électricité de France (EDF)",
+        "mode": "landmark",
+        "color": "#0080ff"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1961815299690954,
+          48.716192069075106
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "custom_mnfmyixd_o3g4fu",
+        "text": "Bus",
+        "mode": "transportation",
+        "color": "#8000ff"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2010881030501253,
+          48.7147251511351
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "custom_mnfmz1k6_njft18",
+        "text": "Bus",
+        "mode": "transportation",
+        "color": "#8000ff"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1972418604265727,
+          48.71508560537043
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "custom_mnfmzh6g_ipws3v",
+        "text": "Bus",
+        "mode": "transportation",
+        "color": "#8000ff"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2023171021096744,
+          48.715955250964754
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "custom_mnfmzsqw_mi98ra",
+        "text": "Bus",
+        "mode": "transportation",
+        "color": "#8000ff"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2014100624375885,
+          48.71162928843415
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "custom_mnfn0g4f_i7bvvi",
+        "text": "Bus",
+        "mode": "transportation",
+        "color": "#8000ff"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.207388841119325,
+          48.71012673062768
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "custom_mnfn0t6a_08rhud",
+        "text": "Bus",
+        "mode": "transportation",
+        "color": "#8000ff"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.210629458306613,
+          48.70984343857191
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_502934916",
+        "text": "Bibliothèque Centrale de l'École polytechnique (BCX)",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2101544,
+          48.7127246
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_1345568296",
+        "text": "La Terrasse",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1911166,
+          48.7050705
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_1493404734",
+        "text": "Hall of Beer",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.189827,
+          48.7016482
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_1800669265",
+        "text": "Cafe",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2108774,
+          48.7129832
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_1910090626",
+        "text": "Café de la Gare",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2108214,
+          48.7062888
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_2719776890",
+        "text": "Les Agapes",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2009687,
+          48.7052888
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_3192154515",
+        "text": "Brasserie des Sports",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2290893,
+          48.6984468
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_3324149967",
+        "text": "Domino's",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1918929,
+          48.7034465
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_4349786302",
+        "text": "Cafétéria Cœur de Blé",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2187827,
+          48.7108212
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_4927194171",
+        "text": "RIEA Palaiseau",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.202964,
+          48.7126222
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_5155216992",
+        "text": "Bicycle Parking",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2039017214867727,
+          48.71239045718332
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_5155216993",
+        "text": "Bicycle Parking",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2027614,
+          48.7129608
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_5223785728",
+        "text": "Charlie Foods",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.189597,
+          48.7015511
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_5223821935",
+        "text": "Tân Dô",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1907895,
+          48.702403
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_5223821939",
+        "text": "Chapati",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.189673,
+          48.7014436
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_5281992058",
+        "text": "Restaurant Crous - RU Escoffier",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2034384,
+          48.7129585
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_5302335586",
+        "text": "O Food Asia",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.201839,
+          48.714237
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_5989721312",
+        "text": "KF&T",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2079282,
+          48.7107792
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_6831506268",
+        "text": "Living Room",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2010875,
+          48.7143478
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_7066473492",
+        "text": "La Tour du Maroc",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.20896,
+          48.6990178
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_7906690300",
+        "text": "Bicycle Parking",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1999466,
+          48.7125473
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_8664652944",
+        "text": "Parking Monge",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.198946,
+          48.7145447
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_9304930517",
+        "text": "19",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2022774,
+          48.7130234
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_9461036635",
+        "text": "Bicycle Parking",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2055847,
+          48.7129784
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_10025602222",
+        "text": "Mangia",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1984907,
+          48.7126798
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_10086452436",
+        "text": "O'madras",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2094103,
+          48.7013254
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_10589759707",
+        "text": "CROUS RU L’Expérimental",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.195706,
+          48.7132213
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_11032050489",
+        "text": "Pizzeria La Guichetta",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1908515,
+          48.7050577
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_11407434116",
+        "text": "Le Julie’s",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1955007,
+          48.7135143
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_12360681670",
+        "text": "Elior",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1962435,
+          48.715555
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_13016883676",
+        "text": "Noodle Shop",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1914123,
+          48.7043641
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_node_13188053741",
+        "text": "Cafe",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2072094,
+          48.7107633
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_relation_11980311",
+        "text": "Magnan",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.211286095,
+          48.713566945
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_65647089",
+        "text": "Gymnase Marie-Thérèse Eyquem",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1993578958333333,
+          48.70350652916667
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_65648687",
+        "text": "Gymnase du Guichet",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.193651276923077,
+          48.70648748461538
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_65650875",
+        "text": "Gymnase Blondin",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.19149799,
+          48.70015964
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_71342782",
+        "text": "Orsay Rugby Club",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.209333811111111,
+          48.70181038888889
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_71346853",
+        "text": "Salle polyvalente T5",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2125854666666664,
+          48.7115618
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_71347809",
+        "text": "Écuries",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2066883117647063,
+          48.709670282352945
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_71347870",
+        "text": "Espace aviron",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2126397399999997,
+          48.71583348
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_71348181",
+        "text": "Grand Gymnase",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2133737833333336,
+          48.71236188333333
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_71348753",
+        "text": "Manège",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2064059866666668,
+          48.709951159999996
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_71352738",
+        "text": "Salle polyvalente T6",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2130740857142857,
+          48.7115636
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_71355437",
+        "text": "Dojo et salle d'armes",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.212785029166666,
+          48.712434866666655
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_149360697",
+        "text": "Sports Centre",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.212032775,
+          48.712234849999994
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_164014446",
+        "text": "Médiatheque Annexe du Guichet",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.1908104833333333,
+          48.7055997
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_176156006",
+        "text": "Gymnase ENSTA Paris",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2145452600000004,
+          48.71196284
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_198197286",
+        "text": "Mur d'escalade",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2129674199999996,
+          48.71128694
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_218609922",
+        "text": "Super Pizza",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.2095675714285714,
+          48.699375571428575
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_563025830",
+        "text": "Food trucks",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.20241788,
+          48.7142315
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_569694312",
+        "text": "Halle multisports",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.212836888888889,
+          48.71193287777778
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_785126222",
+        "text": "Stade municipal André Laurent",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.203570913253013,
+          48.70167394819276
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "amenity_way_1423315000",
+        "text": "Cafétéria",
+        "mode": "amenities",
+        "color": "#facc15"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.19056145,
+          48.716471858333335
+        ]
+      }
+    }
+  ]
+}

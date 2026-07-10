@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Marker Setting</title>
+  <style>
+    :root {
+      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --ink: #16302b;
+      --muted: #5f7c77;
+      --green: #2f8f86;
+      --green-dark: #21726b;
+      --green-soft: #e4f4f0;
+      --green-tint: #f1faf8;
+      --line: #cfe6e0;
+      --bg: #ffffff;
+      --panel: #ffffff;
+      --danger: #b03a2e;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; width: 100%; height: 100%;
+      background: var(--bg);
+      font-family: var(--font-ui);
+      color: var(--ink);
+      overflow: hidden;
+    }
+
+    #page { display: flex; flex-direction: column; height: 100%; padding: 20px 26px; gap: 16px; }
+
+    #topbar { display: flex; align-items: center; gap: 14px; }
+    .back-btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-size: 14px; font-weight: 600; text-decoration: none;
+      color: var(--ink); background: var(--panel);
+      border: 1px solid var(--line); border-radius: 10px;
+      padding: 9px 15px; cursor: pointer;
+      box-shadow: 0 4px 12px rgba(31, 114, 107, 0.06);
+    }
+    .back-btn:hover { background: var(--green-tint); border-color: var(--green); }
+    #topbar h1 { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.2px; }
+
+    #card {
+      flex: 1; min-height: 0;
+      display: flex; flex-direction: column;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(31, 114, 107, 0.08);
+      padding: 18px 20px;
+      overflow: hidden;
+    }
+
+    .action {
+      font-family: var(--font-ui); font-size: 14px; font-weight: 600;
+      color: #fff; background: var(--green);
+      border: 1px solid var(--green-dark); border-radius: 9px;
+      padding: 9px 16px; cursor: pointer; transition: background 0.14s ease;
+    }
+    .action:hover { background: #35a094; }
+
+    .status-line { font-size: 13px; min-height: 17px; color: var(--muted); }
+    .status-line.ok { color: var(--green-dark); }
+    .status-line.err { color: var(--danger); }
+
+    /* ---------- marker editor (new white/green theme) ---------- */
+    .marker-settings { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+    .marker-toolbar {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding-bottom: 14px; border-bottom: 1px solid var(--line);
+    }
+    .marker-toolbar-text { font-size: 15px; font-weight: 600; color: var(--muted); margin-right: auto; }
+    .marker-field { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; white-space: nowrap; }
+    .marker-field select,
+    .marker-field input[type="number"] {
+      height: 38px; box-sizing: border-box;
+      border: 1px solid var(--line); border-radius: 9px;
+      background: #fff; color: var(--ink); font: inherit; padding: 0 12px;
+    }
+    .marker-field input[type="number"] { width: 72px; text-align: center; }
+    .marker-field select:focus, .marker-field input:focus { outline: none; border-color: var(--green); }
+
+    .marker-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 16px; padding-right: 6px; }
+    .marker-section { border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+    .marker-section:last-child { border-bottom: 0; }
+    .marker-section h3 { margin: 0 0 12px; font-size: 18px; font-weight: 700; }
+    .marker-card-row { display: flex; flex-wrap: wrap; gap: 14px 16px; align-items: flex-start; }
+    .marker-card { position: relative; width: 116px; display: flex; flex-direction: column; gap: 8px; }
+    .marker-card.wide { width: 176px; }  /* two-tag tools: room for both dropdowns */
+    .marker-preview,
+    .marker-add-card {
+      border: 1px solid var(--line); border-radius: 12px; background: var(--green-tint); box-sizing: border-box;
+    }
+    .marker-preview { position: relative; height: 112px; display: flex; align-items: center; justify-content: center; padding: 10px; background: #fff; }
+    .marker-preview img { width: 88px; height: 88px; object-fit: contain; image-rendering: pixelated; }
+    .marker-empty { color: var(--muted); font-size: 13px; text-align: center; }
+    .marker-card-label { min-height: 16px; font-size: 12px; font-weight: 700; color: var(--muted); text-align: center; line-height: 1.2; }
+    .marker-delete {
+      position: absolute; top: 6px; left: 6px; width: 24px; height: 24px;
+      display: none; align-items: center; justify-content: center;
+      border: 1px solid #e6c6c0; border-radius: 7px; background: #fff;
+      color: var(--danger); cursor: pointer; padding: 0; z-index: 2;
+    }
+    .marker-card:hover .marker-delete { display: flex; }
+    .marker-delete:hover { background: #fbeeeb; border-color: var(--danger); }
+    .marker-controls { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 6px; align-items: center; }
+    .marker-controls.draw-controls { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px; }
+    .marker-controls.eraser-controls { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .marker-controls.comment-controls { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .marker-controls.no-color { grid-template-columns: minmax(0, 1fr); }
+    .marker-tag-select {
+      width: 100%; height: 32px; border: 1px solid var(--line); border-radius: 8px;
+      background: #fff; color: var(--ink); font: 600 14px var(--font-ui);
+      text-align: center; text-align-last: center; cursor: pointer;
+    }
+    .marker-tag-select:focus { outline: none; border-color: var(--green); }
+    .marker-tag-select option.taken { color: #b00000; font-weight: 700; }
+    .marker-color { width: 34px; height: 32px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: #fff; cursor: pointer; }
+    .marker-offset-wrap { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 5px; }
+    .marker-offset {
+      width: 100%; height: 32px; min-width: 0; border: 1px solid var(--line); border-radius: 8px;
+      background: #fff; color: var(--ink); font: 600 13px var(--font-ui); text-align: center; box-sizing: border-box;
+    }
+    .marker-offset-unit { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; }
+    .marker-add-card { width: 116px; height: 112px; font-size: 26px; line-height: 1; color: var(--green-dark); cursor: pointer; }
+    .marker-add-card:hover { background: var(--green-soft); border-color: var(--green); }
+    .marker-bottom-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 28px; align-items: start; }
+
+    @media (max-width: 980px) {
+      .marker-bottom-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div id="page">
+    <header id="topbar">
+      <a class="back-btn" href="/home?setup">&larr; Home</a>
+      <h1>Marker Setting</h1>
+    </header>
+
+    <main id="card">
+      <div id="markerSettings" class="marker-settings">
+        <div class="marker-toolbar">
+          <span class="marker-toolbar-text">Select the marker (AprilTag) for each tool.</span>
+          <label class="marker-field">Tag family
+            <select id="markerFamily"></select>
+          </label>
+          <label class="marker-field">Marker size
+            <input id="markerSizeCm" type="number" min="1" max="20" step="0.5" value="3" />
+            <span>cm</span>
+          </label>
+          <button class="action" type="button" id="markerDownload">Download marker sheet</button>
+          <span class="status-line" id="markerSaveStatus"></span>
+        </div>
+        <div id="markerBody" class="marker-body"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="src/config.js"></script>
+  <script src="src/markerEditor.js?v=3"></script>
+</body>
+</html>

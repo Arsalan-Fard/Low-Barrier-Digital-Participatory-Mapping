@@ -1,0 +1,1390 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Session Results</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.css" />
+  <style>
+    :root {
+      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --ink: #16302b;
+      --muted: #5f7c77;
+      --green: #2f8f86;
+      --green-dark: #21726b;
+      --green-soft: #e4f4f0;
+      --green-tint: #f1faf8;
+      --line: #cfe6e0;
+      --bg: #ffffff;
+      --panel: #ffffff;
+      --danger: #b03a2e;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-ui);
+    }
+    .hidden { display: none !important; }
+    /* Two stacked maps share the same box. #mapBlur (back) is the real
+       geographic basemap and is always shown; the privacy `blur()` filter is
+       toggled on it for screenshots. #map (front) has an empty/transparent
+       style and renders ONLY the data overlays, so they stay perfectly sharp
+       on top of the (optionally blurred) basemap. */
+    #mapBlur {
+      position: absolute;
+      inset: 0;
+      left: 300px;
+      z-index: 0;
+    }
+    #mapBlur.active .mapboxgl-canvas,
+    #mapBlur.active .maplibregl-canvas,
+    #mapBlur.active > * { filter: blur(var(--privacy-blur, 24px)); }
+    /* Front map is always transparent — it has no basemap, just overlays. */
+    #map {
+      position: absolute;
+      inset: 0;
+      left: 300px;
+      z-index: 1;
+      background: transparent;
+    }
+    #map .mapboxgl-canvas-container,
+    #map .mapboxgl-canvas,
+    #map .maplibregl-canvas-container,
+    #map .maplibregl-canvas { background: transparent !important; }
+    #privacyBadge {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 7;
+      background: #fbeeeb;
+      border: 1px solid #e6c6c0;
+      color: var(--danger);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      box-shadow: 0 8px 24px rgba(31, 114, 107, 0.12);
+    }
+    .panel {
+      position: absolute;
+      top: 16px;
+      left: 316px;
+      z-index: 5;
+      width: 272px;
+      padding: 14px 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      box-shadow: 0 10px 30px rgba(31, 114, 107, 0.08);
+    }
+    #sidebar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 300px;
+      height: 100%;
+      background: var(--panel);
+      border-right: 1px solid var(--line);
+      z-index: 6;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 8px 0 24px rgba(31, 114, 107, 0.05);
+    }
+    #sidebar .hd {
+      padding: 14px 14px 10px;
+      background: var(--green-tint);
+      border-bottom: 1px solid var(--line);
+    }
+    #sidebar h2 {
+      margin: 0 0 8px;
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--ink);
+    }
+    #sidebar .mode-filter {
+      display: flex;
+      gap: 4px;
+    }
+    #sidebar .mode-filter button {
+      flex: 1;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    #sidebar .mode-filter button:hover { background: var(--green-soft); border-color: var(--green); }
+    #sidebar .mode-filter button.active {
+      background: var(--green);
+      border-color: var(--green-dark);
+      color: #fff;
+    }
+    #sidebar .sel-actions {
+      display: flex;
+      gap: 4px;
+      margin-top: 8px;
+    }
+    #sidebar .sel-actions button {
+      flex: 1;
+      padding: 5px 6px;
+      border-radius: 5px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      text-transform: uppercase;
+    }
+    #sidebar .sel-actions button:hover { color: var(--green-dark); background: var(--green-soft); border-color: var(--green); }
+    #sidebar .list-count {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    #sidebar .list-count strong { color: var(--green-dark); }
+    #sessionList {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 8px;
+    }
+    #sessionList .item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      font-size: 12px;
+      color: var(--ink);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    #sessionList .item:hover { background: var(--green-tint); }
+    #sessionList .item input[type="checkbox"] {
+      accent-color: var(--green);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    #sessionList .item .nm {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+    }
+    #sessionList .item .tag {
+      flex-shrink: 0;
+      padding: 1px 6px;
+      font-size: 10px;
+      border-radius: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    #sessionList .item .tag.timeline { background: var(--green-soft); color: var(--green-dark); }
+    #sessionList .item .tag.expo { background: #e8f8fb; color: #1f7a81; }
+    #sessionList .item .tag.unknown { background: #edf2f1; color: var(--muted); }
+    #sessionList .empty { padding: 20px 8px; color: var(--muted); font-size: 12px; text-align: center; }
+    .legend { left: 316px; }
+    .panel h1 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--ink);
+    }
+    .panel .stats { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+    .panel .stats strong { color: var(--green-dark); }
+    .panel label { display: block; font-size: 11px; font-weight: 700; color: var(--muted); margin: 10px 0 4px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .panel input[type="range"] { width: 100%; accent-color: var(--green); }
+    .panel .row { display: flex; gap: 8px; align-items: center; }
+    .panel .row input[type="range"] { flex: 1; }
+    .panel .row .val { font-size: 12px; color: var(--green-dark); min-width: 34px; text-align: right; }
+    .panel .toggles { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+    .panel .toggle {
+      flex: 1 1 auto;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      text-align: center;
+    }
+    .panel .toggle:hover { background: var(--green-tint); border-color: var(--green); }
+    .panel .toggle.active { background: var(--green-soft); border-color: var(--green); color: var(--green-dark); }
+    .panel .note { font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.4; }
+    .panel .err { color: var(--danger); font-size: 12px; margin-top: 6px; }
+    .legend {
+      position: absolute;
+      bottom: 16px;
+      left: 12px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 6px 18px rgba(31, 114, 107, 0.06);
+    }
+    .legend .bar {
+      width: 140px; height: 10px; border-radius: 6px;
+      background: linear-gradient(to right, rgba(33,102,172,0), rgb(103,169,207), rgb(209,229,240), rgb(253,219,199), rgb(239,138,98), rgb(178,24,43));
+    }
+
+    /* Annotation labels: bold colored text on a transparent background, sitting
+       just above the lng/lat. */
+    .hm-ann-chip {
+      pointer-events: auto;
+      cursor: pointer;
+      max-width: 520px;
+      font-family: var(--font-ui);
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1.18;
+      text-align: center;
+      white-space: nowrap;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7), 0 0 1px rgba(0, 0, 0, 0.6);
+      transform-origin: 50% 100%;
+    }
+    /* Back button now lives at the top of the sidebar so it is always reachable
+       (the old bottom-left fixed button overlapped the legend). */
+    #resultsBackBtn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 10px;
+      padding: 8px 14px;
+      font-family: var(--font-ui);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      cursor: pointer;
+    }
+    #resultsBackBtn:hover { background: var(--green-tint); border-color: var(--green); }
+  </style>
+</head>
+<body>
+<div id="sidebar">
+  <div class="hd">
+    <button type="button" id="resultsBackBtn" aria-label="Back to menu">&larr; Back to menu</button>
+    <h2>Sessions</h2>
+    <div class="sel-actions">
+      <button type="button" id="selAll">Select All</button>
+      <button type="button" id="selNone">Clear</button>
+    </div>
+    <div class="list-count"><strong id="selCount">0</strong>/<span id="visCount">0</span> selected</div>
+  </div>
+  <div id="sessionList"></div>
+</div>
+
+<div id="mapBlur"></div>
+<div id="map"></div>
+
+<div id="privacyBadge" class="hidden">Privacy blur ON · B toggle · [ ] adjust</div>
+
+<div class="panel">
+  <h1>Session Results</h1>
+
+  <div id="timelineControls" class="hidden">
+    <label>Timeline frame <span class="val" id="timelineVal">0/0</span></label>
+    <div class="row">
+      <input id="timelineFrame" type="range" min="0" max="0" step="1" value="0" />
+    </div>
+  </div>
+
+  <label>Layers</label>
+  <div class="toggles">
+    <button type="button" class="toggle active" data-layer="drawing">Drawings</button>
+    <button type="button" class="toggle" data-layer="annotationMarkers">Comments</button>
+    <button type="button" class="toggle active" data-layer="annotations">Heatmap</button>
+  </div>
+
+  <div id="stepFilterWrap" class="hidden">
+    <label>Steps</label>
+    <div class="toggles" id="stepToggles"></div>
+  </div>
+
+  <label>Tag density radius <span class="val" id="radiusVal">28</span></label>
+  <div class="row">
+    <input id="radius" type="range" min="4" max="80" step="1" value="28" />
+  </div>
+
+  <label>Tag density intensity <span class="val" id="intensityVal">1.0</span></label>
+  <div class="row">
+    <input id="intensity" type="range" min="0.1" max="4" step="0.1" value="1" />
+  </div>
+
+  <div class="err" id="err"></div>
+</div>
+
+<div class="legend">
+  <span>low</span><div class="bar"></div><span>high</span>
+</div>
+
+<script src="https://cdn.jsdelivr.net/gh/glowbox/maptastic@master/build/maptastic.min.js"></script>
+<script src="src/pageWarp.js"></script>
+<script src="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.js"></script>
+<script src="src/maplibreCompat.js"></script>
+<script src="src/config.js"></script>
+<script src="src/tagAssignments.js"></script>
+<script>
+(function () {
+  var CONFIG = (window.CompactMapConfig && window.CompactMapConfig.CONFIG) || {};
+  mapboxgl.accessToken = CONFIG.useMapboxServices ? (CONFIG.accessToken || '') : '';
+
+  var DRAWING_SOURCE_ID = 'heatmap-drawing-source';
+  var TAGS_SOURCE_ID = 'heatmap-tags-source';
+  var ANNOTATIONS_SOURCE_ID = 'heatmap-annotations-source';
+  var DRAWING_LINE_LAYER_ID = 'heatmap-drawing-line';
+  var TAGS_LAYER_ID = 'heatmap-tags-layer';
+  var ANNOTATIONS_LAYER_ID = 'heatmap-annotations-layer';
+  var FLOORPLAN_SOURCE_ID = 'heatmap-floorplan-source';
+  var FLOORPLAN_LAYER_ID = 'heatmap-floorplan-lines';
+  var FLOORPLAN_BG_LAYER_ID = 'heatmap-floorplan-bg';
+  var STICKER_DOTS_SOURCE_ID = 'heatmap-sticker-dots-source';
+  var STICKER_DOTS_LAYER_ID = 'heatmap-sticker-dots-layer';
+  var DEFAULT_DRAWING_COLOR = '#ff5b5b';
+  var DEFAULT_STICKER_COLOR = '#ff5b5b';
+  var floorplanLoadPromise = null;
+  var floorplanData = null;
+
+  function cloneStyle(style) {
+    if (!style || typeof style !== 'object') return style;
+    try { return JSON.parse(JSON.stringify(style)); } catch (_err) { return style; }
+  }
+
+  function themeStyle(theme) {
+    var entry = CONFIG.styles && CONFIG.styles[theme];
+    if (!entry) return null;
+    if (entry.style) return entry.style;
+    return entry;
+  }
+
+  // Basemap styles the 'L' shortcut cycles through, mirroring the live map.
+  // These are MapLibre-compatible OSM raster styles in static/no-token mode.
+  var BASEMAP_STYLES = [
+    { label: 'Dark view', style: themeStyle('dark') || CONFIG.style },
+    { label: 'Streets view', style: themeStyle('dawn') || CONFIG.style },
+    { label: 'Light view', style: themeStyle('light') || CONFIG.style }
+  ];
+  var basemapIndex = 0;
+
+  var initialStyle = CONFIG.style || BASEMAP_STYLES[0].style;
+  var initialCenter = CONFIG.center || [2.2085, 48.7116];
+  var initialZoom = (typeof CONFIG.zoom === 'number') ? CONFIG.zoom : 15;
+  // The geographic style currently shown on the basemap (back) map. Cycled
+  // by the L key. Starts from CONFIG.style if provided.
+  var basemapStyle = initialStyle;
+
+  // A minimal Mapbox style with no background/land/water layers. The front
+  // map uses this so its WebGL canvas is genuinely transparent (nothing to
+  // clear opaque) — the data overlays draw on top of nothing and the
+  // blurred basemap from the back map shows straight through. This is the
+  // robust fix for the "canvas stays white" problem: we never fight the
+  // basemap's background layer because the front map has no basemap at all.
+  // `glyphs` is required because the winner-label layer is a symbol layer
+  // with text; without it Mapbox can't render any labels on this map.
+  var EMPTY_STYLE = {
+    version: 8,
+    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    sources: {},
+    layers: []
+  };
+
+  // Front map: data overlays only, transparent, owns all interaction.
+  var map = new mapboxgl.Map({
+    container: 'map',
+    style: EMPTY_STYLE,
+    center: initialCenter,
+    zoom: initialZoom,
+    pitch: 0,
+    bearing: 0,
+    preserveDrawingBuffer: true
+  });
+
+  // Back map: the real geographic basemap, always present (it IS the map
+  // view), blurred via CSS only while privacy mode is on. Created up front
+  // since it's now the actual basemap, not an optional privacy extra.
+  var blurMap = new mapboxgl.Map({
+    container: 'mapBlur',
+    style: cloneStyle(basemapStyle),
+    center: initialCenter,
+    zoom: initialZoom,
+    pitch: 0,
+    bearing: 0,
+    interactive: false,        // front map owns all interaction
+    attributionControl: CONFIG.attributionControl !== false,
+    preserveDrawingBuffer: true
+  });
+  // Keep the basemap locked to the front map's camera so the sharp overlays
+  // always sit exactly over the right ground.
+  map.on('move', syncBlurCamera);
+  map.on('zoom', syncBlurCamera);
+  map.on('rotate', syncBlurCamera);
+  map.on('pitch', syncBlurCamera);
+
+  function syncBlurCamera() {
+    if (!blurMap) return;
+    blurMap.jumpTo({
+      center: map.getCenter(),
+      zoom: map.getZoom(),
+      bearing: map.getBearing(),
+      pitch: map.getPitch()
+    });
+  }
+
+  var state = {
+    sessionsByName: {},    // name -> { mode, data }
+    orderedNames: [],      // filenames, newest first
+    selectedNames: {},     // name -> true
+    modeFilter: 'all',
+    basemapFilter: 'all',
+    drawingFeatures: [],
+    tagFeatures: [],
+    annotationFeatures: [],
+    stickerDotFeatures: [],
+    annotationMarkerSpecs: [], // [{ lng, lat, text, sessionName }]
+    annotationDomMarkers: [],  // mapboxgl.Marker instances currently on map
+    showDrawing: true,
+    showTags: false,
+    showAnnotations: true,
+    showAnnotationMarkers: false,
+    timelineFrameIndex: 0,
+    timelineFrameMax: 0,
+    radius: 28,
+    intensity: 1.0,
+    bounds: null,
+    availableSteps: [],     // sorted step numbers present in the selected sessions
+    visibleSteps: null      // Set of enabled step numbers; null = show all
+  };
+
+  function sessionMode(data) {
+    var raw = data && typeof data.mode === 'string' ? data.mode.toLowerCase() : '';
+    if (raw === 'timeline') return 'timeline';
+    return 'unknown';
+  }
+
+  function sessionBasemap(data) {
+    var raw = data && typeof data.basemap === 'string' ? data.basemap.toLowerCase() : '';
+    if (raw === 'floorplan' || raw === 'mapbox') return raw;
+    return 'unknown';
+  }
+
+  function visibleNames() {
+    return state.orderedNames.filter(function (n) {
+      var entry = state.sessionsByName[n];
+      if (!entry) return false;
+      if (state.modeFilter !== 'all' && entry.mode !== state.modeFilter) return false;
+      if (state.basemapFilter !== 'all' && entry.basemap !== state.basemapFilter) return false;
+      return true;
+    });
+  }
+
+  function selectedSessions() {
+    var visible = visibleNames();
+    var visibleSet = {};
+    for (var i = 0; i < visible.length; i++) visibleSet[visible[i]] = true;
+    var out = [];
+    for (var j = 0; j < state.orderedNames.length; j++) {
+      var n = state.orderedNames[j];
+      if (state.selectedNames[n] && visibleSet[n]) {
+        var entry = state.sessionsByName[n];
+        if (!entry) continue;
+        if (entry.mode === 'timeline') {
+          var frames = entry.data && Array.isArray(entry.data.frames) ? entry.data.frames : [];
+          var idx = Math.max(0, Math.min(frames.length - 1, state.timelineFrameIndex));
+          var frame = frames[idx] || null;
+          if (frame && frame.state) out.push({ name: n, session: frame.state });
+        } else {
+          out.push({ name: n, session: entry.data });
+        }
+      }
+    }
+    return out;
+  }
+
+  function qs(id) { return document.getElementById(id); }
+  function setText(id, val) { var el = document.getElementById(id); if (el) el.textContent = val; }
+  function setErr(msg) { qs('err').textContent = msg || ''; }
+
+  function buildHeatLayer(id, source, baseRadius, baseIntensity) {
+    return {
+      id: id,
+      type: 'heatmap',
+      source: source,
+      maxzoom: 22,
+      paint: {
+        'heatmap-weight': ['coalesce', ['get', 'weight'], 1],
+        'heatmap-intensity': [
+          'interpolate', ['linear'], ['zoom'],
+          10, baseIntensity * 0.6,
+          16, baseIntensity,
+          22, baseIntensity * 1.8
+        ],
+        'heatmap-color': [
+          'interpolate', ['linear'], ['heatmap-density'],
+          0.00, 'rgba(33,102,172,0)',
+          0.20, 'rgb(103,169,207)',
+          0.40, 'rgb(209,229,240)',
+          0.60, 'rgb(253,219,199)',
+          0.80, 'rgb(239,138,98)',
+          1.00, 'rgb(178,24,43)'
+        ],
+        'heatmap-radius': [
+          'interpolate', ['linear'], ['zoom'],
+          10, baseRadius * 0.6,
+          16, baseRadius,
+          22, baseRadius * 2.2
+        ],
+        'heatmap-opacity': [
+          'interpolate', ['linear'], ['zoom'],
+          10, 0.85,
+          22, 0.7
+        ]
+      }
+    };
+  }
+
+  function buildDrawingLineLayer() {
+    return {
+      id: DRAWING_LINE_LAYER_ID,
+      type: 'line',
+      source: DRAWING_SOURCE_ID,
+      filter: ['==', ['geometry-type'], 'LineString'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': ['coalesce', ['get', 'color'], DEFAULT_DRAWING_COLOR],
+        'line-width': [
+          'interpolate', ['linear'], ['zoom'],
+          10, 1.5,
+          16, 3.5,
+          22, 7
+        ],
+        'line-opacity': 0.85
+      }
+    };
+  }
+
+  function buildAnnotationHeatLayer(id, source, baseRadius, baseIntensity) {
+    return {
+      id: id,
+      type: 'heatmap',
+      source: source,
+      maxzoom: 22,
+      paint: {
+        'heatmap-weight': ['coalesce', ['get', 'weight'], 1],
+        'heatmap-intensity': [
+          'interpolate', ['linear'], ['zoom'],
+          10, baseIntensity * 0.6,
+          16, baseIntensity,
+          22, baseIntensity * 1.8
+        ],
+        'heatmap-color': [
+          'interpolate', ['linear'], ['heatmap-density'],
+          0.00, 'rgba(16, 24, 48, 0)',
+          0.20, 'rgb(147, 197, 253)',
+          0.40, 'rgb(191, 219, 254)',
+          0.60, 'rgb(253, 224, 71)',
+          0.80, 'rgb(251, 146, 60)',
+          1.00, 'rgb(217, 70, 239)'
+        ],
+        'heatmap-radius': [
+          'interpolate', ['linear'], ['zoom'],
+          10, baseRadius * 0.6,
+          16, baseRadius,
+          22, baseRadius * 2.2
+        ],
+        'heatmap-opacity': [
+          'interpolate', ['linear'], ['zoom'],
+          10, 0.85,
+          22, 0.7
+        ]
+      }
+    };
+  }
+
+  function ensureLayers() {
+    if (!map.getSource(DRAWING_SOURCE_ID)) {
+      map.addSource(DRAWING_SOURCE_ID, { type: 'geojson', data: emptyFC() });
+    }
+    if (!map.getSource(TAGS_SOURCE_ID)) {
+      map.addSource(TAGS_SOURCE_ID, { type: 'geojson', data: emptyFC() });
+    }
+    if (!map.getSource(ANNOTATIONS_SOURCE_ID)) {
+      map.addSource(ANNOTATIONS_SOURCE_ID, { type: 'geojson', data: emptyFC() });
+    }
+    if (!map.getSource(STICKER_DOTS_SOURCE_ID)) {
+      map.addSource(STICKER_DOTS_SOURCE_ID, { type: 'geojson', data: emptyFC() });
+    }
+    if (!map.getLayer(DRAWING_LINE_LAYER_ID)) {
+      map.addLayer(buildDrawingLineLayer());
+    }
+    if (!map.getLayer(TAGS_LAYER_ID)) {
+      map.addLayer(buildHeatLayer(TAGS_LAYER_ID, TAGS_SOURCE_ID, state.radius * 1.4, state.intensity * 1.2));
+    }
+    if (!map.getLayer(ANNOTATIONS_LAYER_ID)) {
+      map.addLayer(buildAnnotationHeatLayer(ANNOTATIONS_LAYER_ID, ANNOTATIONS_SOURCE_ID, state.radius * 1.2, state.intensity));
+    }
+    if (!map.getLayer(STICKER_DOTS_LAYER_ID)) {
+      map.addLayer({
+        id: STICKER_DOTS_LAYER_ID,
+        type: 'circle',
+        source: STICKER_DOTS_SOURCE_ID,
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4, 16, 7, 22, 12],
+          'circle-color': ['coalesce', ['get', 'color'], DEFAULT_STICKER_COLOR],
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 1.2,
+          'circle-opacity': 0.95
+        }
+      });
+    }
+  }
+
+  function emptyFC() { return { type: 'FeatureCollection', features: [] }; }
+
+  function pushPoint(collection, lng, lat, weight, step) {
+    if (!isFinite(lng) || !isFinite(lat)) return;
+    collection.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lng, lat] },
+      properties: {
+        weight: weight || 1,
+        step: Number.isFinite(Number(step)) ? Number(step) : -1
+      }
+    });
+    if (!state.bounds) state.bounds = new mapboxgl.LngLatBounds([lng, lat], [lng, lat]);
+    else state.bounds.extend([lng, lat]);
+  }
+
+  function extendBoundsWithCoord(c) {
+    if (!Array.isArray(c) || c.length < 2) return;
+    var lng = Number(c[0]);
+    var lat = Number(c[1]);
+    if (!isFinite(lng) || !isFinite(lat)) return;
+    if (!state.bounds) state.bounds = new mapboxgl.LngLatBounds([lng, lat], [lng, lat]);
+    else state.bounds.extend([lng, lat]);
+  }
+
+  // Convert a telecom-hall expo session (compact shape) into the {annotations FC,
+  // drawings FC, points} shape the heatmap renders. Like/dislike notes → annotation
+  // Points (with text + colour); walk/bike/car routes → drawing LineStrings; the
+  // Street-View point pool → extra heat points via a synthetic annotations entry.
+  function expoToHeatmapSession(data) {
+    data = data && typeof data === 'object' ? data : {};
+    var annFeatures = [];
+    var drawFeatures = [];
+    var MODE_COLOR = { like: '#0fb5ba', dislike: '#e0822b' };
+    var PATH_COLOR = { walk: '#ff5b5b', bicycle: '#16a34a', car: '#2563eb' };
+    var PATH_STEP = { walk: 4, bicycle: 7, car: 8 };
+    var STEP_OF = { like: 2, dislike: 3 };
+
+    var anns = data.annotations || {};
+    ['like', 'dislike'].forEach(function (k) {
+      (anns[k] || []).forEach(function (a) {
+        if (!a || !Number.isFinite(Number(a.lng)) || !Number.isFinite(Number(a.lat))) return;
+        annFeatures.push({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [Number(a.lng), Number(a.lat)] },
+          properties: { text: String(a.text || ''), feeling: k, color: MODE_COLOR[k], step: STEP_OF[k] }
+        });
+      });
+    });
+
+    var paths = data.paths || {};
+    ['walk', 'bicycle', 'car'].forEach(function (m) {
+      (paths[m] || []).forEach(function (coords) {
+        if (!Array.isArray(coords) || coords.length < 2) return;
+        drawFeatures.push({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: coords },
+          properties: { color: PATH_COLOR[m], mode: m, step: PATH_STEP[m] }
+        });
+      });
+    });
+
+    return {
+      mode: 'expo',
+      basemap: 'mapbox',
+      annotations: { type: 'FeatureCollection', features: annFeatures },
+      drawings: { type: 'FeatureCollection', features: drawFeatures },
+      // keep the original for reference / future fields
+      _expo: data
+    };
+  }
+
+  function extractSessionPoints(session, sessionName) {
+    var annFc = session && session.annotations;
+    if (annFc && Array.isArray(annFc.features)) {
+      for (var ai = 0; ai < annFc.features.length; ai++) {
+        var af = annFc.features[ai];
+        var ag = af && af.geometry;
+        if (ag && ag.type === 'Point' && Array.isArray(ag.coordinates) && ag.coordinates.length >= 2) {
+          var alng = Number(ag.coordinates[0]);
+          var alat = Number(ag.coordinates[1]);
+          var atext = (af.properties && af.properties.text) ? String(af.properties.text) : '';
+          var astep = af.properties && Number.isFinite(Number(af.properties.step))
+            ? Number(af.properties.step) : null;
+          pushPoint(state.annotationFeatures, alng, alat, 1, astep);
+          extendBoundsWithCoord([alng, alat]);
+          var aProps = af.properties || {};
+          state.annotationMarkerSpecs.push({
+            lng: alng, lat: alat, text: atext, step: astep,
+            tagId: aProps.tagId != null ? String(aProps.tagId) : '',
+            color: aProps.color ? String(aProps.color) : '',
+            sessionName: sessionName || ''
+          });
+        }
+      }
+    }
+
+    // Stickers — feed into the same heatmap collection. Stickers with a
+    // comment also surface as labeled markers (same UX as annotations).
+    var stickFc = session && session.stickers;
+    if (stickFc && Array.isArray(stickFc.features)) {
+      for (var si = 0; si < stickFc.features.length; si++) {
+        var sf = stickFc.features[si];
+        var sg = sf && sf.geometry;
+        if (sg && sg.type === 'Point' && Array.isArray(sg.coordinates) && sg.coordinates.length >= 2) {
+          var slng = Number(sg.coordinates[0]);
+          var slat = Number(sg.coordinates[1]);
+          var sprops = sf.properties || {};
+          var sstep = Number.isFinite(Number(sprops.step)) ? Number(sprops.step) : null;
+          pushPoint(state.annotationFeatures, slng, slat, 1, sstep);
+          extendBoundsWithCoord([slng, slat]);
+          var sDotColor = sprops.color ? String(sprops.color) : DEFAULT_STICKER_COLOR;
+          state.stickerDotFeatures.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [slng, slat] },
+            properties: { color: sDotColor, step: sstep == null ? -1 : sstep }
+          });
+          if (sprops.commented && sprops.commentText) {
+            state.annotationMarkerSpecs.push({
+              lng: slng, lat: slat, text: String(sprops.commentText),
+              step: sstep, tagId: sprops.tagId != null ? String(sprops.tagId) : '',
+              color: sDotColor || '',
+              sessionName: sessionName || ''
+            });
+          }
+        }
+      }
+    }
+
+    // v2 schema: drawing.path.features; v1: drawings.features
+    var fc = (session && session.drawing && session.drawing.path)
+      || (session && session.drawings)
+      || null;
+    if (!fc || !Array.isArray(fc.features)) return;
+
+    for (var i = 0; i < fc.features.length; i++) {
+      var feat = fc.features[i];
+      var g = feat && feat.geometry;
+      if (!g) continue;
+      if (g.type === 'LineString' && Array.isArray(g.coordinates) && g.coordinates.length >= 2) {
+        state.drawingFeatures.push(feat);
+        for (var j = 0; j < g.coordinates.length; j++) {
+          extendBoundsWithCoord(g.coordinates[j]);
+        }
+      } else if (g.type === 'Point' && Array.isArray(g.coordinates) && g.coordinates.length >= 2) {
+        extendBoundsWithCoord(g.coordinates);
+      }
+    }
+  }
+
+  function rebuildCollections(sessionEntries) {
+    state.drawingFeatures = [];
+    state.tagFeatures = [];
+    state.annotationFeatures = [];
+    state.stickerDotFeatures = [];
+    state.annotationMarkerSpecs = [];
+    state.bounds = null;
+    (sessionEntries || []).forEach(function (entry) {
+      if (!entry) return;
+      extractSessionPoints(entry.session, entry.name);
+    });
+  }
+
+  function updateTimelineControls() {
+    var maxFrame = 0;
+    var hasTimeline = false;
+    var visibleSet = {};
+    visibleNames().forEach(function (name) { visibleSet[name] = true; });
+    for (var i = 0; i < state.orderedNames.length; i++) {
+      var name = state.orderedNames[i];
+      var entry = state.sessionsByName[name];
+      if (!entry || entry.mode !== 'timeline' || !state.selectedNames[name] || !visibleSet[name]) continue;
+      var frames = entry.data && Array.isArray(entry.data.frames) ? entry.data.frames : [];
+      if (!frames.length) continue;
+      hasTimeline = true;
+      maxFrame = Math.max(maxFrame, frames.length - 1);
+    }
+
+    state.timelineFrameMax = maxFrame;
+    if (state.timelineFrameIndex > maxFrame) state.timelineFrameIndex = maxFrame;
+
+    var controls = qs('timelineControls');
+    var slider = qs('timelineFrame');
+    var label = qs('timelineVal');
+    if (!controls || !slider || !label) return;
+    controls.classList.toggle('hidden', !hasTimeline);
+    slider.max = String(maxFrame);
+    slider.value = String(state.timelineFrameIndex);
+    label.textContent = hasTimeline
+      ? String(state.timelineFrameIndex + 1) + '/' + String(maxFrame + 1)
+      : '0/0';
+  }
+
+  function clearAnnotationDomMarkers() {
+    for (var i = 0; i < state.annotationDomMarkers.length; i++) {
+      try { state.annotationDomMarkers[i].remove(); } catch (_err) {}
+    }
+    state.annotationDomMarkers = [];
+  }
+
+  function annotationLabelColor(spec) {
+    if (spec && spec.color) return String(spec.color);
+    if (spec && spec.tagId && window.CompactTagAssignments
+        && typeof window.CompactTagAssignments.getAssignment === 'function') {
+      var a = window.CompactTagAssignments.getAssignment(spec.tagId);
+      if (a && a.color) return String(a.color);
+    }
+    return '#fef08a';
+  }
+
+  function fontSizePxForAnnotationLabel(text) {
+    var len = String(text || '').length;
+    if (len <= 30) return 18;
+    if (len <= 60) return 15;
+    if (len <= 120) return 13;
+    return 11;
+  }
+
+  function renderAnnotationDomMarkers() {
+    clearAnnotationDomMarkers();
+    if (!state.showAnnotationMarkers) return;
+    var specs = state.annotationMarkerSpecs;
+    for (var i = 0; i < specs.length; i++) {
+      var s = specs[i];
+      if (!isFinite(s.lng) || !isFinite(s.lat)) continue;
+      if (!stepVisible(Number.isFinite(Number(s.step)) ? Number(s.step) : 0)) continue;
+      var text = String(s.text || '');
+      if (!text) continue;
+      var el = document.createElement('div');
+      el.className = 'hm-ann-chip';
+      el.textContent = text;
+      el.style.color = annotationLabelColor(s);
+      el.style.fontSize = String(fontSizePxForAnnotationLabel(text)) + 'px';
+      el.title = text + (s.sessionName ? '\n' + s.sessionName : '');
+      var popup = new mapboxgl.Popup({ offset: 14, closeButton: true, maxWidth: '320px' })
+        .setHTML(
+          '<div style="font-family:Arial,sans-serif;font-size:13px;line-height:1.4;max-width:300px;color:#111;">'
+          + (s.step != null ? '<div style="opacity:0.7;font-size:11px;margin-bottom:4px;color:#333;">step ' + s.step + (s.sessionName ? ' · ' + escapeHtml(s.sessionName) : '') + '</div>' : '')
+          + '<div>' + escapeHtml(text) + '</div>'
+          + '</div>'
+        );
+      // Anchor 'bottom' so the chip's baseline sits just above the lng/lat —
+      // same convention as the live map.
+      var marker = new mapboxgl.Marker({ element: el, anchor: 'bottom', offset: [0, -6] })
+        .setLngLat([s.lng, s.lat])
+        .setPopup(popup)
+        .addTo(map);
+      state.annotationDomMarkers.push(marker);
+    }
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function pushToMap() {
+    ensureLayers();
+    var byStep = function (f) { return stepVisible(featureStep(f)); };
+    var drawings = (state.showDrawing ? state.drawingFeatures : []).filter(byStep);
+    var tags = (state.showTags ? state.tagFeatures : []).filter(byStep);
+    var annotations = (state.showAnnotations ? state.annotationFeatures : []).filter(byStep);
+    var stickerDots = (state.showAnnotations ? state.stickerDotFeatures : []).filter(byStep);
+    map.getSource(DRAWING_SOURCE_ID).setData({ type: 'FeatureCollection', features: drawings });
+    map.getSource(TAGS_SOURCE_ID).setData({ type: 'FeatureCollection', features: tags });
+    map.getSource(ANNOTATIONS_SOURCE_ID).setData({ type: 'FeatureCollection', features: annotations });
+    map.getSource(STICKER_DOTS_SOURCE_ID).setData({ type: 'FeatureCollection', features: stickerDots });
+    map.setLayoutProperty(DRAWING_LINE_LAYER_ID, 'visibility', state.showDrawing ? 'visible' : 'none');
+    map.setLayoutProperty(TAGS_LAYER_ID, 'visibility', state.showTags ? 'visible' : 'none');
+    map.setLayoutProperty(ANNOTATIONS_LAYER_ID, 'visibility', state.showAnnotations ? 'visible' : 'none');
+    if (map.getLayer(STICKER_DOTS_LAYER_ID)) {
+      map.setLayoutProperty(STICKER_DOTS_LAYER_ID, 'visibility', state.showAnnotations ? 'visible' : 'none');
+    }
+    renderAnnotationDomMarkers();
+  }
+
+  function updateHeatParams() {
+    if (map.getLayer(TAGS_LAYER_ID)) {
+      map.removeLayer(TAGS_LAYER_ID);
+    }
+    if (map.getLayer(ANNOTATIONS_LAYER_ID)) {
+      map.removeLayer(ANNOTATIONS_LAYER_ID);
+    }
+    map.addLayer(buildHeatLayer(TAGS_LAYER_ID, TAGS_SOURCE_ID, state.radius * 1.4, state.intensity * 1.2));
+    map.addLayer(buildAnnotationHeatLayer(ANNOTATIONS_LAYER_ID, ANNOTATIONS_SOURCE_ID, state.radius * 1.2, state.intensity));
+  }
+
+  function fitIfPossible() {
+    if (!state.bounds) return;
+    try {
+      map.fitBounds(state.bounds, { padding: 40, duration: 600, maxZoom: 17 });
+    } catch (_err) {}
+  }
+
+  function loadAllSessions() {
+    setErr('');
+    return Promise.all([
+      fetch('/api/sessions').then(function (res) { return res.json(); }),
+      fetch('/api/timeline-sessions').then(function (res) { return res.json(); }).catch(function () { return { timelines: [] }; }),
+      fetch('/api/expo-sessions').then(function (res) { return res.json(); }).catch(function () { return { expoSessions: [] }; })
+    ])
+      .then(function (bodies) {
+        var files = (bodies[0] && bodies[0].sessions) || [];
+        var timelineFiles = (bodies[1] && bodies[1].timelines) || [];
+        var expoFiles = (bodies[2] && bodies[2].expoSessions) || [];
+        var entries = files.map(function (name) { return { key: 'session:' + name, filename: name, kind: 'session' }; })
+          .concat(timelineFiles.map(function (name) { return { key: 'timeline:' + name, filename: name, kind: 'timeline' }; }))
+          .concat(expoFiles.map(function (name) { return { key: 'expo:' + name, filename: name, kind: 'expo' }; }));
+        setText('sessionsTotal', String(entries.length));
+        setText('sessionsLoaded', '0');
+        state.sessionsByName = {};
+        state.orderedNames = entries.map(function (entry) { return entry.key; });
+        state.selectedNames = {};
+        state.timelineFrameIndex = 0;
+        if (!entries.length) {
+          setErr('No saved sessions found.');
+          renderSessionList();
+          rebuildFromSelection();
+          return;
+        }
+        var loaded = 0;
+        return Promise.all(entries.map(function (entry) {
+          var url = entry.kind === 'timeline'
+            ? '/api/timeline-session/' + encodeURIComponent(entry.filename)
+            : (entry.kind === 'expo'
+              ? '/api/expo-session/' + encodeURIComponent(entry.filename)
+              : '/api/session/' + encodeURIComponent(entry.filename));
+          return fetch(url)
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+              // Expo sessions have their own compact shape — convert to the heatmap's
+              // expected {annotations FC, drawings FC} before storing.
+              if (entry.kind === 'expo') data = expoToHeatmapSession(data);
+              state.sessionsByName[entry.key] = {
+                filename: entry.filename,
+                kind: entry.kind,
+                mode: entry.kind === 'timeline' ? 'timeline' : (entry.kind === 'expo' ? 'expo' : sessionMode(data)),
+                basemap: sessionBasemap(data),
+                data: data
+              };
+              state.selectedNames[entry.key] = true;
+              loaded++;
+              setText('sessionsLoaded', String(loaded));
+            })
+            .catch(function (err) {
+              console.warn('[heatmap] failed to load', entry.filename, err);
+            });
+        }));
+      })
+      .then(function () {
+        renderSessionList();
+        rebuildFromSelection();
+        fitIfPossible();
+      })
+      .catch(function (err) {
+        console.error(err);
+        setErr('Failed to load sessions: ' + (err.message || err));
+      });
+  }
+
+  function renderSessionList() {
+    var list = qs('sessionList');
+    list.innerHTML = '';
+    var names = visibleNames();
+    qs('visCount').textContent = String(names.length);
+    if (!names.length) {
+      var empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No sessions match this filter.';
+      list.appendChild(empty);
+      updateSelCount();
+      return;
+    }
+    names.forEach(function (name) {
+      var entry = state.sessionsByName[name] || { mode: 'unknown' };
+      var item = document.createElement('label');
+      item.className = 'item';
+
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!state.selectedNames[name];
+      cb.addEventListener('change', function () {
+        state.selectedNames[name] = cb.checked;
+        updateSelCount();
+        rebuildFromSelection();
+      });
+
+      var nm = document.createElement('span');
+      nm.className = 'nm';
+      var filename = entry.filename || name.replace(/^(session|timeline):/, '');
+      nm.textContent = filename.replace(/^session_/, '').replace(/^timeline_/, '').replace(/^expo_/, '').replace(/\.json$/, '');
+      nm.title = filename;
+
+      var tag = document.createElement('span');
+      tag.className = 'tag ' + entry.mode;
+      tag.textContent = entry.mode === 'timeline' ? 'Y' : (entry.mode === 'expo' ? 'E' : '?');
+
+      item.appendChild(cb);
+      item.appendChild(nm);
+      item.appendChild(tag);
+      list.appendChild(item);
+    });
+    updateSelCount();
+  }
+
+  function updateSelCount() {
+    var names = visibleNames();
+    var count = 0;
+    for (var i = 0; i < names.length; i++) if (state.selectedNames[names[i]]) count++;
+    qs('selCount').textContent = String(count);
+  }
+
+  function rebuildFromSelection() {
+    updateTimelineControls();
+    rebuildCollections(selectedSessions());
+    refreshStepFilter();
+    pushToMap();
+    refreshFloorplanBackdrop();
+  }
+
+  // Collect the step numbers present across the currently selected sessions'
+  // features, and (re)render the per-step toggle buttons. Mirrors the /map
+  // workshop bar: each S# button shows/hides that step's inputs. New steps that
+  // appear default to visible; the user's existing on/off choices are kept.
+  function featureStep(f) {
+    var s = f && f.properties ? Number(f.properties.step) : NaN;
+    return Number.isFinite(s) ? s : 0;
+  }
+
+  function refreshStepFilter() {
+    var present = {};
+    state.drawingFeatures.forEach(function (f) { present[featureStep(f)] = true; });
+    state.annotationFeatures.forEach(function (f) { present[featureStep(f)] = true; });
+    state.stickerDotFeatures.forEach(function (f) { present[featureStep(f)] = true; });
+    state.annotationMarkerSpecs.forEach(function (s) {
+      var n = Number(s.step); present[Number.isFinite(n) ? n : 0] = true;
+    });
+    var steps = Object.keys(present).map(Number).sort(function (a, b) { return a - b; });
+    state.availableSteps = steps;
+    // Initialise / extend the visible set: keep prior choices, default new steps on.
+    if (!state.visibleSteps) state.visibleSteps = new Set(steps);
+    else steps.forEach(function (n) { /* keep existing on/off; new steps stay shown */ });
+    renderStepToggles();
+  }
+
+  function renderStepToggles() {
+    var wrap = qs('stepFilterWrap');
+    var host = qs('stepToggles');
+    if (!wrap || !host) return;
+    var steps = state.availableSteps;
+    // Only meaningful when there's more than one step (i.e. a workshop run).
+    if (!steps.length || (steps.length === 1)) { wrap.classList.add('hidden'); return; }
+    wrap.classList.remove('hidden');
+    host.innerHTML = '';
+    steps.forEach(function (n, i) {
+      var on = !state.visibleSteps || state.visibleSteps.has(n);
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toggle' + (on ? ' active' : '');
+      btn.textContent = 'S' + (i + 1);
+      btn.title = (on ? 'Hide' : 'Show') + ' step ' + (i + 1) + ' inputs';
+      btn.addEventListener('click', function () {
+        if (!state.visibleSteps) state.visibleSteps = new Set(state.availableSteps);
+        if (state.visibleSteps.has(n)) state.visibleSteps.delete(n);
+        else state.visibleSteps.add(n);
+        renderStepToggles();
+        pushToMap();
+      });
+      host.appendChild(btn);
+    });
+  }
+
+  function stepVisible(step) {
+    return !state.visibleSteps || state.visibleSteps.has(Number(step));
+  }
+
+  // ---- UI wiring ----
+
+  document.querySelectorAll('.toggle').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      btn.classList.toggle('active');
+      var layer = btn.getAttribute('data-layer');
+      var on = btn.classList.contains('active');
+      if (layer === 'drawing') state.showDrawing = on;
+      if (layer === 'tags') state.showTags = on;
+      if (layer === 'annotations') state.showAnnotations = on;
+      if (layer === 'annotationMarkers') state.showAnnotationMarkers = on;
+      pushToMap();
+    });
+  });
+
+  qs('radius').addEventListener('input', function (e) {
+    state.radius = Number(e.target.value);
+    qs('radiusVal').textContent = String(state.radius);
+    updateHeatParams();
+  });
+
+  qs('intensity').addEventListener('input', function (e) {
+    state.intensity = Number(e.target.value);
+    qs('intensityVal').textContent = state.intensity.toFixed(1);
+    updateHeatParams();
+  });
+
+  qs('timelineFrame').addEventListener('input', function (e) {
+    state.timelineFrameIndex = Number(e.target.value) || 0;
+    rebuildFromSelection();
+  });
+
+  document.querySelectorAll('.mode-filter button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.mode-filter button').forEach(function (b) {
+        b.classList.toggle('active', b === btn);
+      });
+      state.modeFilter = btn.getAttribute('data-mode') || 'all';
+      renderSessionList();
+      rebuildFromSelection();
+    });
+  });
+
+  var backBtn = document.getElementById('resultsBackBtn');
+  if (backBtn) backBtn.addEventListener('click', function () { window.location.href = '/home?setup'; });
+
+  // Show the floorplan backdrop automatically when any selected session is a
+  // floorplan/indoor session (the manual Any/Map/Floorplan filter was removed).
+  function refreshFloorplanBackdrop() {
+    var anyFloorplan = selectedSessions().some(function (s) {
+      var entry = s && state.sessionsByName[s.name];
+      return entry && entry.basemap === 'floorplan';
+    });
+    applyFloorplanBasemap(anyFloorplan);
+  }
+
+  // The floorplan (white mask + black wall lines) is rendered on the BACK
+  // (basemap) map, not the front data map, so it blurs together with the
+  // basemap for privacy while the annotation / heatmap overlays stay sharp.
+  function applyFloorplanBasemap(showFloorplan) {
+    if (!showFloorplan) {
+      [FLOORPLAN_BG_LAYER_ID, FLOORPLAN_LAYER_ID].forEach(function (id) {
+        if (blurMap.getLayer(id)) blurMap.setLayoutProperty(id, 'visibility', 'none');
+      });
+      return;
+    }
+    ensureFloorplanLoaded().then(function (payload) {
+      if (!payload) return;
+      // blurMap.setStyle() (L cycle) wipes custom layers/sources, so this can
+      // run before the back map's style is ready — defer until it is.
+      if (!blurMap.isStyleLoaded()) {
+        blurMap.once('style.load', function () { applyFloorplanBasemap(true); });
+        return;
+      }
+      if (!blurMap.getSource(FLOORPLAN_SOURCE_ID)) {
+        blurMap.addSource(FLOORPLAN_SOURCE_ID, { type: 'geojson', data: payload });
+      } else {
+        blurMap.getSource(FLOORPLAN_SOURCE_ID).setData(payload);
+      }
+      // White rectangle covering the floorplan bounds, masking the basemap
+      // so the floorplan reads cleanly. Sits on top of the basemap tiles.
+      if (!blurMap.getLayer(FLOORPLAN_BG_LAYER_ID) && Array.isArray(payload.bounds)) {
+        var b = payload.bounds;
+        var bgFc = {
+          type: 'FeatureCollection',
+          features: [{
+            type: 'Feature', properties: {},
+            geometry: { type: 'Polygon', coordinates: [[
+              [b[0][0], b[0][1]], [b[1][0], b[0][1]],
+              [b[1][0], b[1][1]], [b[0][0], b[1][1]],
+              [b[0][0], b[0][1]]
+            ]]}
+          }]
+        };
+        if (!blurMap.getSource(FLOORPLAN_BG_LAYER_ID + '-src')) {
+          blurMap.addSource(FLOORPLAN_BG_LAYER_ID + '-src', { type: 'geojson', data: bgFc });
+        }
+        blurMap.addLayer({
+          id: FLOORPLAN_BG_LAYER_ID,
+          type: 'fill',
+          source: FLOORPLAN_BG_LAYER_ID + '-src',
+          paint: { 'fill-color': '#f8f7f2', 'fill-opacity': 1 }
+        });
+      }
+      if (!blurMap.getLayer(FLOORPLAN_LAYER_ID)) {
+        blurMap.addLayer({
+          id: FLOORPLAN_LAYER_ID,
+          type: 'line',
+          source: FLOORPLAN_SOURCE_ID,
+          paint: {
+            'line-color': '#202020',
+            'line-width': ['interpolate', ['linear'], ['zoom'], 12, 0.35, 16, 0.8, 20, 1.8],
+            'line-opacity': 0.9
+          },
+          layout: { 'line-cap': 'round', 'line-join': 'round' }
+        });
+      }
+      [FLOORPLAN_BG_LAYER_ID, FLOORPLAN_LAYER_ID].forEach(function (id) {
+        if (blurMap.getLayer(id)) blurMap.setLayoutProperty(id, 'visibility', 'visible');
+      });
+      // Drive the front map's camera (it owns interaction); the back map
+      // follows via syncBlurCamera.
+      if (Array.isArray(payload.bounds) && payload.bounds.length === 2) {
+        map.fitBounds(payload.bounds, { padding: 48, duration: 0 });
+      }
+    }).catch(function (err) {
+      console.error('Failed to load floorplan:', err);
+    });
+  }
+
+  function ensureFloorplanLoaded() {
+    if (floorplanData) return Promise.resolve(floorplanData);
+    if (floorplanLoadPromise) return floorplanLoadPromise;
+    floorplanLoadPromise = fetch('/api/floorplan', { cache: 'no-store' })
+      .then(function (res) { return res.json(); })
+      .then(function (body) {
+        if (!body || body.ok !== true || !body.floorplan) {
+          throw new Error((body && body.error) || 'floorplan_load_failed');
+        }
+        floorplanData = body.floorplan;
+        return floorplanData;
+      })
+      .catch(function (err) {
+        floorplanLoadPromise = null;
+        throw err;
+      });
+    return floorplanLoadPromise;
+  }
+
+  qs('selAll').addEventListener('click', function () {
+    visibleNames().forEach(function (n) { state.selectedNames[n] = true; });
+    renderSessionList();
+    rebuildFromSelection();
+  });
+
+  qs('selNone').addEventListener('click', function () {
+    visibleNames().forEach(function (n) { state.selectedNames[n] = false; });
+    renderSessionList();
+    rebuildFromSelection();
+  });
+
+  // The basemap lives on the back map now, so cycling it only swaps that
+  // map's style. The front map's empty style and all data layers are
+  // untouched — no rebuild needed.
+  function cycleBasemap() {
+    basemapIndex = (basemapIndex + 1) % BASEMAP_STYLES.length;
+    var next = BASEMAP_STYLES[basemapIndex];
+    basemapStyle = next.style;
+    blurMap.setStyle(cloneStyle(next.style));
+    blurMap.once('style.load', function () {
+      syncBlurCamera();
+      // setStyle wiped the floorplan layers from the back map; re-add them
+      // if the floorplan filter is active.
+      // setStyle wiped the floorplan layers from the back map; re-add them if
+      // any selected session is a floorplan/indoor one.
+      refreshFloorplanBackdrop();
+    });
+  }
+
+  function isTextInputTarget(target) {
+    var name = String((target && target.tagName) || '').toUpperCase();
+    if (name === 'TEXTAREA' || name === 'SELECT' || (target && target.isContentEditable)) return true;
+    if (name !== 'INPUT') return false;
+    var type = String((target && target.type) || '').toLowerCase();
+    return type !== 'range' && type !== 'button' && type !== 'checkbox' && type !== 'radio';
+  }
+
+  // Privacy blur (dual-map): B toggles a heavy blur on a basemap-only back
+  // map while the front map keeps the data overlays perfectly sharp, so a
+  // screenshot hides the location but stays readable. [ and ] adjust the
+  // blur radius while it's on.
+  var privacyBlurOn = false;
+  var privacyBlurPx = 24;
+  var PRIVACY_BLUR_MIN = 6;
+  var PRIVACY_BLUR_MAX = 80;
+
+  // Privacy is now just a CSS blur toggled on the back (basemap) map. The
+  // front map has no basemap to hide, so there's nothing to fight: the
+  // overlays are always sharp, the basemap is just optionally blurred.
+  function applyPrivacyBlur() {
+    var blurEl = document.getElementById('mapBlur');
+    var badge = document.getElementById('privacyBadge');
+
+    if (blurEl) {
+      blurEl.style.setProperty('--privacy-blur', privacyBlurPx + 'px');
+      blurEl.classList.toggle('active', privacyBlurOn);
+    }
+    if (badge) {
+      badge.classList.toggle('hidden', !privacyBlurOn);
+      badge.textContent = 'Privacy blur ON · ' + privacyBlurPx + 'px · B toggle · [ ] adjust';
+    }
+  }
+
+  // 'L' cycles the basemap view, matching the live map view's L shortcut.
+  window.addEventListener('keydown', function (e) {
+    if (e.repeat) return;
+    if (isTextInputTarget(e.target)) return;
+    var key = String(e.key || '').toLowerCase();
+    if (key === 'l') {
+      e.preventDefault();
+      cycleBasemap();
+      return;
+    }
+    if (key === 'b') {
+      e.preventDefault();
+      privacyBlurOn = !privacyBlurOn;
+      applyPrivacyBlur();
+      return;
+    }
+    if (privacyBlurOn && (e.key === '[' || e.key === ']')) {
+      e.preventDefault();
+      var step = 4;
+      privacyBlurPx = Math.max(
+        PRIVACY_BLUR_MIN,
+        Math.min(PRIVACY_BLUR_MAX, privacyBlurPx + (e.key === ']' ? step : -step))
+      );
+      applyPrivacyBlur();
+      return;
+    }
+  });
+
+  map.on('load', function () {
+    ensureLayers();
+    loadAllSessions();
+  });
+})();
+</script>
+</body>
+</html>

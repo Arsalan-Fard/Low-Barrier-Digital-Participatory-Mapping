@@ -1,0 +1,48 @@
+# --- Python ---
+__pycache__/
+*.pyc
+
+# --- Build output (PyInstaller) ---
+/build/
+/dist/
+
+# --- Node ---
+node_modules/
+
+# --- Secrets / credentials ---
+token.txt
+Expo/school-scenario/mapbox.txt
+
+# --- Local-only notes (not published) ---
+/Guide.txt
+
+# --- Launcher-created environment & logs ---
+/.venv/
+launcher.log
+
+# Local renderer preference (maplibre/mapbox)
+/data/renderer_config.json
+
+# Recorded media & audio
+/audio_chunks/
+/backend_recordings/
+
+# Workshop session data (per-deployment, not source)
+/sessions/
+/cache/
+
+# Uploaded floorplans (per-deployment, DXF uploads land here)
+/floorplan/*
+!/floorplan/.gitkeep
+
+# Runtime-generated marker images
+/web/apriltags/
+
+# Site/deployment-specific data & calibration
+ip_paris_amenities.geojson
+calibration_offsets.json
+
+# Large regenerable datasets (rebuild with Expo/school-scenario/tools/download_paris_arrondissement_roads.py)
+/Expo
+Expo/school-scenario/data/*
+!Expo/school-scenario/data/.gitkeep

@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Phone controller</title>
+  <link href="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.css" rel="stylesheet">
+  <script src="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.js"></script>
+  <script src="src/maplibreCompat.js"></script>
+  <script src="src/config.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      --theme-page: #0f172a;
+      --theme-card: rgba(15, 23, 42, 0.92);
+      --theme-panel: rgba(30, 41, 59, 0.9);
+      --theme-control: rgba(30, 41, 59, 0.95);
+      --theme-input: rgba(15, 23, 42, 0.8);
+      --theme-border: rgba(148, 163, 184, 0.28);
+      --theme-accent: #38bdf8;
+      --theme-accent-strong: #0284c7;
+      --theme-accent-text: #082f49;
+      --theme-progress-end: #7dd3fc;
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: var(--theme-page);
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 12px;
+    }
+    body.controller-theme-1 {
+      --theme-page: #190b0d;
+      --theme-card: rgba(40, 13, 16, 0.94);
+      --theme-panel: rgba(69, 18, 24, 0.9);
+      --theme-control: rgba(83, 22, 29, 0.95);
+      --theme-input: rgba(30, 10, 13, 0.86);
+      --theme-border: rgba(248, 113, 113, 0.32);
+      --theme-accent: #dc2626;
+      --theme-accent-strong: #991b1b;
+      --theme-accent-text: #fff1f2;
+      --theme-progress-end: #fca5a5;
+    }
+    body.controller-theme-2 {
+      --theme-page: #071426;
+      --theme-card: rgba(8, 28, 53, 0.94);
+      --theme-panel: rgba(15, 45, 82, 0.9);
+      --theme-control: rgba(18, 55, 100, 0.95);
+      --theme-input: rgba(7, 20, 38, 0.86);
+      --theme-border: rgba(96, 165, 250, 0.34);
+      --theme-accent: #2563eb;
+      --theme-accent-strong: #1d4ed8;
+      --theme-accent-text: #eff6ff;
+      --theme-progress-end: #93c5fd;
+    }
+    body.controller-theme-3 {
+      --theme-page: #06170f;
+      --theme-card: rgba(7, 38, 24, 0.94);
+      --theme-panel: rgba(13, 70, 43, 0.9);
+      --theme-control: rgba(18, 83, 52, 0.95);
+      --theme-input: rgba(6, 23, 15, 0.86);
+      --theme-border: rgba(74, 222, 128, 0.32);
+      --theme-accent: #16a34a;
+      --theme-accent-strong: #15803d;
+      --theme-accent-text: #f0fdf4;
+      --theme-progress-end: #86efac;
+    }
+    body.controller-theme-4 {
+      --theme-page: #0a0a0b;
+      --theme-card: rgba(24, 24, 27, 0.94);
+      --theme-panel: rgba(39, 39, 42, 0.9);
+      --theme-control: rgba(50, 50, 54, 0.95);
+      --theme-input: rgba(17, 17, 19, 0.86);
+      --theme-border: rgba(161, 161, 170, 0.34);
+      --theme-accent: #52525b;
+      --theme-accent-strong: #3f3f46;
+      --theme-accent-text: #fafafa;
+      --theme-progress-end: #a1a1aa;
+    }
+    .card {
+      width: min(100%, 520px);
+      height: calc(100vh - 24px);
+      background: var(--theme-card);
+      border: 1px solid var(--theme-border);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      text-align: center;
+    }
+    .top-row {
+      display: grid;
+      grid-template-columns: minmax(80px, 1fr) 1fr 1fr 1fr;
+      gap: 10px;
+      align-items: stretch;
+    }
+    .controller-top-row {
+      grid-template-columns: 1fr;
+    }
+    .top-row select,
+    .top-row button {
+      height: 48px;
+      width: 100%;
+      padding: 0 12px;
+      font-size: 15px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+      color: #cbd5e1;
+    }
+    select {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--theme-border);
+      background: var(--theme-input);
+      color: #f8fafc;
+      padding: 12px;
+      font-size: 16px;
+    }
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 14px 16px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      width: 100%;
+      transition: opacity 120ms linear, transform 120ms linear, background 120ms linear;
+    }
+    button:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
+    .primary { background: var(--theme-accent); color: var(--theme-accent-text); }
+    .danger { background: #ef4444; color: #fff; }
+    .mode-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 12px;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    .mode-grid .mode-button {
+      width: 100%;
+      height: 100%;
+      font-size: 22px;
+    }
+    .mode-button {
+      background: var(--theme-control);
+      color: #e2e8f0;
+      border: 1px solid var(--theme-border);
+      font-weight: 600;
+    }
+    .mode-button.active {
+      background: var(--theme-accent);
+      color: var(--theme-accent-text);
+      border-color: var(--theme-accent);
+    }
+    .annotation-panel {
+      margin: 18px 0;
+      padding: 14px;
+      border-radius: 12px;
+      background: var(--theme-panel);
+    }
+    .annotation-panel.hidden {
+      display: none;
+    }
+    .annotation-panel textarea {
+      width: 100%;
+      min-height: 104px;
+      resize: vertical;
+      border-radius: 10px;
+      border: 1px solid var(--theme-border);
+      background: var(--theme-input);
+      color: #f8fafc;
+      padding: 12px;
+      font-size: 16px;
+      font-family: Arial, sans-serif;
+    }
+    .annotation-panel button {
+      margin-top: 12px;
+      background: #f8fafc;
+      color: #0f172a;
+    }
+    .progress-shell {
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: var(--theme-panel);
+    }
+    .progress-shell.hidden { display: none; }
+    .progress-label {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      font-size: 14px;
+      color: #cbd5e1;
+    }
+    .progress-track {
+      height: 12px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.22);
+      overflow: hidden;
+    }
+    .progress-fill {
+      width: 0%;
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--theme-accent-strong) 0%, var(--theme-progress-end) 100%);
+      transition: width 120ms linear;
+    }
+    .street-btn {
+      background: #f59e0b;
+      color: #431407;
+    }
+    .street-fs {
+      position: fixed;
+      inset: 0;
+      z-index: 10003;
+      display: none;
+      background: #000;
+    }
+    .street-fs.visible { display: block; }
+    .street-fs-frame {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #111;
+    }
+    .street-fs-status {
+      position: absolute;
+      top: 14px;
+      left: 68px;
+      z-index: 10004;
+      padding: 8px 12px;
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.85);
+      color: #f8fafc;
+      font-size: 12px;
+      max-width: calc(100vw - 84px);
+    }
+    .street-fs-status.hidden { display: none; }
+    .street-fs-controls {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      z-index: 10005;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 10px;
+      padding: 10px;
+      border-radius: 14px;
+      background: var(--theme-card);
+      border: 1px solid var(--theme-border);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+      backdrop-filter: blur(6px);
+    }
+    .street-fs-controls > button,
+    .street-fs-controls > select {
+      height: 48px;
+      width: 100%;
+      padding: 0 10px;
+      font-size: 14px;
+      border-radius: 10px;
+    }
+    .street-fs-controls select {
+      border: 1px solid var(--theme-border);
+      background: var(--theme-input);
+      color: #f8fafc;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Phone controller</h1>
+
+    <div class="top-row controller-top-row">
+      <button id="showStreetViewBtn" class="street-btn" type="button">Street View</button>
+    </div>
+
+    <div class="mode-grid">
+      <button type="button" class="mode-button" data-mode="draw">Draw</button>
+      <button type="button" class="mode-button" data-mode="select">Select</button>
+      <button type="button" class="mode-button" data-mode="erase">Erase</button>
+      <button type="button" class="mode-button" data-mode="comment">Comment</button>
+    </div>
+
+    <div id="annotationPanel" class="annotation-panel hidden">
+      <label for="annotationText">Annotation</label>
+      <textarea id="annotationText" placeholder="Enter annotation text..."></textarea>
+      <button id="placeAnnotationBtn" type="button">Place</button>
+    </div>
+
+    <div id="progressShell" class="progress-shell hidden">
+      <div class="progress-label">
+        <span id="progressLabel">Upload Progress</span>
+        <span id="progressValue">0%</span>
+      </div>
+      <div class="progress-track">
+        <div id="progressFill" class="progress-fill"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="streetViewFullscreen" class="street-fs">
+    <div id="streetFsStatus" class="street-fs-status hidden"></div>
+    <iframe
+      id="phoneStreetViewFrame"
+      class="street-fs-frame"
+      loading="lazy"
+      allowfullscreen
+      referrerpolicy="no-referrer-when-downgrade"
+      title="Phone Street View">
+    </iframe>
+    <div class="street-fs-controls">
+      <button id="recordBtn" class="primary" type="button">Start Recording</button>
+      <button id="streetFsCloseBtn" type="button">Controller</button>
+      <select id="controllerId" aria-label="ID">
+        <option value="1">ID 1</option>
+        <option value="2">ID 2</option>
+        <option value="3">ID 3</option>
+        <option value="4">ID 4</option>
+      </select>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var recordBtn = document.getElementById('recordBtn');
+      var controllerIdSelect = document.getElementById('controllerId');
+      var modeButtons = Array.prototype.slice.call(document.querySelectorAll('.mode-button'));
+      var annotationPanel = document.getElementById('annotationPanel');
+      var annotationTextEl = document.getElementById('annotationText');
+      var placeAnnotationBtn = document.getElementById('placeAnnotationBtn');
+      var progressShellEl = document.getElementById('progressShell');
+      var progressLabelEl = document.getElementById('progressLabel');
+      var progressValueEl = document.getElementById('progressValue');
+      var progressFillEl = document.getElementById('progressFill');
+      var showStreetViewBtn = document.getElementById('showStreetViewBtn');
+      var progressHideTimer = 0;
+
+      var mediaStream = null;
+      var mediaRecorder = null;
+      var activeMimeType = '';
+      var recordedChunks = [];
+      var recordingStartedAt = 0;
+      var uploadInFlight = false;
+      var isRecording = false;
+      var selectedMode = '';
+      var controllerStatesById = {};
+      var controllerSyncTimer = 0;
+      var controllerLeaseTimer = 0;
+      var controllerLeaseReady = false;
+      var lastLocalControllerWriteAtMs = 0;
+      var phoneControllerClientId = getPhoneControllerClientId();
+
+      function setProgressVisible(visible) {
+        if (!progressShellEl) return;
+        progressShellEl.classList.toggle('hidden', !visible);
+      }
+
+      function setUploadProgress(progress, label) {
+        var pct = Math.max(0, Math.min(100, Number(progress) || 0));
+        progressFillEl.style.width = pct + '%';
+        progressValueEl.textContent = Math.round(pct) + '%';
+        progressLabelEl.textContent = label || 'Upload Progress';
+
+        if (progressHideTimer) {
+          window.clearTimeout(progressHideTimer);
+          progressHideTimer = 0;
+        }
+        // Show while actively doing something; auto-hide once terminal.
+        var terminal = /Upload Complete|Upload Failed|No Recording Captured|Microphone Not Available|Recording Failed|^Upload Progress$/i.test(String(label || ''));
+        var hasActivity = !!label && !terminal;
+        if (hasActivity || (pct > 0 && pct < 100)) {
+          setProgressVisible(true);
+        } else if (terminal && label) {
+          setProgressVisible(true);
+          progressHideTimer = window.setTimeout(function () {
+            setProgressVisible(false);
+            progressHideTimer = 0;
+          }, 2200);
+        } else {
+          setProgressVisible(false);
+        }
+      }
+
+      function defaultControllerState(controllerId) {
+        return {
+          controllerId: String(controllerId || '1'),
+          active: false,
+          mode: '',
+          annotationText: '',
+          placeToken: 0
+        };
+      }
+
+      function currentControllerId() {
+        return String(controllerIdSelect.value || '1').trim() || '1';
+      }
+
+      function applyControllerTheme(controllerId) {
+        var id = String(controllerId || '1').trim();
+        document.body.classList.remove(
+          'controller-theme-1',
+          'controller-theme-2',
+          'controller-theme-3',
+          'controller-theme-4'
+        );
+        if (id === '1' || id === '2' || id === '3' || id === '4') {
+          document.body.classList.add('controller-theme-' + id);
+        }
+      }
+
+      function getPhoneControllerClientId() {
+        var storageKey = 'phone-controller-client-id';
+        var value = '';
+        try {
+          value = window.sessionStorage ? String(window.sessionStorage.getItem(storageKey) || '') : '';
+        } catch (_err) {}
+        if (!value) {
+          if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+            value = window.crypto.randomUUID();
+          } else {
+            value = String(Date.now()) + '-' + String(Math.random()).slice(2);
+          }
+          try {
+            if (window.sessionStorage) window.sessionStorage.setItem(storageKey, value);
+          } catch (_err2) {}
+        }
+        return value;
+      }
+
+      function setControllerId(controllerId) {
+        var nextId = String(controllerId || '').trim();
+        if (!nextId) return false;
+        if (nextId === currentControllerId()) {
+          applyControllerTheme(nextId);
+          return false;
+        }
+        controllerIdSelect.value = nextId;
+        applyControllerTheme(nextId);
+        return currentControllerId() === nextId;
+      }
+
+      function applyClaimedController(data) {
+        if (!data || data.ok !== true || !data.controllerId) return;
+        controllerLeaseReady = true;
+        controllerIdSelect.disabled = false;
+        if (!isRecording && !uploadInFlight) recordBtn.disabled = false;
+        var claimedId = String(data.controllerId || '').trim();
+        var changed = setControllerId(claimedId);
+        if (data.controller) {
+          controllerStatesById[claimedId] = {
+            controllerId: String(data.controller.controllerId || claimedId),
+            active: !!data.controller.active,
+            mode: String(data.controller.mode || ''),
+            annotationText: String(data.controller.annotationText || ''),
+            placeToken: Number(data.controller.placeToken || 0)
+          };
+        }
+        if (changed) {
+          applyControllerStateToUi(controllerStatesById[claimedId] || defaultControllerState(claimedId));
+          scheduleControllerSync(0);
+        }
+      }
+
+      function claimControllerId(requestedControllerId) {
+        var requestedId = String(requestedControllerId || currentControllerId() || '').trim();
+        return fetch('/api/phone-controller-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'claim',
+            clientId: phoneControllerClientId,
+            requestedControllerId: requestedId
+          })
+        }).then(function (res) {
+          return res.json();
+        }).then(function (data) {
+          if (data && data.ok !== true && data.error === 'no_available_controller') {
+            controllerLeaseReady = false;
+            recordBtn.disabled = true;
+            controllerIdSelect.disabled = true;
+            setUploadProgress(0, 'No Controller ID Available');
+          }
+          applyClaimedController(data);
+          return data;
+        }).catch(function () {
+          return null;
+        });
+      }
+
+      function releaseControllerId() {
+        var payload = JSON.stringify({
+          action: 'release',
+          clientId: phoneControllerClientId,
+          controllerId: currentControllerId()
+        });
+        if (navigator.sendBeacon) {
+          try {
+            var blob = new Blob([payload], { type: 'application/json' });
+            navigator.sendBeacon('/api/phone-controller-session', blob);
+            return;
+          } catch (_err) {}
+        }
+        try {
+          fetch('/api/phone-controller-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: payload,
+            keepalive: true
+          }).catch(function () {});
+        } catch (_err2) {}
+      }
+
+      function startControllerLease() {
+        claimControllerId('');
+        if (controllerLeaseTimer) window.clearInterval(controllerLeaseTimer);
+        controllerLeaseTimer = window.setInterval(function () {
+          claimControllerId(currentControllerId());
+        }, 4000);
+      }
+
+      function currentControllerState() {
+        var controllerId = currentControllerId();
+        if (!controllerStatesById[controllerId]) {
+          controllerStatesById[controllerId] = defaultControllerState(controllerId);
+        }
+        return controllerStatesById[controllerId];
+      }
+
+      function shouldShowAnnotationPanel(mode) {
+        return mode === 'comment' || mode === 'select';
+      }
+
+      function updateAnnotationPanelVisibility(mode) {
+        if (!annotationPanel) return;
+        annotationPanel.classList.toggle('hidden', !shouldShowAnnotationPanel(mode));
+      }
+
+      function setButtonState(recording) {
+        isRecording = !!recording;
+        recordBtn.textContent = isRecording ? 'Stop Recording' : 'Start Recording';
+        recordBtn.className = isRecording ? 'danger' : 'primary';
+      }
+
+      function setSelectedMode(mode) {
+        selectedMode = String(mode || '').toLowerCase();
+        for (var i = 0; i < modeButtons.length; i++) {
+          var button = modeButtons[i];
+          button.classList.toggle('active', button.getAttribute('data-mode') === selectedMode);
+        }
+        updateAnnotationPanelVisibility(selectedMode);
+      }
+
+      function setIdleState() {
+        recordBtn.disabled = false;
+        controllerIdSelect.disabled = false;
+        for (var i = 0; i < modeButtons.length; i++) modeButtons[i].disabled = false;
+        setButtonState(false);
+      }
+
+      function applyControllerStateToUi(state) {
+        var nextState = state || defaultControllerState(currentControllerId());
+        setSelectedMode(nextState.mode || '');
+        if (annotationTextEl) annotationTextEl.value = String(nextState.annotationText || '');
+        updateAnnotationPanelVisibility(selectedMode);
+      }
+
+      function persistUiIntoControllerState() {
+        var state = currentControllerState();
+        state.mode = selectedMode;
+        state.annotationText = annotationTextEl ? String(annotationTextEl.value || '') : '';
+        return state;
+      }
+
+      function scheduleControllerSync(delayMs) {
+        if (controllerSyncTimer) window.clearTimeout(controllerSyncTimer);
+        controllerSyncTimer = window.setTimeout(function () {
+          controllerSyncTimer = 0;
+          syncControllerState();
+        }, Math.max(0, Number(delayMs) || 0));
+      }
+
+      function syncControllerState() {
+        if (!controllerLeaseReady) return;
+        var state = persistUiIntoControllerState();
+        state.active = true;
+        lastLocalControllerWriteAtMs = Date.now();
+
+        fetch('/api/phone-controller', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            controllerId: state.controllerId,
+            mode: state.mode,
+            annotationText: state.annotationText,
+            placeToken: state.placeToken
+          })
+        }).then(function (res) {
+          return res.json();
+        }).then(function (data) {
+          if (!data || data.ok !== true || !data.controller) return;
+            controllerStatesById[state.controllerId] = {
+            controllerId: String(data.controller.controllerId || state.controllerId),
+            active: !!data.controller.active,
+            mode: String(data.controller.mode || state.mode || ''),
+            annotationText: String(data.controller.annotationText || state.annotationText || ''),
+            placeToken: Number(data.controller.placeToken || state.placeToken || 0)
+          };
+        }).catch(function () {});
+      }
+
+      function loadControllerStates() {
+        fetch('/api/phone-controller', { cache: 'no-store' })
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            if (!data || data.ok !== true || !data.controllers) return;
+            var nextStatesById = {};
+            for (var key in data.controllers) {
+              if (!Object.prototype.hasOwnProperty.call(data.controllers, key)) continue;
+              var entry = data.controllers[key] || {};
+              nextStatesById[String(key)] = {
+                controllerId: String(entry.controllerId || key),
+                active: !!entry.active,
+                mode: String(entry.mode || ''),
+                annotationText: String(entry.annotationText || ''),
+                placeToken: Number(entry.placeToken || 0)
+              };
+            }
+            controllerStatesById = nextStatesById;
+            var controllerId = currentControllerId();
+            var fetchedState = controllerStatesById[controllerId] || defaultControllerState(controllerId);
+            var localState = currentControllerState();
+            var localDirty = (Date.now() - lastLocalControllerWriteAtMs) < 600;
+            var shouldApply = !localDirty
+              || String(fetchedState.mode || '') !== String(localState.mode || '')
+              || Number(fetchedState.placeToken || 0) !== Number(localState.placeToken || 0)
+              || String(fetchedState.annotationText || '') === String(annotationTextEl ? annotationTextEl.value || '' : '');
+            if (shouldApply) applyControllerStateToUi(fetchedState);
+          }).catch(function () {
+            applyControllerStateToUi(currentControllerState());
+          });
+      }
+
+      function chooseMimeType() {
+        var candidates = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/mp4',
+          'audio/ogg;codecs=opus',
+          ''
+        ];
+        for (var i = 0; i < candidates.length; i++) {
+          var value = candidates[i];
+          if (!value) return '';
+          if (window.MediaRecorder && typeof window.MediaRecorder.isTypeSupported === 'function' &&
+              window.MediaRecorder.isTypeSupported(value)) {
+            return value;
+          }
+        }
+        return '';
+      }
+
+      function uploadRecording(blob) {
+        if (!blob || !blob.size) {
+          setIdleState();
+          setUploadProgress(0, 'No Recording Captured');
+          return;
+        }
+
+        uploadInFlight = true;
+        recordBtn.disabled = true;
+
+        var nowIso = new Date().toISOString();
+        var controllerId = String(controllerIdSelect.value || '1').trim() || '1';
+        var extension = activeMimeType.indexOf('ogg') >= 0 ? 'ogg'
+          : activeMimeType.indexOf('mp4') >= 0 ? 'm4a'
+          : 'webm';
+        var form = new FormData();
+        form.append('controllerId', controllerId);
+        form.append('sessionId', 'controller-' + controllerId);
+        form.append('toolMode', selectedMode);
+        form.append('recordedAt', nowIso);
+        form.append('mimeType', activeMimeType || blob.type || '');
+        form.append('audio', blob, 'recording_' + nowIso.replace(/[:.]/g, '-') + '.' + extension);
+
+        setUploadProgress(0, 'Uploading Recording');
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/audio-chunk', true);
+
+        xhr.upload.onprogress = function (event) {
+          if (!event.lengthComputable) return;
+          setUploadProgress((event.loaded / event.total) * 100, 'Uploading Recording');
+        };
+
+        xhr.onerror = function () {
+          uploadInFlight = false;
+          setIdleState();
+          setUploadProgress(0, 'Upload Failed');
+        };
+
+        xhr.onload = function () {
+          uploadInFlight = false;
+          setIdleState();
+
+          var data = null;
+          try {
+            data = JSON.parse(xhr.responseText || '{}');
+          } catch (_err) {}
+
+          if (xhr.status < 200 || xhr.status >= 300 || !data || data.ok !== true) {
+            setUploadProgress(0, 'Upload Failed');
+            return;
+          }
+
+          setUploadProgress(100, 'Upload Complete');
+        };
+
+        xhr.send(form);
+      }
+
+      async function startRecording() {
+        if (uploadInFlight) {
+          return;
+        }
+        if (!controllerLeaseReady) {
+          setUploadProgress(0, 'No Controller ID Available');
+          return;
+        }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setUploadProgress(0, 'Microphone Not Available');
+          return;
+        }
+
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          });
+          activeMimeType = chooseMimeType();
+          recordedChunks = [];
+          recordingStartedAt = Date.now();
+
+          var options = activeMimeType ? { mimeType: activeMimeType } : undefined;
+          mediaRecorder = new MediaRecorder(mediaStream, options);
+          mediaRecorder.ondataavailable = function (event) {
+            if (event.data && event.data.size) {
+              recordedChunks.push(event.data);
+            }
+          };
+          mediaRecorder.onstop = function () {
+            var mimeType = activeMimeType || mediaRecorder.mimeType || 'audio/webm';
+            var blob = new Blob(recordedChunks, { type: mimeType });
+            if (mediaStream) {
+              var tracks = mediaStream.getTracks();
+              for (var i = 0; i < tracks.length; i++) tracks[i].stop();
+            }
+            mediaStream = null;
+            mediaRecorder = null;
+            setButtonState(false);
+            uploadRecording(blob);
+          };
+
+          mediaRecorder.start();
+          recordBtn.disabled = false;
+          setButtonState(true);
+          setUploadProgress(0, 'Recording...');
+        } catch (err) {
+          setIdleState();
+          setUploadProgress(0, 'Recording Failed');
+        }
+      }
+
+      function stopRecording() {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          recordBtn.disabled = true;
+          var elapsedMs = Math.max(0, Date.now() - recordingStartedAt);
+          setUploadProgress(0, 'Processing ' + (elapsedMs / 1000).toFixed(1) + ' s');
+          mediaRecorder.stop();
+        }
+      }
+
+      recordBtn.addEventListener('click', function () {
+        if (isRecording) {
+          stopRecording();
+          return;
+        }
+        startRecording();
+      });
+      // Auto-place the pending annotation when the user leaves comment/select
+      // mode without pressing Place. If the textarea is empty there's nothing
+      // to place — the desktop textarea closes on its own after the tag moves.
+      function autoPlaceIfLeavingAnnotationMode(nextMode) {
+        var leavingAnnotation = (selectedMode === 'comment' || selectedMode === 'select')
+          && nextMode !== selectedMode;
+        if (!leavingAnnotation) return;
+        var placedText = String(annotationTextEl ? annotationTextEl.value || '' : '').trim();
+        if (!placedText) return;
+
+        var state = persistUiIntoControllerState();
+        state.placeToken = Number(state.placeToken || 0) + 1;
+        lastLocalControllerWriteAtMs = Date.now();
+        controllerStatesById[state.controllerId] = {
+          controllerId: String(state.controllerId),
+          active: false,
+          mode: '',
+          annotationText: '',
+          placeToken: Number(state.placeToken || 0)
+        };
+        fetch('/api/phone-controller', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            controllerId: state.controllerId,
+            mode: '',
+            annotationText: placedText,
+            placeToken: state.placeToken
+          })
+        }).catch(function () {});
+        if (annotationTextEl) annotationTextEl.value = '';
+      }
+
+      for (var i = 0; i < modeButtons.length; i++) {
+        modeButtons[i].addEventListener('click', function () {
+          var clickedMode = this.getAttribute('data-mode');
+          var nextMode = (clickedMode === selectedMode) ? '' : clickedMode;
+          autoPlaceIfLeavingAnnotationMode(nextMode);
+          setSelectedMode(nextMode);
+          persistUiIntoControllerState();
+          lastLocalControllerWriteAtMs = Date.now();
+          scheduleControllerSync(0);
+        });
+      }
+      controllerIdSelect.addEventListener('change', function () {
+        applyControllerTheme(currentControllerId());
+        applyControllerStateToUi(currentControllerState());
+        claimControllerId(currentControllerId()).then(function (data) {
+          if (!data || data.ok !== true) {
+            loadControllerStates();
+          }
+        });
+      });
+      if (annotationTextEl) {
+        annotationTextEl.addEventListener('input', function () {
+          persistUiIntoControllerState();
+          lastLocalControllerWriteAtMs = Date.now();
+          scheduleControllerSync(80);
+        });
+      }
+      if (placeAnnotationBtn) {
+        placeAnnotationBtn.addEventListener('click', function () {
+          var state = persistUiIntoControllerState();
+          var placedText = String(annotationTextEl ? annotationTextEl.value || '' : '');
+          state.placeToken = Number(state.placeToken || 0) + 1;
+          if (state.mode === 'comment' || state.mode === 'select') {
+            state.mode = '';
+            state.annotationText = '';
+            setSelectedMode('');
+            if (annotationTextEl) annotationTextEl.value = '';
+          }
+          lastLocalControllerWriteAtMs = Date.now();
+          controllerStatesById[state.controllerId] = {
+            controllerId: String(state.controllerId),
+            active: false,
+            mode: '',
+            annotationText: '',
+            placeToken: Number(state.placeToken || 0)
+          };
+          fetch('/api/phone-controller', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              controllerId: state.controllerId,
+              mode: '',
+              annotationText: placedText,
+              placeToken: state.placeToken
+            })
+          }).catch(function () {});
+        });
+      }
+
+      setUploadProgress(0, 'Upload Progress');
+      applyControllerTheme(currentControllerId());
+      applyControllerStateToUi(currentControllerState());
+      setIdleState();
+      startControllerLease();
+      loadControllerStates();
+      window.setInterval(loadControllerStates, 450);
+      window.addEventListener('pagehide', releaseControllerId);
+
+      // --- Street View ---
+      var streetViewFullscreen = document.getElementById('streetViewFullscreen');
+      var streetFsStatus = document.getElementById('streetFsStatus');
+      var streetFsCloseBtn = document.getElementById('streetFsCloseBtn');
+      var phoneStreetViewFrame = document.getElementById('phoneStreetViewFrame');
+
+      var googleMapsKeyCached = '';
+      var phoneStreetViewPollTimer = 0;
+      var phoneStreetViewRequestTimer = 0;
+      var phoneStreetViewPendingRequestKey = '';
+      var phoneStreetViewLastRequestedLngLat = null;
+      var phoneStreetViewLastRequestAtMs = 0;
+      var phoneStreetViewLastUrl = '';
+      var STREET_VIEW_REQUEST_DISTANCE_M = 15;
+      var STREET_VIEW_REQUEST_DEBOUNCE_MS = 400;
+      var STREET_VIEW_REQUEST_COOLDOWN_MS = 1000;
+      var STREET_VIEW_COORD_DECIMALS = 4;
+
+      function showStreetViewFullscreen(visible) {
+        if (streetViewFullscreen) streetViewFullscreen.classList.toggle('visible', !!visible);
+      }
+
+      function setStreetFsStatus(msg) {
+        if (!streetFsStatus) return;
+        if (!msg) {
+          streetFsStatus.classList.add('hidden');
+          streetFsStatus.textContent = '';
+          return;
+        }
+        streetFsStatus.classList.remove('hidden');
+        streetFsStatus.textContent = msg;
+      }
+
+      function fetchGoogleMapsKey() {
+        if (googleMapsKeyCached) return Promise.resolve(googleMapsKeyCached);
+        return fetch('/api/google-maps-key', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            googleMapsKeyCached = (data && data.key) ? String(data.key) : '';
+            return googleMapsKeyCached;
+          });
+      }
+
+      function hasFiniteLngLat(lngLat) {
+        return !!(lngLat && Number.isFinite(Number(lngLat.lng)) && Number.isFinite(Number(lngLat.lat)));
+      }
+
+      function quantizeLngLat(lngLat) {
+        if (!hasFiniteLngLat(lngLat)) return null;
+        var scale = Math.pow(10, STREET_VIEW_COORD_DECIMALS);
+        return {
+          lng: Math.round(Number(lngLat.lng) * scale) / scale,
+          lat: Math.round(Number(lngLat.lat) * scale) / scale
+        };
+      }
+
+      function lngLatKey(lngLat) {
+        if (!hasFiniteLngLat(lngLat)) return '';
+        return Number(lngLat.lat).toFixed(STREET_VIEW_COORD_DECIMALS) + ',' + Number(lngLat.lng).toFixed(STREET_VIEW_COORD_DECIMALS);
+      }
+
+      function distanceMeters(a, b) {
+        if (!hasFiniteLngLat(a) || !hasFiniteLngLat(b)) return Infinity;
+        var R = 6371000;
+        var toRad = Math.PI / 180;
+        var dLat = (Number(b.lat) - Number(a.lat)) * toRad;
+        var dLng = (Number(b.lng) - Number(a.lng)) * toRad;
+        var lat1 = Number(a.lat) * toRad;
+        var lat2 = Number(b.lat) * toRad;
+        var s = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+              + Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2);
+        return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+      }
+
+      function clearPhoneStreetViewRequestTimer() {
+        if (!phoneStreetViewRequestTimer) return;
+        window.clearTimeout(phoneStreetViewRequestTimer);
+        phoneStreetViewRequestTimer = 0;
+        phoneStreetViewPendingRequestKey = '';
+      }
+
+      function buildPhoneStreetViewUrl(lngLat, key) {
+        if (!hasFiniteLngLat(lngLat) || !key) return '';
+        var url = new URL('https://www.google.com/maps/embed/v1/streetview');
+        url.searchParams.set('key', key);
+        url.searchParams.set('location', String(Number(lngLat.lat)) + ',' + String(Number(lngLat.lng)));
+        url.searchParams.set('heading', '0');
+        url.searchParams.set('pitch', '0');
+        url.searchParams.set('fov', '80');
+        return url.toString();
+      }
+
+      function shouldRequestPhoneStreetView(rawLngLat) {
+        if (!hasFiniteLngLat(rawLngLat)) return false;
+        var quantized = quantizeLngLat(rawLngLat);
+        if (!quantized) return false;
+        if (!phoneStreetViewLastRequestedLngLat || !phoneStreetViewLastUrl) return true;
+        return distanceMeters(quantized, phoneStreetViewLastRequestedLngLat) >= STREET_VIEW_REQUEST_DISTANCE_M;
+      }
+
+      function commitPhoneStreetViewRequest(requestLngLat) {
+        if (!phoneStreetViewFrame || !streetViewFullscreen || !streetViewFullscreen.classList.contains('visible')) return;
+        var quantized = quantizeLngLat(requestLngLat);
+        if (!quantized) return;
+        fetchGoogleMapsKey().then(function (key) {
+          if (!phoneStreetViewFrame || !streetViewFullscreen || !streetViewFullscreen.classList.contains('visible')) return;
+          var url = buildPhoneStreetViewUrl(quantized, key);
+          if (!url) {
+            setStreetFsStatus('Google Maps key not configured');
+            return;
+          }
+          if (phoneStreetViewLastUrl !== url) {
+            phoneStreetViewFrame.src = url;
+            phoneStreetViewLastUrl = url;
+          }
+          phoneStreetViewLastRequestedLngLat = quantized;
+          phoneStreetViewLastRequestAtMs = Date.now();
+          setStreetFsStatus('');
+        }).catch(function () {
+          setStreetFsStatus('Network error');
+        });
+      }
+
+      function schedulePhoneStreetViewRequest(rawLngLat) {
+        var quantized = quantizeLngLat(rawLngLat);
+        if (!quantized) return;
+        var requestKey = lngLatKey(quantized);
+        if (!requestKey) return;
+        if (phoneStreetViewRequestTimer && phoneStreetViewPendingRequestKey === requestKey) return;
+        clearPhoneStreetViewRequestTimer();
+        phoneStreetViewPendingRequestKey = requestKey;
+        var remainingCooldown = Math.max(0, STREET_VIEW_REQUEST_COOLDOWN_MS - (Date.now() - phoneStreetViewLastRequestAtMs));
+        var delay = Math.max(STREET_VIEW_REQUEST_DEBOUNCE_MS, remainingCooldown);
+        phoneStreetViewRequestTimer = window.setTimeout(function () {
+          phoneStreetViewRequestTimer = 0;
+          phoneStreetViewPendingRequestKey = '';
+          commitPhoneStreetViewRequest(quantized);
+        }, delay);
+      }
+
+      function pollPhoneStreetView() {
+        var cid = currentControllerId();
+        fetch('/api/phone-street-view/' + encodeURIComponent(cid), { cache: 'no-store' })
+          .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
+          .then(function (result) {
+            var data = result.data || {};
+            if (data.ok !== true) {
+              clearPhoneStreetViewRequestTimer();
+              var err = data.error;
+              if (err === 'live_tag_not_visible') setStreetFsStatus('Paired tag not visible');
+              else if (err === 'live_tag_outside_surface') setStreetFsStatus('Paired tag is outside map surface');
+              else if (err === 'map_lnglat_unavailable') setStreetFsStatus('Main map page not open');
+              else setStreetFsStatus(err || 'Waiting...');
+              return;
+            }
+            setStreetFsStatus('');
+            if (!hasFiniteLngLat(data.lngLat)) return;
+            if (shouldRequestPhoneStreetView(data.lngLat)) {
+              schedulePhoneStreetViewRequest(data.lngLat);
+            }
+          })
+          .catch(function () {
+            clearPhoneStreetViewRequestTimer();
+            setStreetFsStatus('Network error');
+          });
+      }
+
+      function startPhoneStreetViewPolling() {
+        if (phoneStreetViewPollTimer) return;
+        pollPhoneStreetView();
+        phoneStreetViewPollTimer = window.setInterval(pollPhoneStreetView, 150);
+      }
+
+      function stopPhoneStreetViewPolling() {
+        if (phoneStreetViewPollTimer) {
+          window.clearInterval(phoneStreetViewPollTimer);
+          phoneStreetViewPollTimer = 0;
+        }
+        clearPhoneStreetViewRequestTimer();
+      }
+
+      function openStreetView() {
+        showStreetViewFullscreen(true);
+        setStreetFsStatus('Loading...');
+        startPhoneStreetViewPolling();
+      }
+
+      function closeStreetView() {
+        stopPhoneStreetViewPolling();
+        showStreetViewFullscreen(false);
+      }
+
+      if (showStreetViewBtn) {
+        showStreetViewBtn.addEventListener('click', function () {
+          openStreetView();
+        });
+      }
+      if (streetFsCloseBtn) streetFsCloseBtn.addEventListener('click', closeStreetView);
+    })();
+  </script>
+</body>
+</html>

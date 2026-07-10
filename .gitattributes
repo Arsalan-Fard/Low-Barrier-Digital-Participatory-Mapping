@@ -1,0 +1,2 @@
+# The macOS launcher script must keep LF endings to run under bash.
+StartWorkshop.app/Contents/MacOS/StartWorkshop text eol=lf

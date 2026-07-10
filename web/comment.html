@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Comment controller</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      --theme-page: #190b0d;
+      --theme-card: rgba(40, 13, 16, 0.94);
+      --theme-panel: rgba(69, 18, 24, 0.9);
+      --theme-input: rgba(30, 10, 13, 0.86);
+      --theme-border: rgba(248, 113, 113, 0.32);
+      --theme-accent: #ff5b5b;
+      --theme-accent-strong: #dc2626;
+      --theme-accent-text: #fff1f2;
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: var(--theme-page);
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 12px;
+    }
+    body.controller-theme-2 {
+      --theme-page: #071426;
+      --theme-card: rgba(8, 28, 53, 0.94);
+      --theme-panel: rgba(15, 45, 82, 0.9);
+      --theme-input: rgba(7, 20, 38, 0.86);
+      --theme-border: rgba(96, 165, 250, 0.34);
+      --theme-accent: #3b82f6;
+      --theme-accent-strong: #2563eb;
+      --theme-accent-text: #eff6ff;
+    }
+    body.controller-theme-3 {
+      --theme-page: #06170f;
+      --theme-card: rgba(7, 38, 24, 0.94);
+      --theme-panel: rgba(13, 70, 43, 0.9);
+      --theme-input: rgba(6, 23, 15, 0.86);
+      --theme-border: rgba(74, 222, 128, 0.32);
+      --theme-accent: #22cc66;
+      --theme-accent-strong: #16a34a;
+      --theme-accent-text: #f0fdf4;
+    }
+    body.controller-theme-4 {
+      --theme-page: #171100;
+      --theme-card: rgba(45, 34, 4, 0.94);
+      --theme-panel: rgba(82, 63, 7, 0.9);
+      --theme-input: rgba(28, 21, 3, 0.86);
+      --theme-border: rgba(250, 204, 21, 0.34);
+      --theme-accent: #facc15;
+      --theme-accent-strong: #eab308;
+      --theme-accent-text: #1f1600;
+    }
+    .card {
+      width: min(100%, 420px);
+      min-height: calc(100vh - 24px);
+      background: var(--theme-card);
+      border: 1px solid var(--theme-border);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      text-align: center;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+      color: #cbd5e1;
+    }
+    select,
+    textarea,
+    button {
+      width: 100%;
+      font: inherit;
+    }
+    select,
+    textarea {
+      border-radius: 10px;
+      border: 1px solid var(--theme-border);
+      background: var(--theme-input);
+      color: #f8fafc;
+      padding: 12px;
+      font-size: 16px;
+      outline: none;
+    }
+    textarea {
+      min-height: 180px;
+      resize: vertical;
+      line-height: 1.35;
+    }
+    select:focus,
+    textarea:focus {
+      border-color: var(--theme-accent);
+      box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
+    }
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 16px;
+      font-size: 18px;
+      font-weight: 700;
+      cursor: pointer;
+      background: var(--theme-accent);
+      color: var(--theme-accent-text);
+      transition: opacity 120ms linear, transform 120ms linear;
+    }
+    button.secondary {
+      background: var(--theme-panel);
+      color: #f8fafc;
+      border: 1px solid var(--theme-border);
+    }
+    button.recording {
+      background: #dc2626;
+      color: #fff1f2;
+    }
+    button:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
+    button:active:not(:disabled) {
+      transform: scale(0.99);
+    }
+    .status {
+      min-height: 22px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--theme-panel);
+      color: #cbd5e1;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+  </style>
+</head>
+<body class="controller-theme-1">
+  <main class="card">
+    <h1>Comment</h1>
+    <div>
+      <label for="commentControllerId">ID</label>
+      <select id="commentControllerId">
+        <option value="1">ID 1</option>
+        <option value="2">ID 2</option>
+        <option value="3">ID 3</option>
+        <option value="4">ID 4</option>
+      </select>
+    </div>
+    <div>
+      <label for="commentText">Text</label>
+      <textarea id="commentText" maxlength="220" placeholder="Write comment"></textarea>
+    </div>
+    <button id="placeBtn" type="button">Place</button>
+    <button id="recordBtn" class="secondary" type="button">Start Recording</button>
+    <div id="status" class="status">Ready</div>
+  </main>
+
+  <script>
+    (function () {
+      var idSelect = document.getElementById('commentControllerId');
+      var textInput = document.getElementById('commentText');
+      var placeBtn = document.getElementById('placeBtn');
+      var recordBtn = document.getElementById('recordBtn');
+      var statusEl = document.getElementById('status');
+      var storageKey = 'compact-comment-controller-id';
+      var controllers = {};
+      var busy = false;
+      var typingSyncTimer = 0;
+      var lastLocalInputAt = 0;
+      var suppressRemoteTextUntil = 0;
+
+      var mediaStream = null;
+      var mediaRecorder = null;
+      var activeMimeType = '';
+      var recordedChunks = [];
+      var recordingStartedAt = 0;
+      var isRecording = false;
+      var uploadInFlight = false;
+
+      function setStatus(text) {
+        statusEl.textContent = String(text || '');
+      }
+
+      function applyTheme() {
+        var id = String(idSelect.value || '1');
+        document.body.className = 'controller-theme-' + id;
+        try { localStorage.setItem(storageKey, id); } catch (_err) {}
+      }
+
+      function currentControllerState() {
+        var id = String(idSelect.value || '1');
+        return controllers[id] && typeof controllers[id] === 'object'
+          ? controllers[id]
+          : { controllerId: id, placeToken: 0, annotationText: '' };
+      }
+
+      async function postState(text, placeToken) {
+        var id = String(idSelect.value || '1');
+        var res = await fetch('/api/comment-controller', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            controllerId: id,
+            annotationText: text,
+            placeToken: placeToken
+          })
+        });
+        var data = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error((data && data.error) || 'request_failed');
+        }
+        controllers = data.controllers || controllers;
+      }
+
+      function clearTypingSyncTimer() {
+        if (typingSyncTimer) {
+          window.clearTimeout(typingSyncTimer);
+          typingSyncTimer = 0;
+        }
+      }
+
+      function applyControllerTextToInput(force) {
+        var state = currentControllerState();
+        var remoteText = String(state.annotationText || '');
+        if (String(textInput.value || '') === remoteText) return;
+        var now = Date.now();
+        if (!force) {
+          if (busy || typingSyncTimer) return;
+          if (now < suppressRemoteTextUntil) return;
+          if ((now - lastLocalInputAt) < 900) return;
+        }
+        textInput.value = remoteText;
+      }
+
+      function scheduleTypingSync() {
+        lastLocalInputAt = Date.now();
+        clearTypingSyncTimer();
+        typingSyncTimer = window.setTimeout(async function () {
+          typingSyncTimer = 0;
+          if (busy) return;
+          var existing = currentControllerState();
+          try {
+            await postState(String(textInput.value || ''), Number(existing.placeToken || 0));
+          } catch (_err) {}
+        }, 140);
+      }
+
+      async function poll() {
+        try {
+          var res = await fetch('/api/comment-controller', { cache: 'no-store' });
+          var data = await res.json();
+          if (data && data.ok && data.controllers) {
+            controllers = data.controllers;
+            applyControllerTextToInput(false);
+          }
+        } catch (_err) {}
+      }
+
+      async function placeComment() {
+        if (busy) return;
+        clearTypingSyncTimer();
+        var text = String(textInput.value || '').trim();
+        if (!text) {
+          setStatus('Write a comment first');
+          textInput.focus();
+          return;
+        }
+        if (text.length > 220) text = text.slice(0, 220);
+        var existing = currentControllerState();
+        var placeToken = Number(existing.placeToken || 0) + 1;
+        busy = true;
+        placeBtn.disabled = true;
+        try {
+          await postState(text, placeToken);
+          textInput.value = '';
+          lastLocalInputAt = Date.now();
+          suppressRemoteTextUntil = Date.now() + 1500;
+          setStatus('Sent to ID ' + String(idSelect.value || '1'));
+        } catch (err) {
+          setStatus('Failed: ' + String(err && err.message ? err.message : err));
+        } finally {
+          busy = false;
+          placeBtn.disabled = false;
+        }
+      }
+
+      function chooseMimeType() {
+        var candidates = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/mp4',
+          'audio/ogg;codecs=opus'
+        ];
+        if (!window.MediaRecorder || typeof window.MediaRecorder.isTypeSupported !== 'function') return '';
+        for (var i = 0; i < candidates.length; i++) {
+          if (window.MediaRecorder.isTypeSupported(candidates[i])) return candidates[i];
+        }
+        return '';
+      }
+
+      function setRecordButtonState() {
+        recordBtn.textContent = isRecording ? 'Stop Recording' : 'Start Recording';
+        recordBtn.classList.toggle('recording', isRecording);
+        recordBtn.disabled = uploadInFlight;
+      }
+
+      function uploadRecording(blob) {
+        if (!blob || !blob.size) {
+          setStatus('No recording captured');
+          return;
+        }
+        uploadInFlight = true;
+        setRecordButtonState();
+        setStatus('Uploading recording...');
+
+        var nowIso = new Date().toISOString();
+        var controllerId = String(idSelect.value || '1').trim() || '1';
+        var extension = activeMimeType.indexOf('ogg') >= 0 ? 'ogg'
+          : activeMimeType.indexOf('mp4') >= 0 ? 'm4a'
+          : 'webm';
+        var form = new FormData();
+        form.append('controllerId', controllerId);
+        form.append('sessionId', 'controller-' + controllerId);
+        form.append('toolMode', 'comment');
+        form.append('recordedAt', nowIso);
+        form.append('mimeType', activeMimeType || blob.type || '');
+        form.append('audio', blob, 'recording_' + nowIso.replace(/[:.]/g, '-') + '.' + extension);
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/audio-chunk', true);
+        xhr.onerror = function () {
+          uploadInFlight = false;
+          setRecordButtonState();
+          setStatus('Upload failed');
+        };
+        xhr.onload = function () {
+          uploadInFlight = false;
+          setRecordButtonState();
+          var data = null;
+          try { data = JSON.parse(xhr.responseText || '{}'); } catch (_err) {}
+          if (xhr.status < 200 || xhr.status >= 300 || !data || data.ok !== true) {
+            setStatus('Upload failed');
+            return;
+          }
+          setStatus('Recording uploaded');
+        };
+        xhr.send(form);
+      }
+
+      async function startRecording() {
+        if (uploadInFlight || isRecording) return;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setStatus('Microphone not available');
+          return;
+        }
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          });
+          activeMimeType = chooseMimeType();
+          recordedChunks = [];
+          recordingStartedAt = Date.now();
+          var options = activeMimeType ? { mimeType: activeMimeType } : undefined;
+          mediaRecorder = new MediaRecorder(mediaStream, options);
+          mediaRecorder.ondataavailable = function (event) {
+            if (event.data && event.data.size) recordedChunks.push(event.data);
+          };
+          mediaRecorder.onstop = function () {
+            var mimeType = activeMimeType || mediaRecorder.mimeType || 'audio/webm';
+            var blob = new Blob(recordedChunks, { type: mimeType });
+            if (mediaStream) {
+              var tracks = mediaStream.getTracks();
+              for (var i = 0; i < tracks.length; i++) tracks[i].stop();
+            }
+            mediaStream = null;
+            mediaRecorder = null;
+            isRecording = false;
+            setRecordButtonState();
+            uploadRecording(blob);
+          };
+          mediaRecorder.start();
+          isRecording = true;
+          setRecordButtonState();
+          setStatus('Recording...');
+        } catch (err) {
+          isRecording = false;
+          setRecordButtonState();
+          setStatus('Recording failed: ' + String(err && err.message ? err.message : err));
+        }
+      }
+
+      function stopRecording() {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          var elapsedMs = Math.max(0, Date.now() - recordingStartedAt);
+          setStatus('Processing ' + (elapsedMs / 1000).toFixed(1) + 's...');
+          mediaRecorder.stop();
+        }
+      }
+
+      try {
+        var savedId = localStorage.getItem(storageKey);
+        if (savedId && /^[1-4]$/.test(savedId)) idSelect.value = savedId;
+      } catch (_err) {}
+      applyTheme();
+      idSelect.addEventListener('change', function () {
+        applyTheme();
+        applyControllerTextToInput(true);
+      });
+      textInput.addEventListener('input', scheduleTypingSync);
+      placeBtn.addEventListener('click', placeComment);
+      recordBtn.addEventListener('click', function () {
+        if (isRecording) stopRecording();
+        else startRecording();
+      });
+      textInput.addEventListener('keydown', function (event) {
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+          event.preventDefault();
+          placeComment();
+        }
+      });
+      poll();
+      setInterval(poll, 800);
+    })();
+  </script>
+</body>
+</html>
