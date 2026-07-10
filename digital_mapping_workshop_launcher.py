@@ -2,9 +2,6 @@ import contextlib
 import socket
 import sys
 import threading
-import time
-import urllib.request
-import webbrowser
 from pathlib import Path
 
 import app as backend_app
@@ -93,28 +90,15 @@ def _patch_backend_paths(resource_root, user_root):
             pass
 
 
-def _wait_for_server(port, timeout_seconds=45):
-    url = "http://127.0.0.1:%d/" % int(port)
-    deadline = time.time() + float(timeout_seconds)
-    while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(url, timeout=0.5) as response:
-                if 200 <= int(response.status) < 500:
-                    return True
-        except Exception:
-            time.sleep(0.25)
-    return False
-
-
 def _run_backend(args):
     sys.argv = [sys.argv[0]] + args
     backend_app.main()
 
 
 def main():
-    raw_args = sys.argv[1:]
-    open_browser = "--no-browser" not in raw_args
-    app_args = [arg for arg in raw_args if arg != "--no-browser"]
+    # Browser opening (fullscreen by default, --windowed / --no-browser to
+    # change) is handled entirely by the backend — args pass straight through.
+    app_args = list(sys.argv[1:])
 
     requested_port = int(_arg_value(app_args, "--port", "5000") or "5000")
     port = requested_port if _has_arg(app_args, "--port") else _find_free_port(requested_port)
@@ -131,12 +115,6 @@ def main():
 
     thread = threading.Thread(target=_run_backend, args=(app_args,), daemon=False)
     thread.start()
-
-    if open_browser:
-        if _wait_for_server(port):
-            webbrowser.open("http://127.0.0.1:%d/" % int(port), new=2)
-        else:
-            print("[Launcher] Server did not become ready. Check camera/source settings.", flush=True)
 
     try:
         while thread.is_alive():

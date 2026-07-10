@@ -5080,8 +5080,11 @@ def main():
                         help="Minimum tag area in px² for ArUco backend (filters small false positives)")
     parser.add_argument("--no-browser", action="store_true",
                         help="Don't auto-open the camera page in a browser when the server starts")
-    parser.add_argument("--kiosk", action="store_true",
-                        help="Open in Chrome/Edge kiosk mode (fullscreen, no browser chrome). Exit with Alt+F4.")
+    parser.add_argument("--kiosk", dest="kiosk", action="store_true",
+                        help="Open in Chrome/Edge fullscreen app mode (already the default; kept for compatibility)")
+    parser.add_argument("--windowed", "--no-kiosk", dest="kiosk", action="store_false",
+                        help="Open in a normal browser window instead of the default fullscreen app mode")
+    parser.set_defaults(kiosk=True)
     parser.add_argument("--cloudflare-tunnel", dest="cloudflare_tunnel", action="store_true",
                         help="Start a public Cloudflare Quick Tunnel for phone access (off by default)")
     parser.add_argument("--no-cloudflare-tunnel", dest="cloudflare_tunnel", action="store_false",

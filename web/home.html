@@ -301,6 +301,31 @@
     }
     #helpBtn:hover { background: var(--green-tint); border-color: var(--green); }
 
+    /* Fullscreen toggle: sits above the intro overlay (z-index 20000) so it is
+       available on both the intro and the camera/screen setup views. */
+    #fsBtn {
+      position: fixed;
+      top: 16px;
+      right: 60px;
+      z-index: 20001;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--green-dark);
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(31, 114, 107, 0.1);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+    #fsBtn:hover { background: var(--green-tint); border-color: var(--green); }
+    #fsBtn .fs-compress { display: none; }
+    #fsBtn.is-fs .fs-expand { display: none; }
+    #fsBtn.is-fs .fs-compress { display: block; }
+
     #note {
       position: fixed;
       bottom: 8px;
@@ -500,6 +525,10 @@
 </head>
 <body>
   <button id="helpBtn" type="button" title="Show the setup guide again" aria-label="Show setup guide">?</button>
+  <button id="fsBtn" type="button" title="Toggle fullscreen (F11)" aria-label="Toggle fullscreen">
+    <svg class="fs-expand" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/></svg>
+    <svg class="fs-compress" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v5H3M21 8h-5V3M16 21v-5h5M3 16h5v5"/></svg>
+  </button>
 
   <main id="layout">
     <!-- ============ merged camera + screen setup ============ -->
@@ -1103,6 +1132,29 @@
       pollCameraStatus();
       setInterval(pollCameraStatus, 2500);
       setInterval(pollTags, 150);
+    })();
+  </script>
+
+  <script>
+    // Fullscreen toggle, shared by the intro overlay and the setup page.
+    (function () {
+      'use strict';
+      var btn = document.getElementById('fsBtn');
+      if (!btn || !document.documentElement.requestFullscreen) return;
+      function sync() {
+        var fs = !!document.fullscreenElement;
+        btn.classList.toggle('is-fs', fs);
+        btn.title = fs ? 'Exit fullscreen (F11)' : 'Toggle fullscreen (F11)';
+      }
+      btn.addEventListener('click', function () {
+        if (document.fullscreenElement) {
+          document.exitFullscreen();
+        } else {
+          document.documentElement.requestFullscreen().catch(function () {});
+        }
+      });
+      document.addEventListener('fullscreenchange', sync);
+      sync();
     })();
   </script>
 </body>

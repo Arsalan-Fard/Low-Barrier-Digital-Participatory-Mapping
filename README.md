@@ -29,7 +29,7 @@ Useful arguments:
 | `--source 0` | Camera to use: a webcam index (`0`, `1`, …) or a stream URL. If not provided, the app auto-discovers a phone IP camera on `:8080/video`. |
 | `--apriltag-family tag36h11` | Marker family/families to detect (`tag16h5`, `tag25h9`, `tag36h11`, …) and match the tags you printed. Defaults to the marker settings. |
 | `--detector aruco` | Detection backend: `pupil` (pupil_apriltags) or `aruco` (default, OpenCV). |
-| `--kiosk` | Open the app in fullscreen kiosk mode (no browser chrome). Exit with Alt+F4. |
+| `--windowed` | Open in a normal browser window. By default the app opens fullscreen (Chrome/Edge app mode, no browser chrome) — F11 or the on-page ⛶ button toggles it. |
 | `--cloudflare-tunnel` | Start a public Cloudflare tunnel so phones can reach the app from outside the local network. Off by default — everything stays local unless you pass this. |
 
 The server starts at http://127.0.0.1:5000 and opens the home page. Without `--source`
