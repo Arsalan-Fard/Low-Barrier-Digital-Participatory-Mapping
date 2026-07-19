@@ -14,11 +14,15 @@
     { value: 'topo', label: 'Topographic' }
   ];
 
+  // Uploaded GeoJSON layers are stored per step as 'custom:<file id>'.
+  var CUSTOM_PREFIX = 'custom:';
+
   function createEditor() {
-    var state = { workshops: [], wsIndex: -1, stepIndex: 0, floorplans: [] };
+    var state = { workshops: [], wsIndex: -1, stepIndex: 0, floorplans: [], dataLayers: [] };
     var open = false;
     var saveTimer = 0;
     var loaded = false;
+    var sublayersOpenById = {};
 
     var panel = null;
     var labelOverlay = null;   // draggable text-label layer over #main_container
@@ -39,7 +43,7 @@
       return w.steps[state.stepIndex] || null;
     }
     function makeStep(n) {
-      return { id: n, label: 'Step ' + n, theme: 'streets', indoor: false, indoorId: '', mapView: null, labels: [] };
+      return { id: n, label: 'Step ' + n, theme: 'streets', indoor: false, indoorId: '', mapView: null, labels: [], dataLayers: [] };
     }
     // A step's display name = its first text label, else "Step N".
     function stepName(step, idx) {
@@ -77,10 +81,13 @@
         .then(function (r) { return r.json(); })
         .then(function (d) {
           state.workshops = (d && Array.isArray(d.workshops)) ? d.workshops : [];
-          // Normalize: every step needs a labels array.
+          // Normalize: every step needs labels + dataLayers arrays.
           state.workshops.forEach(function (w) {
             if (!Array.isArray(w.steps)) w.steps = [];
-            w.steps.forEach(function (s) { if (!Array.isArray(s.labels)) s.labels = []; });
+            w.steps.forEach(function (s) {
+              if (!Array.isArray(s.labels)) s.labels = [];
+              if (!Array.isArray(s.dataLayers)) s.dataLayers = [];
+            });
           });
           if (!state.workshops.length) {
             state.workshops.push({ id: uid(), name: 'Workshop 1', steps: [makeStep(1)] });
@@ -99,6 +106,24 @@
         .then(function (d) { state.floorplans = (d && Array.isArray(d.floorplans)) ? d.floorplans : []; })
         .catch(function () { state.floorplans = []; });
     }
+    function loadCustomLayers() {
+      // Refresh the map app's shared id/name registry after catalog changes.
+      var geo = window.CompactCustomGeoLayers;
+      if (geo && typeof geo.refresh === 'function') {
+        return new Promise(function (resolve) {
+          geo.refresh(function () { resolve(); });
+        });
+      }
+      return fetch('/api/custom-layers', { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .catch(function () {});
+    }
+    function loadDataLayers() {
+      return fetch('/api/data-layers', { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { state.dataLayers = (d && Array.isArray(d.layers)) ? d.layers : []; })
+        .catch(function () { state.dataLayers = []; });
+    }
 
     // ---- apply a step's state to the live map (mirrors runtime.applyStep, no tagging) ----
     function applyStepToMap(step) {
@@ -108,6 +133,8 @@
       var layer = step.indoor ? 'floorplan' : (step.theme || 'streets');
       if (a.setMapTheme) a.setMapTheme(layer);
       if (step.mapView && a.applyStepView) a.applyStepView(step.mapView);
+      // setDataLayers self-defers past any style reload setMapTheme kicked off.
+      if (a.setDataLayers) a.setDataLayers(Array.isArray(step.dataLayers) ? step.dataLayers : []);
     }
 
     // ================= draggable on-map text labels =================
@@ -398,6 +425,45 @@
       els.fpWrap = labeledRow('Floorplan (.dxf)', fpRow);
       c.appendChild(els.fpWrap);
 
+      // Data layers shown on this step's map: the built-in checkboxes plus one
+      // per uploaded GeoJSON file (rows rebuilt by renderDataLayerChecks).
+      els.layersCol = css(document.createElement('div'), { display: 'flex', flexDirection: 'column', gap: '5px' });
+      var layersWrap = labeledRow('Data layers', els.layersCol);
+
+      // Upload GeoJSON or a full uMap backup: drag & drop onto the zone, or
+      // click to browse. The backend normalizes both to the shared renderer.
+      els.layerFile = document.createElement('input');
+      els.layerFile.type = 'file';
+      els.layerFile.accept = '.geojson,.json,.umap,application/geo+json,application/json';
+      els.layerFile.multiple = true;
+      els.layerFile.style.display = 'none';
+      els.layerFile.addEventListener('change', function (e) {
+        uploadCustomLayers(e.target.files);
+        els.layerFile.value = '';
+      });
+      els.layerDrop = document.createElement('div');
+      els.layerDrop.textContent = 'Drop .geojson or .umap here — or click to browse';
+      css(els.layerDrop, {
+        marginTop: '6px', padding: '10px', textAlign: 'center', cursor: 'pointer',
+        border: '1px dashed rgba(255,255,255,0.35)', borderRadius: '8px',
+        color: 'rgba(255,255,255,0.6)', font: '600 12px system-ui, sans-serif'
+      });
+      var setDropHot = function (hot) {
+        els.layerDrop.style.borderColor = hot ? 'rgba(53,160,148,0.95)' : 'rgba(255,255,255,0.35)';
+        els.layerDrop.style.background = hot ? 'rgba(47,143,134,0.18)' : 'transparent';
+      };
+      els.layerDrop.addEventListener('click', function () { els.layerFile.click(); });
+      els.layerDrop.addEventListener('dragover', function (e) { e.preventDefault(); setDropHot(true); });
+      els.layerDrop.addEventListener('dragleave', function () { setDropHot(false); });
+      els.layerDrop.addEventListener('drop', function (e) {
+        e.preventDefault();
+        setDropHot(false);
+        uploadCustomLayers(e.dataTransfer && e.dataTransfer.files);
+      });
+      layersWrap.appendChild(els.layerDrop);
+      layersWrap.appendChild(els.layerFile);
+      c.appendChild(layersWrap);
+
       // Capture view + add text
       var actRow = css(document.createElement('div'), { display: 'flex', gap: '6px' });
       var capBtn = mkBtn('⤓ Capture view', captureView, PRIMARY); capBtn.style.flex = '1';
@@ -415,6 +481,235 @@
       wrap.appendChild(sectionLabel(text));
       wrap.appendChild(row);
       return wrap;
+    }
+
+    // ---- data-layer rows (built-ins + uploaded custom layers) ----
+    function layerCheckRow(key, label, onDelete, onToggle) {
+      var step = curStep();
+      var row = css(document.createElement('label'), {
+        display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+        font: '600 13px system-ui, sans-serif'
+      });
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.style.accentColor = 'rgba(47,143,134,0.9)';
+      cb.checked = !!(step && Array.isArray(step.dataLayers) && step.dataLayers.indexOf(key) !== -1);
+      cb.addEventListener('change', function () {
+        var s = curStep(); if (!s) return;
+        if (!Array.isArray(s.dataLayers)) s.dataLayers = [];
+        var i = s.dataLayers.indexOf(key);
+        if (cb.checked && i === -1) s.dataLayers.push(key);
+        if (!cb.checked && i !== -1) s.dataLayers.splice(i, 1);
+        var a = getApp();
+        if (a && a.setDataLayers) a.setDataLayers(s.dataLayers);
+        scheduleSave();
+        if (typeof onToggle === 'function') onToggle(cb.checked);
+      });
+      var txt = css(document.createElement('span'), {
+        flex: '1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+      });
+      txt.textContent = label;
+      row.appendChild(cb);
+      row.appendChild(txt);
+      if (onDelete) {
+        // preventDefault so the click doesn't also activate the label's checkbox.
+        var del = mkBtn('\uD83D\uDDD1', function (e) { e.preventDefault(); e.stopPropagation(); onDelete(); },
+          Object.assign({}, BTN, { padding: '1px 3px', fontSize: '15px', lineHeight: '1', color: '#ff8d7e', border: '0', background: 'transparent' }));
+        del.title = 'Remove from Data Layers';
+        del.setAttribute('aria-label', 'Remove ' + label + ' from Data Layers');
+        row.appendChild(del);
+      }
+      return row;
+    }
+
+    function renderCustomSublayers(layer, host) {
+      var key = String(layer && layer.id || '');
+      var id = key.slice(CUSTOM_PREFIX.length);
+      var geo = window.CompactCustomGeoLayers;
+      if (!id || !geo) return;
+
+      var sublayers = typeof geo.getSublayers === 'function' ? geo.getSublayers(id) : null;
+      if (!sublayers) {
+        var loading = css(document.createElement('div'), {
+          marginLeft: '24px', color: 'rgba(255,255,255,0.45)',
+          font: '11px system-ui, sans-serif'
+        });
+        loading.textContent = 'Loading sublayers…';
+        host.appendChild(loading);
+        if (typeof geo.loadLayer === 'function') {
+          geo.loadLayer(id, function () {
+            if (host.isConnected) renderDataLayerChecks();
+          });
+        }
+        return;
+      }
+      if (!sublayers.length) return;
+
+      var step = curStep();
+      var parentEnabled = !!(step && Array.isArray(step.dataLayers) && step.dataLayers.indexOf(key) !== -1);
+      if (sublayersOpenById[key] == null) sublayersOpenById[key] = parentEnabled;
+
+      var details = document.createElement('details');
+      details.open = !!sublayersOpenById[key];
+      css(details, { marginLeft: '22px', minWidth: '0' });
+      details.addEventListener('toggle', function () { sublayersOpenById[key] = details.open; });
+
+      var summary = css(document.createElement('summary'), {
+        cursor: 'pointer', color: 'rgba(255,255,255,0.68)',
+        font: '600 11px system-ui, sans-serif', padding: '2px 0'
+      });
+      function updateSummary() {
+        var current = typeof geo.getSublayers === 'function' ? geo.getSublayers(id) : sublayers;
+        var shown = (current || []).filter(function (entry) { return entry.visible; }).length;
+        summary.textContent = shown + '/' + sublayers.length + ' sublayers';
+      }
+      updateSummary();
+      details.appendChild(summary);
+
+      var controls = css(document.createElement('div'), {
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+        gap: '5px', padding: '3px 0 4px'
+      });
+      function sublayerButton(text, show) {
+        var button = mkBtn(text, function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (typeof geo.setAllSublayersVisible === 'function') geo.setAllSublayersVisible(id, show);
+          renderDataLayerChecks();
+        }, Object.assign({}, BTN, { padding: '2px 6px', fontSize: '10px' }));
+        return button;
+      }
+      controls.appendChild(sublayerButton('All', true));
+      controls.appendChild(sublayerButton('None', false));
+      details.appendChild(controls);
+
+      var list = css(document.createElement('div'), {
+        display: 'flex', flexDirection: 'column', gap: '3px',
+        maxHeight: '220px', overflowY: 'auto', padding: '1px 4px 3px 0'
+      });
+      sublayers.forEach(function (entry) {
+        var row = css(document.createElement('label'), {
+          display: 'grid', gridTemplateColumns: '14px 9px minmax(0, 1fr) auto',
+          alignItems: 'center', gap: '5px', cursor: 'pointer', minWidth: '0',
+          font: '500 11px system-ui, sans-serif', color: 'rgba(255,255,255,0.82)'
+        });
+        var checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = entry.visible;
+        checkbox.style.margin = '0';
+        checkbox.style.accentColor = entry.color;
+        checkbox.addEventListener('change', function () {
+          if (typeof geo.setSublayerVisible === 'function') {
+            geo.setSublayerVisible(id, entry.name, checkbox.checked);
+          }
+          updateSummary();
+        });
+        var swatch = css(document.createElement('span'), {
+          width: '8px', height: '8px', borderRadius: '50%', background: entry.color,
+          boxShadow: '0 0 0 1px rgba(255,255,255,0.35)'
+        });
+        var name = css(document.createElement('span'), {
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+        });
+        name.textContent = entry.label || entry.name;
+        var count = css(document.createElement('span'), { opacity: '0.5' });
+        count.textContent = String(entry.count);
+        row.appendChild(checkbox);
+        row.appendChild(swatch);
+        row.appendChild(name);
+        row.appendChild(count);
+        list.appendChild(row);
+      });
+      details.appendChild(list);
+      host.appendChild(details);
+    }
+
+    function renderDataLayerChecks() {
+      if (!els.layersCol) return;
+      els.layersCol.innerHTML = '';
+      state.dataLayers.forEach(function (l) {
+        var group = css(document.createElement('div'), {
+          display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '0'
+        });
+        group.appendChild(layerCheckRow(l.id, l.name || l.id, function () {
+          deleteDataLayer(l);
+        }));
+        if (String(l.id || '').indexOf(CUSTOM_PREFIX) === 0) renderCustomSublayers(l, group);
+        els.layersCol.appendChild(group);
+      });
+    }
+
+    function uploadCustomLayers(files) {
+      var list = Array.prototype.slice.call(files || []).filter(function (f) {
+        return /\.(?:(?:geo)?json|umap)$/i.test(String(f && f.name || ''));
+      });
+      if (!list.length) { setStatus('Only .geojson/.json/.umap files', 'err'); return; }
+      setStatus('Uploading layer…');
+      var pending = list.length;
+      var failed = 0;
+      list.forEach(function (file) {
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/api/custom-layers', { method: 'POST', body: fd })
+          .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+          .then(function (res) {
+            if (!res.ok || !res.d || !res.d.ok) throw new Error((res.d && res.d.error) || 'upload_failed');
+            // Activate the new layer on the current step right away.
+            var s = curStep();
+            if (s) {
+              if (!Array.isArray(s.dataLayers)) s.dataLayers = [];
+              var key = CUSTOM_PREFIX + res.d.id;
+              if (s.dataLayers.indexOf(key) === -1) s.dataLayers.push(key);
+            }
+          })
+          .catch(function () { failed++; })
+          .finally(function () {
+            pending--;
+            if (pending) return;
+            Promise.all([loadCustomLayers(), loadDataLayers()]).then(function () {
+              renderDataLayerChecks();
+              var s = curStep();
+              var a = getApp();
+              if (s && a && a.setDataLayers) a.setDataLayers(s.dataLayers || []);
+              scheduleSave();
+              setStatus(failed ? 'Some uploads failed' : 'Layer added ✓', failed ? 'err' : '');
+            });
+          });
+      });
+    }
+
+    function deleteDataLayer(layer) {
+      var key = String(layer && layer.id || '');
+      var name = String(layer && layer.name || key);
+      if (!key) return;
+      if (!window.confirm('Remove layer "' + name + '" from Data Layers? It will be removed from every workshop, but its source file will be kept.')) return;
+      fetch('/api/data-layers/' + encodeURIComponent(key), { method: 'DELETE' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d || !d.ok) throw new Error((d && d.error) || 'delete_failed');
+          // Strip the layer from every step of every workshop.
+          state.workshops.forEach(function (w) {
+            (Array.isArray(w.steps) ? w.steps : []).forEach(function (s) {
+              if (!Array.isArray(s.dataLayers)) return;
+              var i = s.dataLayers.indexOf(key);
+              if (i !== -1) s.dataLayers.splice(i, 1);
+            });
+          });
+          var geo = window.CompactCustomGeoLayers;
+          if (key.indexOf(CUSTOM_PREFIX) === 0 && geo && typeof geo.forget === 'function') {
+            geo.forget(key.slice(CUSTOM_PREFIX.length));
+          }
+          return Promise.all([loadCustomLayers(), loadDataLayers()]);
+        })
+        .then(function () {
+          renderDataLayerChecks();
+          var s = curStep();
+          var a = getApp();
+          if (s && a && a.setDataLayers) a.setDataLayers(s.dataLayers || []);
+          scheduleSave();
+          setStatus('Layer removed from Data Layers');
+        })
+        .catch(function (err) { setStatus('Remove failed: ' + (err && err.message || ''), 'err'); });
     }
 
     // ---- rendering ----
@@ -471,6 +766,7 @@
       els.fpWrap.style.display = step.indoor ? 'block' : 'none';
       els.themeSelect.value = step.theme || 'streets';
       renderFloorplanSelect(step);
+      renderDataLayerChecks();
     }
 
     function renderFloorplanSelect(step) {
@@ -580,13 +876,13 @@
     function open_() {
       if (open) return Promise.resolve();
       // If the runtime player is active, leave it — authoring takes over the map.
-      var rt = window.DigitalMappingWorkshopRuntime;
+      var rt = window.CompactWorkshopRuntime;
       if (rt && typeof rt.isActive === 'function' && rt.isActive() && typeof rt.exit === 'function') rt.exit();
       ensurePanel();
       ensureLabelOverlay();
       open = true;
       panel.style.display = 'flex';
-      var start = loaded ? Promise.resolve() : Promise.all([loadWorkshops(), loadFloorplans()]).then(function () { loaded = true; });
+      var start = loaded ? Promise.resolve() : Promise.all([loadWorkshops(), loadFloorplans(), loadCustomLayers(), loadDataLayers()]).then(function () { loaded = true; });
       return start.then(function () {
         var s = curStep(); if (s) applyStepToMap(s);
         renderAll();
@@ -608,5 +904,5 @@
     return { open: open_, openNew: openNew, close: close_, toggle: toggle, isOpen: function () { return open; } };
   }
 
-  window.DigitalMappingWorkshopEditor = createEditor();
+  window.CompactWorkshopEditor = createEditor();
 })();

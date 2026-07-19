@@ -127,11 +127,11 @@
       var pickerTitle = document.createElement('div');
       pickerTitle.textContent = 'Select workshop';
       pickerTitle.style.flex = '1';
-      // "+ New" opens the in-map workshop editor to author a new one.
-      var pickerNew = mkBtn('+ New', function () {
+      // "Workshop List" opens the workshop editor without creating a workshop.
+      var pickerNew = mkBtn('Workshop List', function () {
         hidePicker();
-        if (window.DigitalMappingWorkshopEditor && typeof window.DigitalMappingWorkshopEditor.openNew === 'function') {
-          window.DigitalMappingWorkshopEditor.openNew();
+        if (window.CompactWorkshopEditor && typeof window.CompactWorkshopEditor.open === 'function') {
+          window.CompactWorkshopEditor.open();
         }
       });
       Object.assign(pickerNew.style, {
@@ -291,6 +291,10 @@
           if (a.setOverlayVisibility) {
             a.setOverlayVisibility(Object.assign({ drawings: true }, step.overlays || {}));
           }
+          // Show exactly this step's data layers (roads / network / objects).
+          if (a.setDataLayers) {
+            a.setDataLayers(Array.isArray(step.dataLayers) ? step.dataLayers : []);
+          }
           if (a.setWorkshopStep) a.setWorkshopStep(stepNumber);
           applyVisibleSteps();
         };
@@ -325,7 +329,7 @@
 
     function notifyActiveChange() {
       try {
-        window.dispatchEvent(new CustomEvent('digital-mapping-workshop-activechange', {
+        window.dispatchEvent(new CustomEvent('compact-workshop-activechange', {
           detail: { active: active }
         }));
       } catch (_err) {}
@@ -502,8 +506,9 @@
         if (a.setWorkshopContext) a.setWorkshopContext('');
         if (a.setWorkshopMeta) a.setWorkshopMeta(null);
         if (a.setWorkshopStep) a.setWorkshopStep(0);
-        // Restore full overlay visibility on exit.
+        // Restore full overlay visibility on exit; hide per-step data layers.
         if (a.setOverlayVisibility) a.setOverlayVisibility({ roads: null, drawings: true, stickers: true, annotations: true });
+        if (a.setDataLayers) a.setDataLayers([]);
       }
     }
 
@@ -531,5 +536,5 @@
     };
   }
 
-  window.DigitalMappingWorkshopRuntime = createRuntime();
+  window.CompactWorkshopRuntime = createRuntime();
 })();

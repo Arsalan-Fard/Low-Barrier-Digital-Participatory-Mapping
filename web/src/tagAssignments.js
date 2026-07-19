@@ -1,17 +1,15 @@
 (function () {
   var DEFAULT_DRAW_OFFSET_CM = 3;
   var DEFAULT_SLOTS = [
-    { key: 'draw-1', group: 'Drawing', tool: 'draw', label: 'Drawing 1', tagId: 11, color: '#ff5b5b', offsetCm: DEFAULT_DRAW_OFFSET_CM },
-    { key: 'draw-2', group: 'Drawing', tool: 'draw', label: 'Drawing 2', tagId: 12, color: '#3b82f6', offsetCm: DEFAULT_DRAW_OFFSET_CM },
-    { key: 'draw-3', group: 'Drawing', tool: 'draw', label: 'Drawing 3', tagId: 13, color: '#22cc66', offsetCm: DEFAULT_DRAW_OFFSET_CM },
-    { key: 'draw-4', group: 'Drawing', tool: 'draw', label: 'Drawing 4', tagId: 14, color: '#111111', offsetCm: DEFAULT_DRAW_OFFSET_CM },
-    { key: 'eraser-1', group: 'Tools', tool: 'eraser', label: 'Tool selection', tagId: 20, tagId2: 19, color: '', offsetCm: DEFAULT_DRAW_OFFSET_CM },
+    { key: 'draw-1', group: 'Drawing', tool: 'draw', label: 'Pointer', tagId: 11, tagId2: null, selectorTagId: 20, selectorTagId2: 19, color: '#ff5b5b', offsetCm: DEFAULT_DRAW_OFFSET_CM },
+    { key: 'draw-2', group: 'Drawing', tool: 'draw', label: 'Drawing 2', tagId: 12, tagId2: null, selectorTagId: null, selectorTagId2: null, color: '#3b82f6', offsetCm: DEFAULT_DRAW_OFFSET_CM },
+    { key: 'draw-3', group: 'Drawing', tool: 'draw', label: 'Drawing 3', tagId: 13, tagId2: null, selectorTagId: null, selectorTagId2: null, color: '#22cc66', offsetCm: DEFAULT_DRAW_OFFSET_CM },
+    { key: 'draw-4', group: 'Drawing', tool: 'draw', label: 'Drawing 4', tagId: 14, tagId2: null, selectorTagId: null, selectorTagId2: null, color: '#111111', offsetCm: DEFAULT_DRAW_OFFSET_CM },
     { key: 'route-origin', group: 'Shortest-path', tool: 'route-origin', label: 'Route start', tagId: 9, color: '' },
     { key: 'route-dest', group: 'Shortest-path', tool: 'route-dest', label: 'Route end', tagId: 10, color: '' },
     { key: 'isochrone-5', group: 'Analysis', tool: 'isochrone', label: 'Isochrone 5 min', tagId: 38, color: '', minutes: 5 },
     { key: 'isochrone-15', group: 'Analysis', tool: 'isochrone', label: 'Isochrone 15 min', tagId: 37, color: '', minutes: 15 },
     { key: 'isovist-1', group: 'Analysis', tool: 'isovist', label: 'Isovist', tagId: 39, color: '' },
-    { key: 'drag-1', group: 'Tools', tool: 'drag', label: 'Dragging', tagId: 24, color: '' },
     // "Comment": one shared keyboard-location tag + one-or-more post-it tags.
     { key: 'comment-keyboard', group: 'Comment', tool: 'comment-keyboard', label: 'Keyboard location', tagId: 1, color: '' },
     { key: 'comment-postit-1', group: 'Comment', tool: 'comment-postit', label: 'Post-it 1', tagId: 0, color: '' }
@@ -75,9 +73,11 @@
       color: tool === 'draw' ? normalizeColor(src.color, fallbackColor) : '',
       image: String(src.image || base.image || '')
     };
-    if (tool === 'draw' || tool === 'eraser') {
-      // second/fold-partner tag — draw AND eraser use the fold-open method on the pair
+    if (tool === 'draw') {
+      // Drawing pair plus the pair that selects this drawing tool's mode.
       normalized.tagId2 = normalizeTagId(Object.prototype.hasOwnProperty.call(src, 'tagId2') ? src.tagId2 : base.tagId2);
+      normalized.selectorTagId = normalizeTagId(Object.prototype.hasOwnProperty.call(src, 'selectorTagId') ? src.selectorTagId : base.selectorTagId);
+      normalized.selectorTagId2 = normalizeTagId(Object.prototype.hasOwnProperty.call(src, 'selectorTagId2') ? src.selectorTagId2 : base.selectorTagId2);
       normalized.offsetCm = normalizeOffsetCm(
         Object.prototype.hasOwnProperty.call(src, 'offsetCm') ? src.offsetCm : base.offsetCm,
         base.offsetCm
@@ -96,6 +96,15 @@
     for (var i = 0; i < incoming.length; i++) {
       if (!incoming[i] || typeof incoming[i] !== 'object') continue;
       incomingByKey[String(incoming[i].key || '')] = incoming[i];
+    }
+    // Read old settings that stored one global selector as an eraser pair.
+    var legacySelector = incomingByKey['eraser-1'] || null;
+    if (legacySelector && incomingByKey['draw-1']
+        && !Object.prototype.hasOwnProperty.call(incomingByKey['draw-1'], 'selectorTagId')) {
+      incomingByKey['draw-1'] = Object.assign({}, incomingByKey['draw-1'], {
+        selectorTagId: legacySelector.tagId,
+        selectorTagId2: legacySelector.tagId2
+      });
     }
 
     var slots = [];
@@ -119,6 +128,8 @@
         label: isDraw ? 'Drawing' : 'Post-it',
         tagId: null,
         tagId2: isDraw ? null : undefined,
+        selectorTagId: isDraw ? null : undefined,
+        selectorTagId2: isDraw ? null : undefined,
         offsetCm: isDraw ? DEFAULT_DRAW_OFFSET_CM : undefined,
         color: isDraw ? '#ff5b5b' : ''
       }));
@@ -171,13 +182,6 @@
         if (t2 !== null) {
           var c2 = normalizeColor(slot.color, '#ff5b5b');
           out[String(t2)] = { tagId: t2, tool: 'draw', colorName: colorName(c2), color: c2, image: '' };
-        }
-      }
-      // Eraser is also a fold pair — register its fold partner as 'eraser' too.
-      if (slot.tool === 'eraser') {
-        var et2 = normalizeTagId(slot.tagId2);
-        if (et2 !== null) {
-          out[String(et2)] = { tagId: et2, tool: 'eraser', colorName: '', color: '', image: '' };
         }
       }
     });
@@ -250,20 +254,23 @@
     return pairs;
   }
 
-  // Eraser tool tag pairs (slot.tagId + slot.tagId2) for the fold-open eraser.
-  // Same fold/open mechanism as drawing; an open pair erases at the pen point.
-  function getEraserPairs() {
+  // Each selector pair controls the mode of exactly one drawing pair.
+  function getToolSelectorPairs() {
     var pairs = [];
     markerSettings.slots.forEach(function (slot) {
-      if (!slot || slot.tool !== 'eraser') return;
-      var a = normalizeTagId(slot.tagId);
-      var b = normalizeTagId(slot.tagId2);
+      if (!slot || slot.tool !== 'draw') return;
+      var a = normalizeTagId(slot.selectorTagId);
+      var b = normalizeTagId(slot.selectorTagId2);
+      var drawTagId = normalizeTagId(slot.tagId);
       if (a === null || b === null || a === b) return;
+      if (drawTagId === null) return;
       pairs.push({
-        key: String(slot.key || (a + '-' + b)),
+        key: 'selector:' + String(slot.key || (a + '-' + b)),
         a: a,
         b: b,
-        tool: 'eraser',
+        tool: 'tool-selector',
+        drawTagId: drawTagId,
+        label: String(slot.label || 'Drawing') + ' tools',
         offsetCm: normalizeOffsetCm(slot.offsetCm, DEFAULT_DRAW_OFFSET_CM)
       });
     });
@@ -319,7 +326,7 @@
     getToolTagIds: getToolTagIds,
     getToolTagMap: getToolTagMap,
     getDrawPairs: getDrawPairs,
-    getEraserPairs: getEraserPairs,
+    getToolSelectorPairs: getToolSelectorPairs,
     getKeyboardAnnotationSlots: getKeyboardAnnotationSlots,
     getMarkerSettings: getMarkerSettings,
     listAssignments: listAssignments

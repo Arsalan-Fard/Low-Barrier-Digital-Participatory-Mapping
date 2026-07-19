@@ -71,8 +71,8 @@
     }
 
     function startWorkshop() {
-      if (window.DigitalMappingWorkshopRuntime && typeof window.DigitalMappingWorkshopRuntime.enter === 'function') {
-        window.DigitalMappingWorkshopRuntime.enter();
+      if (window.CompactWorkshopRuntime && typeof window.CompactWorkshopRuntime.enter === 'function') {
+        window.CompactWorkshopRuntime.enter();
       }
     }
 
@@ -567,6 +567,45 @@
       });
       el.appendChild(item);
     });
+
+    // Below the basemaps: the data layers activated for the current workshop
+    // step (if any), behind a divider. Green = shown; clicking toggles the
+    // layer mid-workshop without touching the step's authored selection.
+    var dataLayers = typeof app.getDataLayerState === 'function' ? (app.getDataLayerState() || []) : [];
+    if (dataLayers.length) {
+      var sep = document.createElement('div');
+      Object.assign(sep.style, { height: '1px', background: 'rgba(255,255,255,0.22)', margin: '4px 2px' });
+      el.appendChild(sep);
+      var cap = document.createElement('div');
+      cap.textContent = 'Data layers';
+      Object.assign(cap.style, {
+        fontSize: '10px', fontWeight: '700', letterSpacing: '0.05em',
+        textTransform: 'uppercase', color: 'rgba(255,255,255,0.55)', padding: '2px 4px'
+      });
+      el.appendChild(cap);
+      dataLayers.forEach(function (l) {
+        var item = document.createElement('button');
+        item.type = 'button';
+        item.textContent = l.label;
+        item.title = (l.visible ? 'Hide ' : 'Show ') + l.label;
+        Object.assign(item.style, {
+          width: '100%',
+          textAlign: 'left',
+          padding: '9px 11px',
+          borderRadius: '6px',
+          border: '1px solid ' + (l.visible ? 'rgba(120,220,140,0.9)' : 'rgba(255,255,255,0.14)'),
+          background: l.visible ? 'rgba(60,150,80,0.55)' : 'rgba(255,255,255,0.10)',
+          color: '#fff',
+          cursor: 'pointer',
+          font: '600 14px system-ui, sans-serif'
+        });
+        item.addEventListener('click', function () {
+          if (app.toggleDataLayer) app.toggleDataLayer(l.id);
+          renderLayerPicker(); // refresh on/off state
+        });
+        el.appendChild(item);
+      });
+    }
   }
 
   function toggleLayerPicker() {
@@ -582,11 +621,16 @@
     if (btn && btn.getBoundingClientRect) {
       var r = btn.getBoundingClientRect();
       el.style.left = Math.round(r.right + 12) + 'px';
-      var top = Math.max(12, Math.min(Math.round(r.top), window.innerHeight - 240));
-      el.style.top = top + 'px';
+      el.style.top = Math.max(12, Math.round(r.top)) + 'px';
       el.style.bottom = 'auto';
     }
     el.style.display = 'flex';
+    // Re-clamp against the bottom edge now that the content height is known
+    // (the data-layer section can make the popup taller than the basemap list).
+    var maxTop = window.innerHeight - el.offsetHeight - 12;
+    if (parseInt(el.style.top, 10) > maxTop) {
+      el.style.top = Math.max(12, Math.round(maxTop)) + 'px';
+    }
   }
 
   window.CompactPageFlow = { createPageFlow: createPageFlow, confirmDialog: confirmDialog };

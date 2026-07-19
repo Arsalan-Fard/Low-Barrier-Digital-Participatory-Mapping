@@ -49,6 +49,8 @@
           label: String(slot.label || ''),
           tagId: slot.tagId == null || slot.tagId === '' ? null : Number(slot.tagId),
           tagId2: slot.tagId2 == null || slot.tagId2 === '' ? null : Number(slot.tagId2),
+          selectorTagId: slot.selectorTagId == null || slot.selectorTagId === '' ? null : Number(slot.selectorTagId),
+          selectorTagId2: slot.selectorTagId2 == null || slot.selectorTagId2 === '' ? null : Number(slot.selectorTagId2),
           color: String(slot.color || ''),
           offsetCm: tool === 'draw' || tool === 'eraser' ? normalizeOffsetCm(slot.offsetCm) : undefined
         };
@@ -77,6 +79,8 @@
         state.slots.forEach(function (slot) {
           if (slot.tagId != null && slot.tagId !== '') used[String(Number(slot.tagId))] = slot.key;
           if (slot.tagId2 != null && slot.tagId2 !== '') used[String(Number(slot.tagId2))] = slot.key;
+          if (slot.selectorTagId != null && slot.selectorTagId !== '') used[String(Number(slot.selectorTagId))] = slot.key;
+          if (slot.selectorTagId2 != null && slot.selectorTagId2 !== '') used[String(Number(slot.selectorTagId2))] = slot.key;
         });
         return used;
       }
@@ -85,7 +89,7 @@
         if (tagId == null) return;
         state.slots.forEach(function (other) {
           if (!other || other.key === ownerSlot.key) return;
-          ['tagId', 'tagId2'].forEach(function (prop) {
+          ['tagId', 'tagId2', 'selectorTagId', 'selectorTagId2'].forEach(function (prop) {
             if (Number(other[prop]) === Number(tagId)) other[prop] = null;
           });
         });
@@ -93,7 +97,7 @@
 
       function clearMatchingTagIdOnSlot(slot, ownerProp, tagId) {
         if (tagId == null || !slot) return;
-        ['tagId', 'tagId2'].forEach(function (prop) {
+        ['tagId', 'tagId2', 'selectorTagId', 'selectorTagId2'].forEach(function (prop) {
           if (prop !== ownerProp && Number(slot[prop]) === Number(tagId)) slot[prop] = null;
         });
       }
@@ -199,11 +203,11 @@
         card.appendChild(preview);
 
         var label = document.createElement('div');
-        label.className = 'marker-card-label';
+        label.className = 'marker-card-label' + (slot.tool === 'draw' ? ' draw-label' : '');
         label.textContent = slot.label || slot.tool || '';
         card.appendChild(label);
 
-        // Two-tag tools (draw / eraser) get a wider card so both tag dropdowns
+        // Two-tag tools (draw / tool-selection pair) get a wider card so both tag dropdowns
         // show their numbers instead of clipping. Comment tools are single-tag.
         var twoTag = (slot.tool === 'draw' || slot.tool === 'eraser');
         if (twoTag) card.classList.add('wide');
@@ -253,7 +257,7 @@
           var select2 = document.createElement('select');
           select2.className = 'marker-tag-select';
           select2.title = slot.tool === 'eraser'
-            ? 'Fold-partner ID (second tag of the eraser pair)'
+            ? 'Fold-partner ID (second tag of the tool-selection pair)'
             : 'Fold-partner ID (second tag of the drawing pair)';
           var emptyOpt2 = document.createElement('option');
           emptyOpt2.value = '';
@@ -295,10 +299,65 @@
           });
           controls.appendChild(color);
         }
+        if (slot.tool === 'draw') {
+          var selectorWrap = document.createElement('div');
+          selectorWrap.className = 'marker-tool-selector-row';
+
+          var selectorLabel = document.createElement('div');
+          selectorLabel.className = 'marker-tool-selector-label';
+          selectorLabel.textContent = 'Tool selection';
+          selectorWrap.appendChild(selectorLabel);
+
+          var selectorGrid = document.createElement('div');
+          selectorGrid.className = 'marker-tool-selector-grid';
+          ['selectorTagId', 'selectorTagId2'].forEach(function (prop, index) {
+            var selectorSelect = document.createElement('select');
+            selectorSelect.className = 'marker-tag-select';
+            selectorSelect.title = index === 0
+              ? 'First tag of the tool-selection pair'
+              : 'Second tag of the tool-selection pair';
+            var selectorEmpty = document.createElement('option');
+            selectorEmpty.value = '';
+            selectorEmpty.textContent = 'Empty';
+            selectorSelect.appendChild(selectorEmpty);
+            familyIds().forEach(function (id) {
+              var option = document.createElement('option');
+              option.value = String(id);
+              option.textContent = String(id);
+              if (used[String(id)] && used[String(id)] !== slot.key) {
+                option.className = 'taken';
+                option.title = 'Already used by another marker';
+              }
+              selectorSelect.appendChild(option);
+            });
+            selectorSelect.value = slot[prop] == null ? '' : String(slot[prop]);
+            selectorSelect.addEventListener('change', function () {
+              var next = selectorSelect.value === '' ? null : Number(selectorSelect.value);
+              if (next != null) {
+                clearTagIdFromOtherSlots(slot, next);
+                clearMatchingTagIdOnSlot(slot, prop, next);
+              }
+              slot[prop] = next;
+              renderMarkerEditor();
+              scheduleMarkerSave();
+            });
+            selectorGrid.appendChild(selectorSelect);
+          });
+          selectorWrap.appendChild(selectorGrid);
+          controls.appendChild(selectorWrap);
+        }
         if (slot.tool === 'draw' || slot.tool === 'eraser') {
+          var offsetBlock = document.createElement('div');
+          offsetBlock.className = 'marker-offset-block';
+
+          var offsetLabel = document.createElement('div');
+          offsetLabel.className = 'marker-offset-label';
+          offsetLabel.textContent = 'Offset';
+          offsetBlock.appendChild(offsetLabel);
+
           var offsetWrap = document.createElement('label');
           offsetWrap.className = 'marker-offset-wrap';
-          offsetWrap.title = (slot.tool === 'eraser' ? 'Eraser' : 'Drawing') + ' offset from each tag in centimeters';
+          offsetWrap.title = (slot.tool === 'eraser' ? 'Tool-selection' : 'Drawing') + ' offset from each tag in centimeters';
 
           var offset = document.createElement('input');
           offset.className = 'marker-offset';
@@ -308,7 +367,7 @@
           offset.step = '0.1';
           offset.inputMode = 'decimal';
           offset.value = String(normalizeOffsetCm(slot.offsetCm));
-          offset.setAttribute('aria-label', 'Drawing offset in centimeters');
+          offset.setAttribute('aria-label', (slot.tool === 'eraser' ? 'Tool-selection' : 'Drawing') + ' offset in centimeters');
           offset.addEventListener('input', function () {
             var next = Number(offset.value);
             if (!Number.isFinite(next)) return;
@@ -327,7 +386,8 @@
 
           offsetWrap.appendChild(offset);
           offsetWrap.appendChild(offsetUnit);
-          controls.appendChild(offsetWrap);
+          offsetBlock.appendChild(offsetWrap);
+          controls.appendChild(offsetBlock);
         }
         card.appendChild(controls);
         return card;
@@ -343,6 +403,8 @@
           label: (isDraw ? 'Drawing ' : 'Post-it ') + count,
           tagId: null,
           tagId2: null,
+          selectorTagId: isDraw ? null : undefined,
+          selectorTagId2: isDraw ? null : undefined,
           color: isDraw ? '#ff5b5b' : ''
         };
         if (isDraw) slot.offsetCm = defaultDrawOffsetCm;
@@ -433,7 +495,11 @@
         }
         state.slots.forEach(function (slot) {
           add(slot, 'tagId', '');
-          if (slot.tool === 'draw' || slot.tool === 'eraser') add(slot, 'tagId2', 'fold');
+          if (slot.tool === 'draw') {
+            add(slot, 'tagId2', 'fold');
+            add(slot, 'selectorTagId', 'selector');
+            add(slot, 'selectorTagId2', 'selector fold');
+          }
           if (slot.tool === 'keyboard-annotation') {
             add(slot, 'tagId2', 'keyboard');
           }
@@ -491,6 +557,8 @@
         state.slots.forEach(function (slot) {
           if (slot.tagId != null && !allowed[String(slot.tagId)]) slot.tagId = null;
           if (slot.tagId2 != null && !allowed[String(slot.tagId2)]) slot.tagId2 = null;
+          if (slot.selectorTagId != null && !allowed[String(slot.selectorTagId)]) slot.selectorTagId = null;
+          if (slot.selectorTagId2 != null && !allowed[String(slot.selectorTagId2)]) slot.selectorTagId2 = null;
         });
         renderMarkerEditor();
         scheduleMarkerSave();

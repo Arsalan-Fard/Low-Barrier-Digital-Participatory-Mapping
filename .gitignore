@@ -23,6 +23,16 @@ launcher.log
 # Local renderer preference (maplibre/mapbox)
 /data/renderer_config.json
 
+# Facilitator-uploaded data layers & their catalog (per-deployment, not source)
+/data/custom_layers/
+/data/data_layer_catalog.json
+# Large per-deployment source assets for the data layers (uMap backup + export)
+/data/*.umap
+/data/institut_polytechnique_de_paris.geojson
+
+# Runtime-generated marker settings
+/data/marker_settings.json
+
 # Recorded media & audio
 /audio_chunks/
 /backend_recordings/

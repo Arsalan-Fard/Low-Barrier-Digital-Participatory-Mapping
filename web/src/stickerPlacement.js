@@ -32,7 +32,18 @@
       if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
       var color = String(raw.color || '#ff5b5b');
       var tagSizePx = Number(raw.tagSizePx) || 28;
-      return { lng: lng, lat: lat, color: color, tagSizePx: tagSizePx };
+      var pointHoldMs = Number(raw.holdMs);
+      if (!Number.isFinite(pointHoldMs)) pointHoldMs = holdMs;
+      pointHoldMs = Math.max(250, Math.min(10000, pointHoldMs));
+      return {
+        lng: lng,
+        lat: lat,
+        color: color,
+        tagSizePx: tagSizePx,
+        holdMs: pointHoldMs,
+        noText: !!raw.noText,
+        continuousHold: !!raw.continuousHold
+      };
     }
 
     function toPx(lng, lat) {
@@ -221,7 +232,7 @@
     var RING_RADIUS = 22;
     var RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
     var RING_FILL_START_MS = 500; // start showing the ring once the user has held this long
-    var RING_FILL_END_MS = 2000;  // ring is full when this much hold has passed (matches holdMs)
+    var RING_FILL_END_MS = 2000;  // fallback; individual points may request a different hold
 
     function buildProgressRingSvg() {
       var svgNs = 'http://www.w3.org/2000/svg';
@@ -251,9 +262,11 @@
       return { svg: svg, arc: arc };
     }
 
-    function setProgressRing(runtime, elapsedMs) {
+    function setProgressRing(runtime, elapsedMs, targetHoldMs) {
       if (!runtime || !runtime.ringArc || !runtime.ringSvg) return;
-      var progress = (Number(elapsedMs) - RING_FILL_START_MS) / (RING_FILL_END_MS - RING_FILL_START_MS);
+      var fillEndMs = Math.max(250, Number(targetHoldMs) || RING_FILL_END_MS);
+      var fillStartMs = Math.min(RING_FILL_START_MS, fillEndMs * 0.5);
+      var progress = (Number(elapsedMs) - fillStartMs) / Math.max(1, fillEndMs - fillStartMs);
       if (!Number.isFinite(progress) || progress <= 0) {
         runtime.ringSvg.style.opacity = '0';
         runtime.ringArc.setAttribute('stroke-dashoffset', String(RING_CIRCUMFERENCE));
@@ -308,13 +321,15 @@
           dwellStartMs: nowMs,
           lastSeenMs: nowMs,
           anchorPx: currentPx,
-          color: point.color
+          color: point.color,
+          continuousHold: point.continuousHold
         };
         runtimeByTag[key] = r;
         return r;
       }
 
       r.lastSeenMs = nowMs;
+      r.continuousHold = point.continuousHold;
       r.marker.setLngLat([point.lng, point.lat]);
       if (r.color !== point.color) {
         r.color = point.color;
@@ -357,7 +372,7 @@
 
       lastPlacedPxByTag[String(tagId)] = { x: currentPx.x, y: currentPx.y };
       placed.push(item);
-      showCommentDraft(item, '');
+      if (!point.noText) showCommentDraft(item, '');
     }
 
     function effectiveColorForItem(item) {
@@ -440,9 +455,9 @@
         }
 
         var elapsed = nowMs - Number(runtime.dwellStartMs || nowMs);
-        setProgressRing(runtime, elapsed);
+        setProgressRing(runtime, elapsed, point.holdMs);
 
-        if (elapsed >= holdMs) {
+        if (elapsed >= point.holdMs) {
           placeSticker(key, point, currentPx);
           runtime.dwellStartMs = nowMs;
           runtime.anchorPx = currentPx;
@@ -456,6 +471,10 @@
         if (!Object.prototype.hasOwnProperty.call(runtimeByTag, runtimeKey)) continue;
         if (seen[runtimeKey]) continue;
         var r = runtimeByTag[runtimeKey];
+        if (r.continuousHold) {
+          removeRuntime(runtimeKey);
+          continue;
+        }
         if ((nowMs - Number(r.lastSeenMs || 0)) > lostHoldMs) removeRuntime(runtimeKey);
       }
     }

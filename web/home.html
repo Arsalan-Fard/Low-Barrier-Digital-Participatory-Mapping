@@ -234,8 +234,11 @@
       justify-content: center;
       overflow: hidden;
     }
-    #camFeedWrap { position: relative; max-width: 100%; max-height: 100%; }
-    #camFeedWrap img { display: block; max-width: 100%; max-height: 100%; }
+    /* Fill the .view box exactly; the img letterboxes inside via object-fit so
+       it never overflows/clips when the window isn't full-screen. The click and
+       overlay math measures the real rendered image inside this box. */
+    #camFeedWrap { position: absolute; inset: 0; }
+    #camFeedWrap img { display: block; width: 100%; height: 100%; object-fit: contain; }
     #camCanvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
     #camFeed { cursor: crosshair; }
     .view-placeholder { font-size: 13.5px; color: var(--muted); padding: 16px; text-align: center; max-width: 420px; }
@@ -810,18 +813,23 @@
         });
       }
 
+      var smartphoneConnectInFlight = false;
+
       function connectSmartphone() {
         markSource('smartphone');
+        if (smartphoneConnectInFlight) return;
+        smartphoneConnectInFlight = true;
         setStatus(cameraStatus, 'Looking for IP Camera on :8080…');
         connect('smartphone').then(function (res) {
           if (res.data && res.data.ok) {
             setStatus(cameraStatus, 'Connected: ' + (res.data.source || ''), 'ok');
             setCameraConnected(true, res.data.source || '');
           } else {
-            setStatus(cameraStatus, 'No IP camera found — hover Smartphone for the steps, then try again.', 'err');
+            setStatus(cameraStatus, 'No IP camera found — retrying every 10s.', 'err');
             setCameraConnected(false, '');
           }
-        }).catch(function () { setStatus(cameraStatus, 'Network error.', 'err'); });
+        }).catch(function () { setStatus(cameraStatus, 'Network error — retrying every 10s.', 'err'); })
+          .then(function () { smartphoneConnectInFlight = false; });
       }
 
       function connectWebcam() {
@@ -856,6 +864,7 @@
       var activeCornerIndex = null;
       var lastCorners = [null, null, null, null];
       var lastFrame = { width: 0, height: 0 };
+      var lastTags = [];
 
       function startFeed() {
         if (!camFeed.getAttribute('src')) camFeed.src = '/video_feed?q=70&t=' + Date.now();
@@ -986,6 +995,43 @@
         var ctx = camCanvas.getContext('2d');
         ctx.clearRect(0, 0, camCanvas.width, camCanvas.height);
         if (!lastFrame.width || !lastFrame.height) return;
+
+        // Detected AprilTags from /api/tags: green boundary + id label, so you
+        // can confirm the camera is decoding tags before marking corners.
+        var tags = Array.isArray(lastTags) ? lastTags : [];
+        for (var ti = 0; ti < tags.length; ti++) {
+          var tag = tags[ti];
+          if (!tag || !Array.isArray(tag.corners) || tag.corners.length < 4) continue;
+          ctx.beginPath();
+          var valid = true;
+          for (var ci = 0; ci < 4; ci++) {
+            var tc = tag.corners[ci];
+            if (!tc || !isFinite(Number(tc.x)) || !isFinite(Number(tc.y))) { valid = false; break; }
+            var tp = framePoint(tc);
+            if (ci === 0) ctx.moveTo(tp.x, tp.y);
+            else ctx.lineTo(tp.x, tp.y);
+          }
+          if (!valid) continue;
+          ctx.closePath();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#00ff66';
+          ctx.stroke();
+          if (tag.center && isFinite(Number(tag.center.x)) && isFinite(Number(tag.center.y))) {
+            var cp = framePoint(tag.center);
+            ctx.beginPath();
+            ctx.arc(cp.x, cp.y, 4, 0, Math.PI * 2);
+            ctx.fillStyle = '#ff2222';
+            ctx.fill();
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'alphabetic';
+            ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+            ctx.strokeText('id ' + tag.id, cp.x + 7, cp.y - 7);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('id ' + tag.id, cp.x + 7, cp.y - 7);
+          }
+        }
 
         var pts = [];
         var allSet = true;
@@ -1154,6 +1200,7 @@
             if (!data) return;
             if (data.frame) lastFrame = data.frame;
             if (Array.isArray(data.corners)) lastCorners = data.corners;
+            lastTags = Array.isArray(data.tags) ? data.tags : [];
             var haveFrame = !!(lastFrame.width && lastFrame.height);
             if (haveFrame) {
               startFeed();
@@ -1167,6 +1214,16 @@
       pollCameraStatus();
       setInterval(pollCameraStatus, 2500);
       setInterval(pollTags, 150);
+
+      // Auto-retry the smartphone connection every 10s, but ONLY while the
+      // Smartphone source is selected and nothing is connected yet. Selecting
+      // Webcam (or a successful connect) stops the retries.
+      setInterval(function () {
+        if (currentSource !== 'smartphone') return;
+        if (cameraConnected) return;
+        if (smartphoneConnectInFlight) return;
+        connectSmartphone();
+      }, 10000);
     })();
   </script>
 

@@ -96,6 +96,7 @@
     .marker-preview img { width: 88px; height: 88px; object-fit: contain; image-rendering: pixelated; }
     .marker-empty { color: var(--muted); font-size: 13px; text-align: center; }
     .marker-card-label { min-height: 16px; font-size: 12px; font-weight: 700; color: var(--muted); text-align: center; line-height: 1.2; }
+    .marker-card-label.draw-label { text-align: left; }
     .marker-delete {
       position: absolute; top: 6px; left: 6px; width: 24px; height: 24px;
       display: none; align-items: center; justify-content: center;
@@ -117,7 +118,12 @@
     .marker-tag-select:focus { outline: none; border-color: var(--green); }
     .marker-tag-select option.taken { color: #b00000; font-weight: 700; }
     .marker-color { width: 34px; height: 32px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: #fff; cursor: pointer; }
-    .marker-offset-wrap { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 5px; }
+    .marker-tool-selector-row { grid-column: 1 / -1; display: grid; gap: 5px; }
+    .marker-tool-selector-label { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; }
+    .marker-tool-selector-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+    .marker-offset-block { grid-column: 1 / -1; display: grid; gap: 5px; margin-top: 5px; }
+    .marker-offset-label { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; }
+    .marker-offset-wrap { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 5px; }
     .marker-offset {
       width: 100%; height: 32px; min-width: 0; border: 1px solid var(--line); border-radius: 8px;
       background: #fff; color: var(--ink); font: 600 13px var(--font-ui); text-align: center; box-sizing: border-box;

@@ -5,8 +5,12 @@
       "name": "Palaiseau Campus",
       "steps": [
         {
+          "dataLayers": [
+            "custom:umap_backup_institut-polytechnique-de-paris.geojson"
+          ],
           "id": 1,
           "label": "Step 1",
+          "labels": [],
           "mapView": {
             "bearing": 0,
             "center": [
@@ -16,13 +20,14 @@
             "pitch": 0,
             "zoom": 13.994549456578685
           },
-          "theme": "streets",
-          "labels": []
+          "theme": "streets"
         },
         {
+          "dataLayers": [],
           "id": 2,
           "indoor": true,
           "label": "Step 2",
+          "labels": [],
           "mapView": {
             "bearing": 10.315518563441856,
             "center": [
@@ -32,14 +37,15 @@
             "pitch": 0,
             "zoom": 16.07621248462657
           },
-          "theme": "streets",
-          "labels": []
+          "theme": "streets"
         },
         {
+          "dataLayers": [],
           "id": 3,
           "indoor": false,
           "indoorId": "",
           "label": "Step 3",
+          "labels": [],
           "mapView": {
             "bearing": 0,
             "center": [
@@ -49,62 +55,67 @@
             "pitch": 0,
             "zoom": 15.186503936356743
           },
-          "theme": "streets",
-          "labels": []
+          "theme": "streets"
         },
         {
+          "dataLayers": [],
           "id": 4,
           "indoor": false,
           "indoorId": "",
           "label": "Step 4",
+          "labels": [],
           "mapView": null,
-          "theme": "streets",
-          "labels": []
+          "theme": "streets"
         },
         {
+          "dataLayers": [],
           "id": 5,
           "indoor": false,
           "indoorId": "",
           "label": "Step 5",
+          "labels": [],
           "mapView": null,
-          "theme": "streets",
-          "labels": []
+          "theme": "streets"
         },
         {
+          "dataLayers": [],
           "id": 6,
           "indoor": false,
           "indoorId": "",
           "label": "Step 6",
+          "labels": [],
           "mapView": null,
-          "theme": "streets",
-          "labels": []
+          "theme": "streets"
         },
         {
+          "dataLayers": [],
           "id": 7,
           "indoor": false,
           "indoorId": "",
           "label": "Step 7",
+          "labels": [],
           "mapView": null,
-          "theme": "streets",
-          "labels": []
+          "theme": "streets"
         },
         {
+          "dataLayers": [],
           "id": 8,
           "indoor": false,
           "indoorId": "",
           "label": "Step 8",
+          "labels": [],
           "mapView": null,
-          "theme": "streets",
-          "labels": []
+          "theme": "streets"
         },
         {
+          "dataLayers": [],
           "id": 9,
           "indoor": false,
           "indoorId": "",
           "label": "Step 9",
+          "labels": [],
           "mapView": null,
-          "theme": "streets",
-          "labels": []
+          "theme": "streets"
         }
       ]
     },
@@ -113,11 +124,12 @@
       "name": "Saclay",
       "steps": [
         {
+          "dataLayers": [],
           "id": 1,
           "label": "Step 1",
+          "labels": [],
           "mapView": null,
-          "theme": "streets",
-          "labels": []
+          "theme": "streets"
         }
       ]
     },
@@ -126,6 +138,7 @@
       "name": "academie",
       "steps": [
         {
+          "dataLayers": [],
           "id": 1,
           "indoor": true,
           "indoorId": "",
@@ -158,10 +171,12 @@
           "theme": "streets"
         },
         {
+          "dataLayers": [],
           "id": 2,
           "indoor": false,
           "indoorId": "",
           "label": "Step 2",
+          "labels": [],
           "mapView": {
             "bearing": 0,
             "center": [
@@ -171,14 +186,15 @@
             "pitch": 0,
             "zoom": 15
           },
-          "theme": "satellite",
-          "labels": []
+          "theme": "satellite"
         },
         {
+          "dataLayers": [],
           "id": 3,
           "indoor": false,
           "indoorId": "",
           "label": "Step 3",
+          "labels": [],
           "mapView": {
             "bearing": 0,
             "center": [
@@ -188,8 +204,7 @@
             "pitch": 0,
             "zoom": 15
           },
-          "theme": "streets",
-          "labels": []
+          "theme": "streets"
         }
       ]
     },
@@ -198,38 +213,106 @@
       "name": "www",
       "steps": [
         {
+          "dataLayers": [],
           "id": 1,
-          "label": "Step 1",
-          "theme": "streets",
           "indoor": false,
           "indoorId": "",
+          "label": "Step 1",
+          "labels": [],
           "mapView": null,
-          "labels": []
+          "theme": "streets"
         },
         {
+          "dataLayers": [],
           "id": 2,
-          "label": "Tesssxt",
-          "theme": "satellite",
           "indoor": false,
           "indoorId": "",
+          "label": "Tesssxt",
+          "labels": [
+            {
+              "bgOpacity": 0.6,
+              "fontSize": 20,
+              "text": "Tesssxt",
+              "xPct": 0.5,
+              "yPct": 0.5
+            }
+          ],
           "mapView": {
+            "bearing": 0,
             "center": [
               2.1990994784026725,
               48.71300798880603
             ],
-            "zoom": 15.235890286128397,
-            "bearing": 0,
-            "pitch": 0
+            "pitch": 0,
+            "zoom": 15.235890286128397
           },
-          "labels": [
-            {
-              "text": "Tesssxt",
-              "xPct": 0.5,
-              "yPct": 0.5,
-              "fontSize": 20,
-              "bgOpacity": 0.6
-            }
-          ]
+          "theme": "satellite"
+        }
+      ]
+    },
+    {
+      "id": "ws_w5iyk9185t",
+      "name": "Workshop 5",
+      "steps": [
+        {
+          "dataLayers": [
+            "roads"
+          ],
+          "id": 1,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 1",
+          "labels": [],
+          "mapView": null,
+          "theme": "streets"
+        },
+        {
+          "dataLayers": [],
+          "id": 2,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 2",
+          "labels": [],
+          "mapView": null,
+          "theme": "streets"
+        },
+        {
+          "dataLayers": [
+            "roads"
+          ],
+          "id": 3,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 3",
+          "labels": [],
+          "mapView": null,
+          "theme": "streets"
+        }
+      ]
+    },
+    {
+      "id": "ws_47e8se4clu",
+      "name": "Workshop 6",
+      "steps": [
+        {
+          "dataLayers": [],
+          "id": 1,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 1",
+          "labels": [],
+          "mapView": null,
+          "theme": "streets"
+        },
+        {
+          "dataLayers": [],
+          "id": 2,
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 2",
+          "labels": [],
+          "mapView": null,
+          "theme": "streets"
         }
       ]
     }

@@ -97,6 +97,32 @@
       return roadsVisible;
     }
 
+    // Deterministic show/hide (used by the workshop per-step data layers).
+    // Unlike toggleRoads, showing always re-sets the source data so the layer
+    // also recovers after a basemap style reload wiped it.
+    function setRoadsVisible(show, callback) {
+      if (!show) {
+        roadsVisible = false;
+        if (map.getLayer(roadsLayerId)) {
+          map.setLayoutProperty(roadsLayerId, 'visibility', 'none');
+        }
+        if (typeof callback === 'function') callback(null, false);
+        return;
+      }
+      loadRoads(function (err, data) {
+        if (err) {
+          console.error('Failed to load roads:', err);
+          if (typeof callback === 'function') callback(err, roadsVisible);
+          return;
+        }
+        ensureRoadsLayer();
+        map.getSource(roadsSourceId).setData(data);
+        map.setLayoutProperty(roadsLayerId, 'visibility', 'visible');
+        roadsVisible = true;
+        if (typeof callback === 'function') callback(null, true);
+      });
+    }
+
     // --- Snapping logic (no Turf dependency) ---
 
     // Snap geometry (vertex-snap + follow-road) is shared via src/roadSnapGeometry.js.
@@ -153,6 +179,7 @@
       ensureSnappedLayer: ensureSnappedLayer,
       toggleRoads: toggleRoads,
       isRoadsVisible: isRoadsVisible,
+      setRoadsVisible: setRoadsVisible,
       snapAllDrawings: snapAllDrawings,
       loadRoads: loadRoads
     };

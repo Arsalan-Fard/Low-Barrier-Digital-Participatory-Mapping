@@ -85,12 +85,14 @@ TIMELINE_SESSIONS_DIR = SESSIONS_DIR / "timelines"
 EXPO_SESSIONS_DIR = SESSIONS_DIR / "expo"
 CUSTOM_OBJECTS_FILE = ROOT / "data" / "custom_objects.geojson"
 WORKSHOPS_FILE = ROOT / "data" / "workshops.json"
+DATA_LAYER_CATALOG_FILE = ROOT / "data" / "data_layer_catalog.json"
 RENDERER_CONFIG_FILE = ROOT / "data" / "renderer_config.json"
 MARKER_SETTINGS_FILE = ROOT / "data" / "marker_settings.json"
 AUDIO_CHUNKS_DIR = ROOT / "audio_chunks"
 BACKEND_RECORDINGS_DIR = ROOT / "backend_recordings"
 camera_recorder = None   # CameraVoiceRecorder instance (created in main); shared by the Ctrl+Shift+R hotkey and /api/record
 OSMNX_NETWORK_FILE = ROOT / "data" / "osmnx_network.geojson"
+CUSTOM_LAYERS_DIR = ROOT / "data" / "custom_layers"
 OSMNX_GRAPH_CACHE = {"graph": None, "bbox": None, "loadedAt": 0.0}
 osmnx_lock = threading.Lock()
 FLOORPLAN_DIR = ROOT / "floorplan"
@@ -575,17 +577,15 @@ def save_mapbox_token(token):
 
 DEFAULT_DRAW_OFFSET_CM = 3.0
 MARKER_SLOT_DEFAULTS = [
-    {"key": "draw-1", "group": "Drawing", "tool": "draw", "label": "Drawing 1", "tagId": 11, "color": "#ff5b5b", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
-    {"key": "draw-2", "group": "Drawing", "tool": "draw", "label": "Drawing 2", "tagId": 12, "color": "#3b82f6", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
-    {"key": "draw-3", "group": "Drawing", "tool": "draw", "label": "Drawing 3", "tagId": 13, "color": "#22cc66", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
-    {"key": "draw-4", "group": "Drawing", "tool": "draw", "label": "Drawing 4", "tagId": 14, "color": "#111111", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
-    {"key": "eraser-1", "group": "Tools", "tool": "eraser", "label": "Eraser", "tagId": 20, "tagId2": 19, "color": "", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
+    {"key": "draw-1", "group": "Drawing", "tool": "draw", "label": "Pointer", "tagId": 11, "tagId2": None, "selectorTagId": 20, "selectorTagId2": 19, "color": "#ff5b5b", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
+    {"key": "draw-2", "group": "Drawing", "tool": "draw", "label": "Drawing 2", "tagId": 12, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#3b82f6", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
+    {"key": "draw-3", "group": "Drawing", "tool": "draw", "label": "Drawing 3", "tagId": 13, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#22cc66", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
+    {"key": "draw-4", "group": "Drawing", "tool": "draw", "label": "Drawing 4", "tagId": 14, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#111111", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
     {"key": "route-origin", "group": "Shortest-path", "tool": "route-origin", "label": "Route start", "tagId": 9, "color": ""},
     {"key": "route-dest", "group": "Shortest-path", "tool": "route-dest", "label": "Route end", "tagId": 10, "color": ""},
     {"key": "isochrone-5", "group": "Analysis", "tool": "isochrone", "label": "Isochrone 5 min", "tagId": 38, "color": "", "minutes": 5},
     {"key": "isochrone-15", "group": "Analysis", "tool": "isochrone", "label": "Isochrone 15 min", "tagId": 37, "color": "", "minutes": 15},
     {"key": "isovist-1", "group": "Analysis", "tool": "isovist", "label": "Isovist", "tagId": 39, "color": ""},
-    {"key": "drag-1", "group": "Tools", "tool": "drag", "label": "Dragging", "tagId": 24, "color": ""},
     # "Comment": one fixed keyboard-location tag + one-or-more post-it tags.
     # The map runtime pairs each post-it with the shared keyboard location.
     {"key": "comment-keyboard", "group": "Comment", "tool": "comment-keyboard", "label": "Keyboard location", "tagId": 1, "color": ""},
@@ -596,8 +596,9 @@ MARKER_COLOR_TOOLS = {"draw"}
 # defaults (never in REMOVABLE_TOOLS, so they are always kept).
 MARKER_EXTRA_TOOLS = {"draw", "comment-postit"}
 MARKER_REMOVABLE_TOOLS = {"draw"}
-MARKER_MULTI_TAG_TOOLS = {"draw", "eraser"}
-MARKER_OFFSET_TOOLS = {"draw", "eraser"}
+MARKER_MULTI_TAG_TOOLS = {"draw"}
+MARKER_SELECTOR_PAIR_TOOLS = {"draw"}
+MARKER_OFFSET_TOOLS = {"draw"}
 MARKER_FAMILY_RE = re.compile(r"^(tag\d+h\d+)_(\d+)\.svg$", re.IGNORECASE)
 APRILTAG_GENERATOR_FAMILY_MAP = {
     "tag16h5": cv2.aruco.DICT_APRILTAG_16h5,
@@ -730,6 +731,9 @@ def sanitize_marker_settings(payload):
         for slot in incoming_slots
         if isinstance(slot, dict) and slot.get("key") is not None
     }
+    # Migrate the former global tool-selection/eraser pair onto Drawing 1.
+    # Once saved, these values live directly on the drawing slot.
+    legacy_selector = incoming_by_key.get("eraser-1", {})
 
     slots = []
     for default_slot in MARKER_SLOT_DEFAULTS:
@@ -745,6 +749,20 @@ def sanitize_marker_settings(payload):
         if tool in MARKER_MULTI_TAG_TOOLS:
             tag_id2 = sanitize_marker_tag_id(src.get("tagId2", default_slot.get("tagId2")), allowed_ids)
             slot["tagId2"] = tag_id2 if tag_id2 != tag_id else None
+        if tool in MARKER_SELECTOR_PAIR_TOOLS:
+            selector_default = default_slot.get("selectorTagId")
+            selector_default2 = default_slot.get("selectorTagId2")
+            if default_slot["key"] == "draw-1" and legacy_selector:
+                selector_default = legacy_selector.get("tagId", selector_default)
+                selector_default2 = legacy_selector.get("tagId2", selector_default2)
+            selector_id = sanitize_marker_tag_id(src.get("selectorTagId", selector_default), allowed_ids)
+            selector_id2 = sanitize_marker_tag_id(src.get("selectorTagId2", selector_default2), allowed_ids)
+            if selector_id in {tag_id, slot.get("tagId2")}:
+                selector_id = None
+            if selector_id2 in {tag_id, slot.get("tagId2"), selector_id}:
+                selector_id2 = None
+            slot["selectorTagId"] = selector_id
+            slot["selectorTagId2"] = selector_id2
         if tool in MARKER_OFFSET_TOOLS:
             slot["offsetCm"] = sanitize_marker_offset_cm(
                 src.get("offsetCm", default_slot.get("offsetCm", DEFAULT_DRAW_OFFSET_CM)),
@@ -777,6 +795,15 @@ def sanitize_marker_settings(payload):
         if tool in MARKER_MULTI_TAG_TOOLS:
             tag_id2 = sanitize_marker_tag_id(src.get("tagId2"), allowed_ids)
             extra["tagId2"] = tag_id2 if tag_id2 != tag_id else None
+        if tool in MARKER_SELECTOR_PAIR_TOOLS:
+            selector_id = sanitize_marker_tag_id(src.get("selectorTagId"), allowed_ids)
+            selector_id2 = sanitize_marker_tag_id(src.get("selectorTagId2"), allowed_ids)
+            if selector_id in {tag_id, extra.get("tagId2")}:
+                selector_id = None
+            if selector_id2 in {tag_id, extra.get("tagId2"), selector_id}:
+                selector_id2 = None
+            extra["selectorTagId"] = selector_id
+            extra["selectorTagId2"] = selector_id2
         if tool in MARKER_OFFSET_TOOLS:
             extra["offsetCm"] = sanitize_marker_offset_cm(src.get("offsetCm"), DEFAULT_DRAW_OFFSET_CM)
         slots.append(extra)
@@ -4471,6 +4498,278 @@ def api_custom_objects_save():
         return jsonify({"ok": True, "path": CUSTOM_OBJECTS_FILE.name})
     except Exception:
         return jsonify({"ok": False, "error": "write_failed"}), 500
+
+
+# ---- Custom data layers (facilitator-uploaded GeoJSON, data/custom_layers/).
+# Selectable per workshop step next to the built-in roads/network/objects
+# layers; may contain points, lines and/or areas.
+
+CUSTOM_LAYER_MAX_BYTES = 60 * 1024 * 1024
+BUILTIN_DATA_LAYERS = (
+    {"id": "roads", "name": "Roads"},
+    {"id": "network", "name": "Street network (OSMnx)"},
+    {"id": "objects", "name": "Custom objects"},
+)
+
+
+def _load_hidden_data_layers():
+    """Layer ids removed from the global catalog; source files stay intact."""
+    if not DATA_LAYER_CATALOG_FILE.exists():
+        return set()
+    try:
+        payload = json.loads(DATA_LAYER_CATALOG_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    hidden = payload.get("hidden") if isinstance(payload, dict) else None
+    return {str(layer_id) for layer_id in hidden} if isinstance(hidden, list) else set()
+
+
+def _save_hidden_data_layers(hidden):
+    DATA_LAYER_CATALOG_FILE.parent.mkdir(exist_ok=True)
+    DATA_LAYER_CATALOG_FILE.write_text(
+        json.dumps({"hidden": sorted(set(hidden))}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _hide_data_layer(layer_id):
+    hidden = _load_hidden_data_layers()
+    hidden.add(str(layer_id))
+    _save_hidden_data_layers(hidden)
+
+
+def _show_data_layer(layer_id):
+    hidden = _load_hidden_data_layers()
+    hidden.discard(str(layer_id))
+    _save_hidden_data_layers(hidden)
+
+
+def _safe_layer_name(name):
+    """Sanitize an uploaded filename to a bare, safe .geojson basename."""
+    base = os.path.basename(str(name or "")).strip()
+    base = re.sub(r"[^A-Za-z0-9 ._-]", "_", base)
+    base = base.lstrip(".")
+    stem, _ext = os.path.splitext(base)
+    stem = stem.strip() or "layer"
+    return stem + ".geojson"
+
+
+def _custom_layer_path_for_id(layer_id):
+    """Resolve a custom-layer id (filename) to a path inside CUSTOM_LAYERS_DIR,
+    or None if it isn't a real .geojson within that directory (no traversal)."""
+    name = os.path.basename(str(layer_id or ""))
+    if not name.lower().endswith(".geojson"):
+        return None
+    candidate = (CUSTOM_LAYERS_DIR / name).resolve()
+    try:
+        candidate.relative_to(CUSTOM_LAYERS_DIR.resolve())
+    except ValueError:
+        return None
+    return candidate if candidate.exists() else None
+
+
+def list_custom_layers(include_hidden=False):
+    """Uploaded .geojson catalog entries as [{id, name}], newest first."""
+    if not CUSTOM_LAYERS_DIR.exists():
+        return []
+    hidden = set() if include_hidden else _load_hidden_data_layers()
+    files = sorted(CUSTOM_LAYERS_DIR.glob("*.geojson"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return [
+        {"id": f.name, "name": f.stem}
+        for f in files
+        if "custom:" + f.name not in hidden
+    ]
+
+
+def list_data_layers():
+    """The global catalog used by every workshop; hidden files are retained."""
+    hidden = _load_hidden_data_layers()
+    layers = [dict(layer) for layer in BUILTIN_DATA_LAYERS if layer["id"] not in hidden]
+    layers.extend({"id": "custom:" + layer["id"], "name": layer["name"]}
+                  for layer in list_custom_layers())
+    return layers
+
+
+def _as_feature_collection(data):
+    """Normalize an uploaded GeoJSON or uMap backup to a FeatureCollection."""
+    if not isinstance(data, dict):
+        return None
+    kind = data.get("type")
+    if kind == "umap":
+        layers = data.get("layers")
+        if not isinstance(layers, list) or not layers:
+            return None
+        features = []
+        manifest_layers = []
+        # uMap backups store data layers in the inverse of the order displayed
+        # by the caption/browser. Reverse both the manifest and flattened
+        # features so our editor matches the visible uMap layer list.
+        for index, layer in enumerate(reversed(layers)):
+            if not isinstance(layer, dict) or layer.get("type") != "FeatureCollection":
+                return None
+            layer_features = layer.get("features")
+            if not isinstance(layer_features, list):
+                return None
+            if any(not isinstance(feature, dict) for feature in layer_features):
+                return None
+            layer_properties = layer.get("properties")
+            layer_options = layer.get("_umap_options")
+            options = {}
+            if isinstance(layer_properties, dict):
+                options.update(layer_properties)
+            if isinstance(layer_options, dict):
+                options.update(layer_options)
+            name = str(options.get("name") or "Layer " + str(index + 1)).strip()
+            layer_id = str(options.get("id") or layer.get("id") or "layer-" + str(index + 1))
+            manifest_layers.append({
+                "id": layer_id,
+                "name": name,
+                "count": len(layer_features),
+                "options": options,
+            })
+            features.extend(layer_features)
+        map_properties = data.get("properties") if isinstance(data.get("properties"), dict) else {}
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "properties": {
+                "name": map_properties.get("name") or "uMap import",
+                "_compact_workshop_layers": {
+                    "source": "uMap backup",
+                    "featureCount": len(features),
+                    "layers": manifest_layers,
+                },
+            },
+        }
+    if kind == "FeatureCollection":
+        feats = data.get("features")
+        if not isinstance(feats, list):
+            return None
+        normalized = {"type": "FeatureCollection", "features": feats}
+        # Keep collection-level metadata. uMap and similar editors use it for
+        # data-layer definitions and inherited styling.
+        if isinstance(data.get("properties"), dict):
+            normalized["properties"] = data["properties"]
+        return normalized
+    if kind == "Feature":
+        if not isinstance(data.get("geometry"), dict):
+            return None
+        return {"type": "FeatureCollection", "features": [data]}
+    if kind in ("Point", "MultiPoint", "LineString", "MultiLineString",
+                "Polygon", "MultiPolygon", "GeometryCollection"):
+        return {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {}, "geometry": data}
+        ]}
+    return None
+
+
+@app.route("/api/custom-layers", methods=["GET"])
+def api_custom_layers_list():
+    return jsonify({"ok": True, "layers": list_custom_layers()})
+
+
+@app.route("/api/data-layers", methods=["GET"])
+def api_data_layers_list():
+    return jsonify({"ok": True, "layers": list_data_layers()})
+
+
+@app.route("/api/custom-layers", methods=["POST"])
+def api_custom_layers_upload():
+    file_storage = request.files.get("file")
+    if file_storage is None or not (file_storage.filename or "").strip():
+        return jsonify({"ok": False, "error": "no_file"}), 400
+    if not file_storage.filename.lower().endswith((".geojson", ".json", ".umap")):
+        return jsonify({"ok": False, "error": "not_geojson"}), 400
+    raw = file_storage.read(CUSTOM_LAYER_MAX_BYTES + 1)
+    if len(raw) > CUSTOM_LAYER_MAX_BYTES:
+        return jsonify({"ok": False, "error": "too_large"}), 400
+    try:
+        data = json.loads(raw.decode("utf-8-sig"))
+    except Exception:
+        return jsonify({"ok": False, "error": "invalid_json"}), 400
+    normalized = _as_feature_collection(data)
+    if normalized is None:
+        return jsonify({"ok": False, "error": "not_geojson"}), 400
+    CUSTOM_LAYERS_DIR.mkdir(parents=True, exist_ok=True)
+    name = _safe_layer_name(file_storage.filename)
+    dest = CUSTOM_LAYERS_DIR / name
+    # Avoid clobbering a visible layer. Re-uploading a hidden file with the
+    # same name intentionally replaces it and makes its catalog entry visible.
+    hidden = _load_hidden_data_layers()
+    if dest.exists() and "custom:" + name not in hidden:
+        stem, ext = os.path.splitext(name)
+        n = 2
+        while (CUSTOM_LAYERS_DIR / (stem + " (" + str(n) + ")" + ext)).exists():
+            n += 1
+        name = stem + " (" + str(n) + ")" + ext
+        dest = CUSTOM_LAYERS_DIR / name
+    try:
+        dest.write_text(json.dumps(normalized, ensure_ascii=False), encoding="utf-8")
+        _show_data_layer("custom:" + name)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": "save_failed", "detail": str(exc)}), 500
+    return jsonify({"ok": True, "id": name, "name": dest.stem, "layers": list_custom_layers()})
+
+
+@app.route("/api/custom-layers/<path:layer_id>", methods=["GET"])
+def api_custom_layers_get(layer_id):
+    # Served here (not via /data/) so it works in the frozen bundle too, where
+    # uploads land in the user data dir rather than the bundled resources.
+    path = _custom_layer_path_for_id(layer_id)
+    if path is None:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    # A flattened uMap export can be accompanied by a tiny .layers.json
+    # manifest. Attach it as collection metadata without rewriting or
+    # duplicating the potentially large GeoJSON file.
+    manifest_path = path.with_suffix(".layers.json")
+    if manifest_path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            if isinstance(payload, dict) and isinstance(manifest, dict):
+                properties = payload.get("properties")
+                if not isinstance(properties, dict):
+                    properties = {}
+                    payload["properties"] = properties
+                properties["_compact_workshop_layers"] = manifest
+                return jsonify(payload)
+        except Exception:
+            # A bad optional manifest must not make the uploaded GeoJSON
+            # unavailable; serve the original file as the safe fallback.
+            pass
+    return send_from_directory(CUSTOM_LAYERS_DIR, path.name, mimetype="application/geo+json")
+
+
+@app.route("/api/custom-layers/<path:layer_id>", methods=["DELETE"])
+def api_custom_layers_delete(layer_id):
+    path = _custom_layer_path_for_id(layer_id)
+    if path is None:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    try:
+        _hide_data_layer("custom:" + path.name)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": "delete_failed", "detail": str(exc)}), 500
+    return jsonify({"ok": True, "layers": list_custom_layers()})
+
+
+@app.route("/api/data-layers/<path:layer_id>", methods=["DELETE"])
+def api_data_layers_delete(layer_id):
+    layer_id = str(layer_id or "")
+    builtin_ids = {layer["id"] for layer in BUILTIN_DATA_LAYERS}
+    if layer_id in builtin_ids:
+        valid = True
+    elif layer_id.startswith("custom:"):
+        valid = _custom_layer_path_for_id(layer_id[len("custom:"):]) is not None
+    else:
+        valid = False
+    if not valid:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    try:
+        _hide_data_layer(layer_id)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": "delete_failed", "detail": str(exc)}), 500
+    return jsonify({"ok": True, "layers": list_data_layers()})
+
 
 
 @app.route("/api/workshops", methods=["GET"])

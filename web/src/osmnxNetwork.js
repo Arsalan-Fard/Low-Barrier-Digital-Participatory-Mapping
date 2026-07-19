@@ -8,13 +8,15 @@
     var bbox = null;
     var visible = false;
     var fetchInFlight = false;
+    var networkData = null;      // last GeoJSON shown, re-applied after style reloads
+    var cachedCallbacks = null;  // pending showCached() callbacks while the file loads
 
     function ensureLayer() {
       if (!map) return;
       if (!map.getSource(NETWORK_SOURCE_ID)) {
         map.addSource(NETWORK_SOURCE_ID, {
           type: 'geojson',
-          data: { type: 'FeatureCollection', features: [] }
+          data: networkData || { type: 'FeatureCollection', features: [] }
         });
       }
       if (!map.getLayer(NETWORK_LAYER_ID)) {
@@ -37,6 +39,7 @@
     }
 
     function setData(geojson) {
+      networkData = geojson || null;
       ensureLayer();
       var src = map && map.getSource(NETWORK_SOURCE_ID);
       if (src) src.setData(geojson || { type: 'FeatureCollection', features: [] });
@@ -60,6 +63,32 @@
 
     function isFetching() {
       return fetchInFlight;
+    }
+
+    // Load the network GeoJSON from the bundled data/osmnx_network.geojson (the
+    // same cache the server loads for routing). Reuses whatever is already
+    // loaded (cached file or a live fetch). Does NOT touch visibility — callers
+    // decide that once the load lands (so a slow load can't force the layer on
+    // after the caller changed its mind). callback(err, geojson).
+    function loadCached(callback) {
+      if (typeof callback !== 'function') callback = function () {};
+      if (networkData) { callback(null, networkData); return; }
+      if (cachedCallbacks) { cachedCallbacks.push(callback); return; }
+      cachedCallbacks = [callback];
+      fetch('data/osmnx_network.geojson')
+        .then(function (res) {
+          if (!res.ok) throw new Error('http_' + res.status);
+          return res.json();
+        })
+        .then(function (geojson) {
+          setData(geojson);
+          var cbs = cachedCallbacks; cachedCallbacks = null;
+          cbs.forEach(function (cb) { cb(null, geojson); });
+        })
+        .catch(function (err) {
+          var cbs = cachedCallbacks; cachedCallbacks = null;
+          cbs.forEach(function (cb) { cb(err, null); });
+        });
     }
 
     // Fetch road network for the current map viewport and cache it on the server.
@@ -109,7 +138,8 @@
       hasNetwork: hasNetwork,
       getBbox: getBbox,
       isFetching: isFetching,
-      setVisible: setVisible
+      setVisible: setVisible,
+      loadCached: loadCached
     };
   }
 

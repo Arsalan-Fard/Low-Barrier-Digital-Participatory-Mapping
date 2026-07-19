@@ -57,12 +57,12 @@ const FOLD_LASER_MAX_POINTS = 14;         // cap per pair
 const foldLaserTrails = {};               // pair key -> [{lng,lat,at}]
 const DRAW_PAIRS = (tagAssignments && typeof tagAssignments.getDrawPairs === 'function')
   ? tagAssignments.getDrawPairs() : [];
-const ERASER_PAIRS = (tagAssignments && typeof tagAssignments.getEraserPairs === 'function')
-  ? tagAssignments.getEraserPairs() : [];
+const TOOL_SELECTOR_PAIRS = (tagAssignments && typeof tagAssignments.getToolSelectorPairs === 'function')
+  ? tagAssignments.getToolSelectorPairs() : [];
 // Eraser fold-pen overlay uses a neutral color so it reads as "erase", not "draw".
 const FOLD_ERASER_COLOR = '#e5e7eb';
-// Draw + eraser pairs share the same fold/open driver; pair.tool selects the action.
-const FOLD_PAIRS = DRAW_PAIRS.concat(ERASER_PAIRS);
+// Drawing and selector pairs share the same fold/open geometry driver.
+const FOLD_PAIRS = DRAW_PAIRS.concat(TOOL_SELECTOR_PAIRS);
 const KEYBOARD_ANNOTATION_SLOTS = (tagAssignments && typeof tagAssignments.getKeyboardAnnotationSlots === 'function')
   ? tagAssignments.getKeyboardAnnotationSlots() : [];
 const KEYBOARD_ANNOTATION_TAG_IDS = new Set();
@@ -109,6 +109,7 @@ const FLOORPLAN_LAYER_ID = 'floorplan-lines';
 const FLOORPLAN_ANALYSIS_HEIGHT = 4096;
 const floorplanBlankStyle = {
   version: 8,
+  glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
   sources: {},
   layers: [
     { id: 'floorplan-bg', type: 'background', paint: { 'background-color': '#f8f7f2' } }
@@ -212,16 +213,15 @@ const DRAW_TOOL_MENU_OPTIONS = [
   { key: 'select', label: 'Select', angleDeg: 180, accent: '#7dd3fc' }
 ];
 const CURSOR_TOOL_MODE_CYCLE = ['draw', 'comment', 'erase', 'select'];
-// Tool-selection fold pair (the "Tool selection" slot, ex-eraser): while the
-// pair rests unfolded, a 180° arc of tool buttons floats above it; folding
-// (pressing) with the pen tip aimed at a button selects that tool, folding
-// anywhere else applies the selected tool at the tip.
+// Each drawing slot may own a tool-selection fold pair. While the selector
+// rests unfolded, a static arc menu appears; folding toward an option changes
+// the mode of that slot's drawing pair.
 const TOOL_PAIR_MENU_RADIUS_PX = 96;
 const TOOL_PAIR_MENU_OPTIONS = [
   { key: 'draw', label: 'Draw', angleDeg: -157.5, accent: '#ff6b6b' },
   { key: 'erase', label: 'Erase', angleDeg: -112.5, accent: '#f8fafc' },
-  { key: 'comment', label: 'Comment', angleDeg: -67.5, accent: '#facc15' },
-  { key: 'select', label: 'Select', angleDeg: -22.5, accent: '#7dd3fc' }
+  { key: 'select', label: 'Select', angleDeg: -67.5, accent: '#7dd3fc' },
+  { key: 'sticker', label: 'Sticker', angleDeg: -22.5, accent: '#facc15' }
 ];
 const TOOL_PAIR_MENU_MAX_ANGLE_DEG = 34;
 const TOOL_PAIR_DRAW_COLOR = '#ff5b5b';
@@ -274,13 +274,10 @@ if (map && typeof map.on === 'function') {
 const drawToolModeByTagId = { 11: 'draw', 12: 'draw', 13: 'draw', 14: 'draw' };
 const drawToolMenuRuntimeBySelectorId = {};
 let drawToolMenuRoot = null;
-// Tool-selection pair state: mode currently assigned to the pair, its arc-menu
-// runtime, and per-frame data published by applyFoldPairs().
-let toolPairMode = 'erase';
-let toolPairMenuRuntime = null;
-let toolPairWasOpen = false;
-let toolPairPressConsumed = false;
-let toolPairFrame = null;
+// Runtime is independent per drawing slot: each selector pair controls only
+// its own drawing pair and keeps a separately anchored menu.
+const toolPairRuntimeByKey = {};
+let toolPairFramesByKey = {};
 
 const markers = new Map();
 let debugMarkersVisible = true;
@@ -387,6 +384,9 @@ const routing = window.CompactRouting.createRouting({
 });
 const osmnxNetwork = window.CompactOsmnxModule.createOsmnxNetwork({ map });
 window.CompactOsmnx = osmnxNetwork;
+const customGeoLayers = window.CompactCustomGeojsonLayers.createCustomGeojsonLayers({ map });
+// Shared with the workshop editor (upload/delete UI) so both use one registry.
+window.CompactCustomGeoLayers = customGeoLayers;
 
 // Active workshop run metadata. Set by the workshop runtime so saved sessions
 // (collectAll in dataExport.js) can be grouped by workshop in the results view.
@@ -396,12 +396,47 @@ let activeWorkshopMeta = null;
 // of creating duplicates. Reset when a workshop starts; cleared on exit.
 let workshopSessionFile = '';
 let mapStyleReadyCallbacks = [];
+// Monotonic token for the data-layer applier: each application bumps it, and
+// async loads capture it so a stale callback (e.g. a big roads.geojson fetch
+// finishing after the user moved to another workshop step) is discarded
+// instead of overriding the newer step's layer state.
+let dataLayerSeq = 0;
+// Data layers activated by the current workshop step (via setDataLayers) and
+// the subset the facilitator has toggled OFF from the Layers picker. The
+// hidden set resets on every step change, so each step opens with its
+// authored layers visible.
+let activeDataLayerIds = [];
+let dataLayerHidden = {};
+const DATA_LAYER_LABELS = {
+  roads: 'Roads',
+  network: 'Street network (OSMnx)',
+  objects: 'Custom objects'
+};
+// Uploaded GeoJSON layers are referenced in a step's dataLayers as
+// 'custom:<file id>'; their display names come from the customGeoLayers
+// registry (/api/custom-layers).
+const CUSTOM_LAYER_PREFIX = 'custom:';
+
+function isCustomDataLayerId(id) {
+  return String(id || '').indexOf(CUSTOM_LAYER_PREFIX) === 0;
+}
+
+function dataLayerLabel(id) {
+  id = String(id || '');
+  if (DATA_LAYER_LABELS[id]) return DATA_LAYER_LABELS[id];
+  if (isCustomDataLayerId(id)) {
+    return customGeoLayers.getName(id.slice(CUSTOM_LAYER_PREFIX.length)) || 'Custom layer';
+  }
+  return id;
+}
 // True between a setStyle() call (in setMapTheme) and the 'style.load' that
 // finishes the reload. While set, whenMapStyleReady must NOT trust
 // isStyleLoaded() — Mapbox can still report the outgoing style as loaded right
 // after setStyle(), which would run layer setup against the dying style and
 // skip the real reload's flush.
 let styleReloadPending = false;
+// False until the first 'style.load' — before that, layer setup must wait.
+let mapStyleEverLoaded = false;
 
 function flushMapStyleReadyCallbacks() {
   var callbacks = mapStyleReadyCallbacks.slice();
@@ -417,16 +452,19 @@ function flushMapStyleReadyCallbacks() {
 
 onMapStyleLoad = function () {
   styleReloadPending = false;
+  mapStyleEverLoaded = true;
   ensureCustomLayers();
   flushMapStyleReadyCallbacks();
 };
 
 function whenMapStyleReady(callback) {
   if (typeof callback !== 'function') return;
-  // If a setStyle() reload is in flight, always defer: isStyleLoaded() may lie
-  // about the outgoing style. The callback runs from onMapStyleLoad once the
-  // new style's layers exist.
-  if (!styleReloadPending && map && typeof map.isStyleLoaded === 'function' && map.isStyleLoaded()) {
+  // Defer only while a setStyle() reload is in flight (its 'style.load' will
+  // flush the queue) or before the initial style ever loaded. Do NOT gate on
+  // isStyleLoaded(): it also goes false while tiles/source data are merely
+  // loading — no 'style.load' follows those, so callbacks would strand in the
+  // queue until the next basemap switch and apply one step late.
+  if (!styleReloadPending && mapStyleEverLoaded && map) {
     ensureCustomLayers();
     callback();
     return;
@@ -609,8 +647,89 @@ window.CompactMapApp = {
     if (ov.annotations != null && keyboardAnnotationPlacement && typeof keyboardAnnotationPlacement.setVisibleSteps === 'function') {
       keyboardAnnotationPlacement.setVisibleSteps(ov.annotations ? null : new Set());
     }
+  },
+  // Per-step data layers from data/ — 'roads' (roads.geojson), 'network'
+  // (osmnx_network.geojson), 'objects' (custom_objects.geojson markers).
+  // Shows exactly the listed set; anything omitted is hidden. Used by the
+  // workshop editor/runtime. Each call supersedes the previous one: slow
+  // GeoJSON loads finish loading but no longer flip visibility, so a layer
+  // checked on step 1 can't pop in after moving to a step where it's off.
+  setDataLayers: function (ids) {
+    activeDataLayerIds = [];
+    (Array.isArray(ids) ? ids : []).forEach(function (id) {
+      id = String(id);
+      var known = DATA_LAYER_LABELS[id] || isCustomDataLayerId(id);
+      if (known && activeDataLayerIds.indexOf(id) === -1) activeDataLayerIds.push(id);
+    });
+    dataLayerHidden = {};  // each step opens with its authored layers visible
+    applyActiveDataLayers();
+  },
+  // Activated data layers of the current step with their live visibility, for
+  // the map-page Layers picker: [{ id, label, visible }]. Empty when no step
+  // activates any.
+  getDataLayerState: function () {
+    return activeDataLayerIds.map(function (id) {
+      return { id: id, label: dataLayerLabel(id), visible: !dataLayerHidden[id] };
+    });
+  },
+  // Facilitator show/hide for ONE activated layer (Layers picker). Doesn't
+  // change the step's authored set; resets on the next step change. Returns
+  // the new visibility (false if the id isn't activated on this step).
+  toggleDataLayer: function (id) {
+    id = String(id || '');
+    if (activeDataLayerIds.indexOf(id) === -1) return false;
+    dataLayerHidden[id] = !dataLayerHidden[id];
+    applyActiveDataLayers();
+    return !dataLayerHidden[id];
   }
 };
+
+// Apply the activated data layers minus the facilitator-hidden ones. Guarded
+// by dataLayerSeq (stale async loads are discarded) and deferred past any
+// in-flight basemap reload — layer writes to a dying style are wiped,
+// stranding the modules' visibility flags out of sync.
+function applyActiveDataLayers() {
+  var want = {};
+  var wantCustom = [];
+  activeDataLayerIds.forEach(function (id) {
+    if (dataLayerHidden[id]) return;
+    if (isCustomDataLayerId(id)) wantCustom.push(id.slice(CUSTOM_LAYER_PREFIX.length));
+    else want[id] = true;
+  });
+  var seq = ++dataLayerSeq;
+  whenMapStyleReady(function () {
+    if (seq !== dataLayerSeq) return;
+    if (want.roads) {
+      roadSnapping.loadRoads(function (err) {
+        if (err || seq !== dataLayerSeq) return;
+        roadSnapping.setRoadsVisible(true);  // data cached now → applies sync
+      });
+    } else {
+      roadSnapping.setRoadsVisible(false);
+    }
+    if (want.network) {
+      osmnxNetwork.loadCached(function (err) {
+        if (seq !== dataLayerSeq) return;
+        if (err) {
+          setUiNote('No OSMnx network available (press g to fetch one)');
+          refreshHud();
+          return;
+        }
+        osmnxNetwork.setVisible(true);
+      });
+    } else {
+      osmnxNetwork.setVisible(false);
+    }
+    customMapObjects.setPresentationMode(want.objects ? 'expanded' : 'hidden');
+    customGeoLayers.hideAllExcept(wantCustom);
+    wantCustom.forEach(function (cid) {
+      customGeoLayers.loadLayer(cid, function (err) {
+        if (err || seq !== dataLayerSeq) return;
+        customGeoLayers.setLayerVisible(cid, true);
+      });
+    });
+  });
+}
 
 let lastTags = [];
 let lastSource = 'unknown';
@@ -719,9 +838,9 @@ function angleDelta(newA, oldA) {
 function normalizeDrawToolMode(raw) {
   var key = String(raw || '').toLowerCase();
   if (key === 'drag') return 'select';
-  if (key === 'sticker') return 'comment';
   if (key === 'none' || key === '') return 'none';
-  return key === 'erase' || key === 'select' || key === 'comment' || key === 'draw' ? key : 'draw';
+  return key === 'erase' || key === 'select' || key === 'comment'
+    || key === 'sticker' || key === 'draw' ? key : 'draw';
 }
 
 function normalizePhoneControllerMode(raw) {
@@ -1082,53 +1201,56 @@ function syncDrawToolMenus(canShowMenus, selectorViewportPoints, visibleDrawTagM
   }
 }
 
-// ── Tool-selection fold pair (renamed eraser) ────────────────────────────────
-function toolPairOptionByKey(key) {
-  for (var i = 0; i < TOOL_PAIR_MENU_OPTIONS.length; i++) {
-    if (TOOL_PAIR_MENU_OPTIONS[i].key === key) return TOOL_PAIR_MENU_OPTIONS[i];
+// ── Per-drawing tool-selection fold pairs ───────────────────────────────────
+function toolPairState(pairKey, drawTagId) {
+  var key = String(pairKey);
+  var state = toolPairRuntimeByKey[key];
+  if (!state) {
+    state = {
+      mode: currentDrawToolMode(drawTagId),
+      menuRuntime: null,
+      wasOpen: false,
+      pressConsumed: false
+    };
+    toolPairRuntimeByKey[key] = state;
   }
-  return null;
+  return state;
 }
 
-// Laser/ghost overlay color for the pair follows the selected tool, so the
-// pen tip itself tells you what the next press will do.
-function toolPairLaserColor() {
-  if (toolPairMode === 'draw') return TOOL_PAIR_DRAW_COLOR;
-  if (toolPairMode === 'erase') return FOLD_ERASER_COLOR;
-  var option = toolPairOptionByKey(toolPairMode);
-  return option ? option.accent : FOLD_ERASER_COLOR;
+function toolPairLaserColor(pair) {
+  var mode = toolPairState(pair.key, pair.drawTagId).mode;
+  if (mode === 'draw') return TOOL_PAIR_DRAW_COLOR;
+  if (mode === 'erase') return FOLD_ERASER_COLOR;
+  if (mode === 'sticker') return '#facc15';
+  return '#7dd3fc';
 }
 
-function removeToolPairMenu() {
-  if (toolPairMenuRuntime && toolPairMenuRuntime.container && toolPairMenuRuntime.container.parentNode) {
-    toolPairMenuRuntime.container.parentNode.removeChild(toolPairMenuRuntime.container);
+function removeToolPairMenu(state) {
+  if (state && state.menuRuntime && state.menuRuntime.container
+      && state.menuRuntime.container.parentNode) {
+    state.menuRuntime.container.parentNode.removeChild(state.menuRuntime.container);
   }
-  toolPairMenuRuntime = null;
+  if (state) state.menuRuntime = null;
 }
 
-function syncToolPairMenu(frame, canShowMenu) {
+function syncToolPairMenu(frame, state, canShowMenu) {
   if (!frame || !canShowMenu) {
-    removeToolPairMenu();
+    removeToolPairMenu(state);
     return;
   }
-  if (!toolPairMenuRuntime) {
-    toolPairMenuRuntime = createDrawToolMenuRuntime('toolpair', 0, frame.anchorPx, {
+  if (!state.menuRuntime) {
+    state.menuRuntime = createDrawToolMenuRuntime('toolpair:' + frame.pairKey, frame.drawTagId, frame.anchorPx, {
       options: TOOL_PAIR_MENU_OPTIONS,
       radius: TOOL_PAIR_MENU_RADIUS_PX,
-      label: 'Tools',
-      selectedMode: toolPairMode,
+      label: frame.label || 'Tools',
+      selectedMode: state.mode,
       register: false
     });
   }
-  // Follow the tag while it rests unfolded; freeze while pressed so the
-  // buttons don't chase the pointer mid-press.
-  if (!frame.open) {
-    toolPairMenuRuntime.anchorPoint = { x: frame.anchorPx.x, y: frame.anchorPx.y };
-    toolPairMenuRuntime.container.style.left = String(frame.anchorPx.x) + 'px';
-    toolPairMenuRuntime.container.style.top = String(frame.anchorPx.y) + 'px';
-  }
-  toolPairMenuRuntime.selectedMode = toolPairMode;
-  styleDrawToolMenuSelection(toolPairMenuRuntime);
+  // Anchor once when this selector pair appears. It stays fixed until either
+  // selector tag disappears, allowing the moving pair to aim at the menu.
+  state.menuRuntime.selectedMode = state.mode;
+  styleDrawToolMenuSelection(state.menuRuntime);
 }
 
 // The buttons live on the top 180° only, so a press aimed downward can never
@@ -1154,60 +1276,42 @@ function toolPairMenuOptionAt(anchor, tip) {
   return bestDistance <= TOOL_PAIR_MENU_MAX_ANGLE_DEG ? best : null;
 }
 
-// Runs once per frame after applyFoldPairs(). Manages the arc menu, resolves
-// press-to-select on the fold edge, and (when the press is a tool USE, not a
-// selection) routes the pen tip into the selected tool's pipeline. Returns a
-// moveSelectorPoint candidate when the pair is in select mode.
-function applyToolPairFrame(erasePoints, drawPoints, annotationPoints, canDrawNow) {
-  var frame = toolPairFrame;
-  syncToolPairMenu(frame, canDrawNow);
-  if (!frame) {
-    toolPairWasOpen = false;
-    toolPairPressConsumed = false;
-    return null;
-  }
-  var pressEdge = frame.open && !toolPairWasOpen;
-  toolPairWasOpen = frame.open;
-  if (!frame.open) {
-    toolPairPressConsumed = false;
-    return null;
-  }
-  if (pressEdge && toolPairMenuRuntime) {
-    var picked = toolPairMenuOptionAt(toolPairMenuRuntime.anchorPoint, frame.tipPx);
-    if (picked) {
-      toolPairMode = picked.key;
-      // This press selected a tool; suppress the tool action until release.
-      toolPairPressConsumed = true;
-      toolPairMenuRuntime.selectedMode = toolPairMode;
-      styleDrawToolMenuSelection(toolPairMenuRuntime);
+function applyToolPairFrames(canShowMenus) {
+  var visible = {};
+  for (var pairKey in toolPairFramesByKey) {
+    if (!Object.prototype.hasOwnProperty.call(toolPairFramesByKey, pairKey)) continue;
+    var frame = toolPairFramesByKey[pairKey];
+    var state = toolPairState(pairKey, frame.drawTagId);
+    visible[pairKey] = true;
+    syncToolPairMenu(frame, state, canShowMenus);
+
+    var pressEdge = frame.open && !state.wasOpen;
+    state.wasOpen = frame.open;
+    if (!frame.open) {
+      state.pressConsumed = false;
+      continue;
+    }
+    if (pressEdge && state.menuRuntime) {
+      var picked = toolPairMenuOptionAt(state.menuRuntime.anchorPoint, frame.tipPx);
+      if (picked) {
+        state.mode = picked.key;
+        setDrawToolMode(frame.drawTagId, picked.key);
+        syncPhoneControllerStateFromMap(frame.drawTagId, { mode: picked.key });
+        state.pressConsumed = true;
+        state.menuRuntime.selectedMode = state.mode;
+        styleDrawToolMenuSelection(state.menuRuntime);
+      }
     }
   }
-  if (toolPairPressConsumed || !canDrawNow) return null;
 
-  if (toolPairMode === 'erase') {
-    erasePoints.push({ lng: frame.tipLL.lng, lat: frame.tipLL.lat });
-  } else if (toolPairMode === 'draw') {
-    drawPoints['pair:' + frame.pairKey] = {
-      lng: frame.tipLL.lng,
-      lat: frame.tipLL.lat,
-      color: TOOL_PAIR_DRAW_COLOR
-    };
-  } else if (toolPairMode === 'comment') {
-    annotationPoints['toolpair'] = {
-      lng: frame.tipLL.lng,
-      lat: frame.tipLL.lat,
-      angleDeg: 0,
-      tagSizePx: frame.tagSizePx
-    };
-  } else if (toolPairMode === 'select') {
-    return {
-      lng: frame.tipLL.lng,
-      lat: frame.tipLL.lat,
-      tagId: 9999,   // lowest priority: any physical drag tag wins
-      selectorKey: 'toolpair'
-    };
+  for (var runtimeKey in toolPairRuntimeByKey) {
+    if (!Object.prototype.hasOwnProperty.call(toolPairRuntimeByKey, runtimeKey)) continue;
+    if (visible[runtimeKey] && canShowMenus) continue;
+    var stale = toolPairRuntimeByKey[runtimeKey];
+    removeToolPairMenu(stale);
+    stale.wasOpen = false;
+    stale.pressConsumed = false;
   }
-  return null;
 }
 
 let mouseInsideCamera = false;
@@ -2452,25 +2556,30 @@ const foldHingePx = window.CompactFoldGeometry.hinge;
 const foldFixedEdge = window.CompactFoldGeometry.fixedEdge;
 const foldEdgeOffsetPx = window.CompactFoldGeometry.edgeOffset;
 
-// Drives every configured fold pair (drawing AND erasing share the same fold/open
-// mechanism). For each pair whose two tags are both visible and "opened", the
-// offset-midpoint pen is either fed into `drawPoints` (draw pairs) or pushed into
-// `erasePoints` (eraser pairs). Also draws a debug/laser overlay so the geometry is
-// verifiable. Per-pair hysteresis. Effective point (per compare.py): each tag's
+// Drives every configured drawing and tool-selector fold pair. Selector pairs
+// change the mode of their mapped drawing pair; opened drawing pairs then draw,
+// erase, select/move, or place a sticker according to that mode. Also draws
+// the laser overlay.
+// Per-pair hysteresis. Effective point (per compare.py): each tag's
 // FIXED edge (corners 2→3, the decoded bottom edge) centre pushed by the pair's
 // offsetCm along edge's NORMAL; the hinge edge is used only for the open/close angle.
-function applyFoldPairs(tags, drawPoints, erasePoints, nowMs) {
+function applyFoldPairs(tags, drawPoints, erasePoints, stickerPoints, nowMs) {
   const byId = {};
   for (const t of (tags || [])) {
     if (t && Number.isFinite(Number(t.id))) byId[Number(t.id)] = t;
   }
   const ok2 = function (ll) { return ll && Number.isFinite(ll[0]) && Number.isFinite(ll[1]); };
   const feats = [];
+  const moveCandidates = [];
   const now = Number(nowMs) || Date.now();
-  toolPairFrame = null;   // republished below while the tool-selection pair is visible
+  toolPairFramesByKey = {};
   for (const pair of FOLD_PAIRS) {
-    const isEraser = pair.tool === 'eraser';
-    const pairColor = isEraser ? toolPairLaserColor() : (pair.color || FOLD_PEN_COLOR);
+    const isSelector = pair.tool === 'tool-selector';
+    const drawMode = isSelector ? null : currentDrawToolMode(pair.a);
+    const pairColor = isSelector
+      ? toolPairLaserColor(pair)
+      : (drawMode === 'erase' ? FOLD_ERASER_COLOR
+        : (drawMode === 'select' ? '#7dd3fc' : (pair.color || FOLD_PEN_COLOR)));
     const ta = byId[Number(pair.a)], tb = byId[Number(pair.b)];
     const ready = ta && tb &&
       Array.isArray(ta.uvCorners) && ta.uvCorners.length >= 4 &&
@@ -2521,12 +2630,12 @@ function applyFoldPairs(tags, drawPoints, erasePoints, nowMs) {
       if (ghost) feats.push(ghost);
     }
 
-    if (isEraser) {
-      // Tool-selection pair: publish its per-frame state; the actual action
-      // (erase / draw / comment / select — per the arc menu) is routed by
-      // applyToolPairFrame() right after this function.
-      toolPairFrame = {
+    if (isSelector) {
+      // Publish this selector pair for its independently anchored menu.
+      toolPairFramesByKey[String(pair.key)] = {
         pairKey: String(pair.key),
+        drawTagId: Number(pair.drawTagId),
+        label: String(pair.label || 'Tools'),
         open: open,
         tipPx: { x: effectivePoint.x, y: effectivePoint.y },
         tipLL: { lng: penLL[0], lat: penLL[1] },
@@ -2536,8 +2645,27 @@ function applyFoldPairs(tags, drawPoints, erasePoints, nowMs) {
         },
         tagSizePx: (foldMeanSidePx(cornersA) + foldMeanSidePx(cornersB)) / 2
       };
-    } else if (open) {
-      // feed the real drawing module → same interpolation / speed / distance tolerances
+    } else if (open && drawMode === 'erase') {
+      // The mapped drawing pair is currently in erase mode.
+      erasePoints.push({ lng: penLL[0], lat: penLL[1] });
+    } else if (open && drawMode === 'sticker') {
+      stickerPoints['drawpair:' + String(pair.key)] = {
+        lng: penLL[0],
+        lat: penLL[1],
+        color: pair.color || FOLD_PEN_COLOR,
+        tagSizePx: (foldMeanSidePx(cornersA) + foldMeanSidePx(cornersB)) / 2,
+        holdMs: 1000,
+        noText: true,
+        continuousHold: true
+      };
+    } else if (open && drawMode === 'select') {
+      moveCandidates.push({
+        lng: penLL[0],
+        lat: penLL[1],
+        tagId: Number(pair.a),
+        selectorKey: 'drawpair:' + String(pair.key)
+      });
+    } else if (open && drawMode === 'draw') {
       drawPoints['pair:' + pair.key] = { lng: penLL[0], lat: penLL[1], color: pair.color || FOLD_PEN_COLOR };
     }
   }
@@ -2555,6 +2683,7 @@ function applyFoldPairs(tags, drawPoints, erasePoints, nowMs) {
       src.setData({ type: 'FeatureCollection', features: feats });
     }
   }
+  return moveCandidates;
 }
 let foldOverlaySig = null;
 
@@ -3594,7 +3723,6 @@ async function poll() {
     const canDrawNow = pageFlow.isMapPage();
     const questionTwoActive = false;
     const visibleTagEntries = [];
-    const drawToolSelectorPoints = {};
     const visibleDrawTagMap = {};
     let streetViewStateNow = 'missing';
     let streetViewAnchorPointNow = null;
@@ -3618,10 +3746,6 @@ async function poll() {
       });
       if (!questionTwoActive && Number(tag.id) === 36) {
         customObjectInteractionTagPoints.push({ x: fixed.x, y: fixed.y });
-      }
-      if (Object.prototype.hasOwnProperty.call(DRAW_TOOL_SELECTOR_TO_TAG, Number(tag.id))
-          && (!baseAssignment || baseAssignment.tool === 'selector')) {
-        drawToolSelectorPoints[id] = { x: raw.x, y: raw.y };
       }
       if (assignment && assignment.tool === 'street-view') {
         streetViewAnchorPointNow = { x: fixed.x, y: fixed.y };
@@ -3733,7 +3857,6 @@ async function poll() {
 
     refreshStreetViewInset(streetViewStateNow, streetViewAnchorPointNow, streetViewLngLatNow, streetViewHeadingNow);
     const nowMs = Date.now();
-    syncDrawToolMenus(canDrawNow, drawToolSelectorPoints, visibleDrawTagMap);
     // --- Collect tag 21 raw position for position-based zoom ---
     var curTag21RawX = null;
     for (const entry of visibleTagEntries) {
@@ -3928,12 +4051,15 @@ async function poll() {
     // Fold-pair drawing: each configured draw pair, when opened, feeds the real
     // drawing module (same interpolation / speed / distance tolerances as a stroke).
     const _tFold = perfNow();
-    applyFoldPairs(lastTags, drawPointsByTagId, eraserPoints, nowMs);
+    var drawPairMoveCandidates = applyFoldPairs(
+      lastTags, drawPointsByTagId, eraserPoints, stickerPointsByTagId, nowMs);
     perfMark('applyFoldPairs', _tFold);
-    var toolPairMoveCandidate = applyToolPairFrame(
-      eraserPoints, drawPointsByTagId, annotationPointsByTagId, canDrawNow);
-    if (toolPairMoveCandidate && (!moveSelectorPoint || toolPairMoveCandidate.tagId < moveSelectorPoint.tagId)) {
-      moveSelectorPoint = toolPairMoveCandidate;
+    applyToolPairFrames(canDrawNow);
+    for (var _dpm = 0; _dpm < drawPairMoveCandidates.length; _dpm++) {
+      var drawPairMove = drawPairMoveCandidates[_dpm];
+      if (!moveSelectorPoint || drawPairMove.tagId < moveSelectorPoint.tagId) {
+        moveSelectorPoint = drawPairMove;
+      }
     }
     drawing.update(drawPointsByTagId, nowMs);
     if (canDrawNow && eraserPoints.length) {
@@ -4064,6 +4190,7 @@ map.on('load', function () {
   keyboardAnnotationPlacement.setEnabled(false);
   generalAnnotationPlacement.setEnabled(false);
   customMapObjects.loadFromBackend().catch(function () {});
+  customGeoLayers.refresh();  // id→name registry for uploaded data layers
   calibration.renderOverlay();
   refreshHud();
   poll();

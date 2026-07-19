@@ -5,6 +5,7 @@
   var OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
   var ESRI_ATTRIBUTION = 'Imagery &copy; <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar Geographics';
   var OPENTOPO_ATTRIBUTION = 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | Tiles: &copy; <a href="https://opentopomap.org/">OpenTopoMap</a> (CC-BY-SA)';
+  var GLYPHS_URL = 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf';
 
   // Generic raster basemap style: one raster source + one raster layer. Themes
   // that share the same `tiles` (e.g. the OSM family) are switched in place via
@@ -15,6 +16,7 @@
     var sourceId = id + '-source';
     return {
       version: 8,
+      glyphs: GLYPHS_URL,
       sources: {
         [sourceId]: {
           type: 'raster',
@@ -86,6 +88,7 @@
       floorplan: {
         style: {
           version: 8,
+          glyphs: GLYPHS_URL,
           sources: {},
           layers: [
             { id: 'floorplan-white-bg', type: 'background', paint: { 'background-color': '#f8f7f2' } }
