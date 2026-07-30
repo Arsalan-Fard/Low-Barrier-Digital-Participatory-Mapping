@@ -8,6 +8,9 @@ pupil-apriltags
 sounddevice
 imageio-ffmpeg
 
+# Printable georeferenced paper-map sheets
+reportlab
+
 # Optional: street-network analysis (isochrones, shortest paths, OSMnx network)
 osmnx
 networkx

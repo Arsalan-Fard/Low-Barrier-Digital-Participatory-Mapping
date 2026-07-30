@@ -1,0 +1,56 @@
+{
+  "categories": [
+    {
+      "id": "food",
+      "label": "Food & drink",
+      "classes": ["restaurant", "cafe", "fast_food", "bar", "beer", "ice_cream", "pub"]
+    },
+    {
+      "id": "shops",
+      "label": "Shops",
+      "classes": ["shop", "grocery", "bakery", "butcher", "clothing_store", "alcohol_shop", "hairdresser", "laundry", "florist", "jewelry", "books", "marketplace"]
+    },
+    {
+      "id": "parks",
+      "label": "Parks & gardens",
+      "classes": ["park", "garden", "playground", "dog_park", "picnic_site", "nature_reserve"]
+    },
+    {
+      "id": "education",
+      "label": "Education",
+      "classes": ["school", "college", "university", "library", "kindergarten"]
+    },
+    {
+      "id": "health",
+      "label": "Health",
+      "classes": ["pharmacy", "doctors", "dentist", "hospital", "veterinary", "clinic"]
+    },
+    {
+      "id": "culture",
+      "label": "Culture & leisure",
+      "classes": ["art_gallery", "theatre", "museum", "cinema", "attraction", "castle", "pitch", "sports_centre", "swimming_pool", "stadium", "zoo"]
+    },
+    {
+      "id": "civic",
+      "label": "Civic & services",
+      "classes": ["town_hall", "post", "bank", "atm", "police", "fire_station", "place_of_worship", "office", "lodging", "embassy", "courthouse", "community_centre"]
+    },
+    {
+      "id": "streetfurniture",
+      "label": "Street furniture",
+      "classes": ["gate", "bollard", "lift_gate", "cycle_barrier", "waste_basket", "bicycle_parking", "motorcycle_parking", "recycling", "drinking_water", "bench", "toilets", "shelter", "entrance", "information"]
+    },
+    {
+      "id": "other",
+      "label": "Other",
+      "classes": []
+    }
+  ],
+  "transportClasses": ["bus", "rail", "railway", "subway", "tram", "ferry_terminal", "airport", "bicycle_rental", "car_rental", "parking", "fuel", "charging_station", "aerialway", "harbor", "car"],
+  "rankLevels": [
+    {"id": "rank1-key", "label": "Key · rank 1–3", "min": 1, "max": 4, "visible": true},
+    {"id": "rank2-major", "label": "Major · rank 4–6", "min": 4, "max": 7, "visible": true},
+    {"id": "rank3-detailed", "label": "Detailed · rank 7–19", "min": 7, "max": 20, "visible": false},
+    {"id": "rank4-everything", "label": "Everything · rank 20+", "min": 20, "visible": false}
+  ]
+}

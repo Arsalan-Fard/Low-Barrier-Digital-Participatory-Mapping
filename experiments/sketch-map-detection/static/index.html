@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sketch Map Tool detector test</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.css">
+  <style>
+    * { box-sizing: border-box; }
+    html, body, #map { width: 100%; height: 100%; margin: 0; }
+    body { font: 14px/1.4 system-ui, sans-serif; color: #eee; }
+    #panel { position: absolute; z-index: 3; top: 12px; left: 12px; width: 340px; max-height: calc(100% - 24px); overflow: auto; padding: 16px; border-radius: 12px; background: rgba(24, 27, 29, .94); box-shadow: 0 8px 30px #0007; }
+    h1 { margin: 0 0 4px; font-size: 18px; }
+    p { color: #b8c0c4; margin: 4px 0 14px; }
+    label { display: block; margin-top: 12px; color: #cbd2d5; }
+    select, input, button, a.download { width: 100%; margin-top: 5px; padding: 9px 10px; border: 1px solid #596168; border-radius: 7px; color: #fff; background: #30363a; }
+    button { margin-top: 14px; border: 0; background: #1d9c95; font-weight: 700; cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .6; }
+    #status { min-height: 22px; margin-top: 10px; color: #8bd8d1; }
+    #status.error { color: #ff929b; }
+    #preview { display: none; width: 100%; margin-top: 10px; border: 1px solid #596168; border-radius: 7px; }
+    #downloads { display: none; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+    a.download { text-align: center; text-decoration: none; font-size: 12px; }
+    small { display: block; margin-top: 8px; color: #899298; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <section id="panel">
+    <h1>HeiGIT drawing detector</h1>
+    <p>Standalone YOLO + SAM2 experiment. Select one of our clean stored maps, then upload its photographed or scanned marked sheet.</p>
+    <label>Stored map ID<select id="sheet"></select></label>
+    <label>Marked map photo<input id="photo" type="file" accept="image/png,image/jpeg,image/webp"></label>
+    <label>Result shown<select id="resultView"><option value="raw">Raw SAM2 raster</option><option value="processed">SMT filled/processed raster</option></select></label>
+    <button id="detect">Detect drawing</button>
+    <div id="status">Checking detector…</div>
+    <img id="preview" alt="Aligned uploaded map">
+    <div id="downloads">
+      <a class="download" id="rawMaskDownload" download="raw-sam-mask.png">Raw mask PNG</a>
+      <a class="download" id="maskDownload" download="processed-mask.png">Processed PNG</a>
+      <a class="download" id="geotiffDownload" download="raw-sam-mask.geotiff">Raw GeoTIFF</a>
+      <a class="download" id="geojsonDownload" download="detected-drawing.geojson">GeoJSON</a>
+    </div>
+    <small>Base map: OpenStreetMap standard tiles. The red overlay is the detected mask.</small>
+  </section>
+  <script src="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.js"></script>
+  <script>
+    const map = new maplibregl.Map({
+      container: 'map', center: [2.35, 48.86], zoom: 11,
+      style: { version: 8, sources: { osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256, attribution: '© OpenStreetMap contributors' } }, layers: [{ id: 'osm', type: 'raster', source: 'osm' }] }
+    });
+    map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+    const sheetSelect = document.querySelector('#sheet');
+    const photoInput = document.querySelector('#photo');
+    const detectButton = document.querySelector('#detect');
+    const resultView = document.querySelector('#resultView');
+    const status = document.querySelector('#status');
+    const preview = document.querySelector('#preview');
+    const downloads = document.querySelector('#downloads');
+    let sheets = [];
+    let lastResult = null;
+
+    function setStatus(text, error = false) { status.textContent = text; status.className = error ? 'error' : ''; }
+    function selectedSheet() { return sheets.find(item => item.id === sheetSelect.value); }
+    function showSheet() {
+      const sheet = selectedSheet(); if (!sheet) return;
+      const [tl, tr, br, bl] = sheet.corners;
+      map.fitBounds([[Math.min(tl[0], bl[0]), Math.min(bl[1], br[1])], [Math.max(tr[0], br[0]), Math.max(tl[1], tr[1])]], { padding: 70, duration: 400 });
+    }
+    function removeResult() {
+      if (map.getLayer('detected-mask')) map.removeLayer('detected-mask');
+      if (map.getSource('detected-mask')) map.removeSource('detected-mask');
+      if (map.getLayer('sheet-outline')) map.removeLayer('sheet-outline');
+      if (map.getSource('sheet-outline')) map.removeSource('sheet-outline');
+    }
+    function addResult(result) {
+      removeResult();
+      const raster = resultView.value === 'processed' ? result.mask : result.rawMask;
+      map.addSource('detected-mask', { type: 'image', url: raster, coordinates: result.corners });
+      map.addLayer({ id: 'detected-mask', type: 'raster', source: 'detected-mask', paint: { 'raster-opacity': .92, 'raster-fade-duration': 0 } });
+      map.addSource('sheet-outline', { type: 'geojson', data: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[...result.corners, result.corners[0]]] } } });
+      map.addLayer({ id: 'sheet-outline', type: 'line', source: 'sheet-outline', paint: { 'line-color': '#00a9a0', 'line-width': 2 } });
+    }
+    function blobUrl(value, type) { return URL.createObjectURL(new Blob([value], { type })); }
+
+    Promise.all([fetch('/api/sheets').then(r => r.json()), fetch('/api/health').then(r => r.json())]).then(([sheetData, health]) => {
+      sheets = sheetData.sheets;
+      sheetSelect.innerHTML = sheets.map(sheet => `<option value="${sheet.id}">${sheet.title} (${sheet.id}, ${sheet.theme})</option>`).join('');
+      showSheet();
+      const missingModules = Object.entries(health.modules).filter(([, ok]) => !ok).map(([name]) => name);
+      const missingWeights = [...new Set(Object.values(health.weights).flat())];
+      if (missingModules.length || missingWeights.length) setStatus(`Setup needed: ${missingModules.length ? 'modules ' + missingModules.join(', ') : ''}${missingModules.length && missingWeights.length ? '; ' : ''}${missingWeights.length ? missingWeights.length + ' model files' : ''}`, true);
+      else setStatus('Detector ready.');
+    }).catch(error => setStatus(error.message, true));
+    sheetSelect.addEventListener('change', () => { removeResult(); showSheet(); });
+    resultView.addEventListener('change', () => { if (lastResult) addResult(lastResult); });
+
+    detectButton.addEventListener('click', async () => {
+      if (!sheetSelect.value || !photoInput.files[0]) { setStatus('Select a stored map and a marked photo first.', true); return; }
+      detectButton.disabled = true; downloads.style.display = 'none'; preview.style.display = 'none'; setStatus('Aligning and running YOLO + SAM2…');
+      const form = new FormData(); form.append('sheetId', sheetSelect.value); form.append('photo', photoInput.files[0]);
+      try {
+        const response = await fetch('/api/detect', { method: 'POST', body: form });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        lastResult = result; addResult(result); preview.src = result.aligned; preview.style.display = 'block';
+        document.querySelector('#rawMaskDownload').href = result.rawMask;
+        document.querySelector('#maskDownload').href = result.mask;
+        document.querySelector('#geotiffDownload').href = result.rawMaskGeoTiff;
+        document.querySelector('#geojsonDownload').href = blobUrl(JSON.stringify(result.geojson, null, 2), 'application/geo+json');
+        downloads.style.display = 'grid';
+        setStatus(`${result.detections} object(s), ${result.features} feature(s); ${result.timing.totalSeconds.toFixed(1)} s total (${result.timing.exportSeconds.toFixed(2)} s exports); alignment ${result.alignment.inliers}/${result.alignment.matches}.`);
+      } catch (error) { setStatus(error.message, true); }
+      finally { detectButton.disabled = false; }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Paris 18e — path flow demo</title>
+  <link href="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.js" crossorigin="anonymous"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #12151a; color: #eaeaea;
+    }
+    #map { position: fixed; inset: 0; }
+
+    #panel {
+      position: fixed; top: 14px; left: 14px; z-index: 20;
+      width: min(310px, calc(100vw - 28px));
+      max-height: calc(100vh - 28px); overflow-y: auto;
+      padding: 15px 16px; display: flex; flex-direction: column; gap: 13px;
+      background: rgba(18, 21, 26, 0.9); border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 13px; backdrop-filter: blur(10px);
+      box-shadow: 0 16px 38px rgba(0,0,0,0.42);
+      transition: transform 0.18s ease, opacity 0.18s ease;
+    }
+    #panel.collapsed { transform: translateX(-14px); opacity: 0; pointer-events: none; }
+
+    #panelToggle {
+      position: fixed; top: 14px; left: 14px; z-index: 30;
+      width: 38px; height: 38px; border-radius: 50%; cursor: pointer;
+      background: rgba(18,21,26,0.88); border: 1px solid rgba(255,255,255,0.28);
+      color: #fff; font: 800 15px Arial, sans-serif;
+    }
+
+    h1 { font-size: 15.5px; font-weight: 700; letter-spacing: 0.2px; }
+    .sub { font-size: 11.5px; color: #9aa3ad; line-height: 1.5; }
+
+    .warn {
+      font-size: 11px; line-height: 1.45; color: #ffcf9a;
+      background: rgba(180, 110, 20, 0.16); border: 1px solid rgba(220, 150, 40, 0.4);
+      border-radius: 7px; padding: 7px 9px;
+    }
+
+    .block { display: flex; flex-direction: column; gap: 7px; }
+    .block h2 {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.7px; color: #8b95a0;
+    }
+
+    /* Legend: gradient bar mirroring the exact line-color ramp. */
+    #legendBar {
+      height: 13px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.18);
+      background: linear-gradient(to right, #dbe3ea, #a8c6e0, #5b93c9, #1f5da8, #0a2f66);
+    }
+    .legend-ends { display: flex; justify-content: space-between; font-size: 10.5px; color: #9aa3ad; }
+    .legend-widths { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: #9aa3ad; }
+    .legend-widths i { display: block; background: #1f5da8; border-radius: 4px; }
+
+    label.ctl { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    label.ctl input[type="range"] { flex: 1; accent-color: #2f7fd4; }
+    label.ctl .val { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; color: #cfd6dd; }
+    label.chk { display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer; }
+
+    #stats { font-size: 11.5px; color: #9aa3ad; line-height: 1.65; }
+    #stats b { color: #e6ebf0; font-variant-numeric: tabular-nums; }
+
+    #status { font-size: 11.5px; color: #9aa3ad; }
+    #status.err { color: #ff9b8d; }
+
+    /* Hover readout for a single segment. */
+    #tip {
+      position: fixed; z-index: 40; pointer-events: none; display: none;
+      padding: 6px 9px; border-radius: 7px; font-size: 11.5px; line-height: 1.45;
+      background: rgba(10, 12, 15, 0.94); border: 1px solid rgba(255,255,255,0.2);
+      box-shadow: 0 6px 18px rgba(0,0,0,0.45); max-width: 240px;
+    }
+    #tip b { color: #7fb4e8; font-variant-numeric: tabular-nums; }
+    #tip .nm { color: #e6ebf0; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <button type="button" id="panelToggle" title="Show/hide panel (H)">H</button>
+
+  <aside id="panel">
+    <div>
+      <h1>Paris 18<sup>e</sup> — path flow</h1>
+      <p class="sub">Every street segment coloured and sized by how often it was taken.</p>
+    </div>
+
+    <p class="warn">
+      <b>Demonstration data.</b> The street geometry is real OpenStreetMap data, but the
+      usage counts are randomly generated — they measure nothing.
+    </p>
+
+    <div class="block">
+      <h2>Times taken</h2>
+      <div id="legendBar"></div>
+      <div class="legend-ends"><span id="legendMin">low</span><span id="legendMax">high</span></div>
+      <div class="legend-widths">
+        <i style="width:26px;height:2px"></i> rare
+        <i style="width:26px;height:7px"></i> frequent
+      </div>
+    </div>
+
+    <div class="block">
+      <h2>Display</h2>
+      <label class="ctl">Min. count
+        <input type="range" id="minCount" min="0" max="100" step="1" value="0" />
+        <span class="val" id="minCountVal">0%</span>
+      </label>
+      <label class="ctl">Thickness
+        <input type="range" id="widthScale" min="0.4" max="3" step="0.1" value="1" />
+        <span class="val" id="widthScaleVal">1.0×</span>
+      </label>
+      <label class="chk"><input type="checkbox" id="labelsChk" checked /> Street &amp; place labels</label>
+      <label class="chk"><input type="checkbox" id="glowChk" checked /> Glow under busiest paths</label>
+    </div>
+
+    <div class="block">
+      <h2>Dataset</h2>
+      <div id="stats">loading…</div>
+    </div>
+
+    <div id="status">Loading street network…</div>
+  </aside>
+
+  <div id="tip"></div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      function $(id) { return document.getElementById(id); }
+
+      // Positron: a deliberately quiet basemap — street geometry and a small set
+      // of important labels, and (unlike Liberty) no POI icon layers at all,
+      // which is what keeps the flow colours readable on top.
+      var BASEMAP_STYLE = 'https://tiles.openfreemap.org/styles/positron';
+
+      var map = new maplibregl.Map({
+        container: 'map',
+        style: BASEMAP_STYLE,
+        center: [2.3465, 48.8905],
+        zoom: 13.4,
+        pitch: 0,
+        bearing: 0,
+        attributionControl: true
+      });
+      map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+      map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: 'metric' }), 'bottom-right');
+
+      var flowData = null;
+      var breaks = null;     // count values at the 5 ramp stops
+      var maxCount = 1;
+
+      // Quantile breaks beat a linear min..max ramp here: trip counts are heavily
+      // right-skewed (a few corridors dwarf everything), so a linear ramp would
+      // paint almost the whole map at the pale end.
+      function quantileBreaks(values) {
+        var sorted = values.slice().sort(function (a, b) { return a - b; });
+        function at(q) { return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]; }
+        var stops = [at(0.10), at(0.45), at(0.72), at(0.90), at(0.985)];
+        // Keep the ramp strictly increasing, or MapLibre rejects the expression.
+        for (var i = 1; i < stops.length; i++) {
+          if (stops[i] <= stops[i - 1]) stops[i] = stops[i - 1] + 1;
+        }
+        return stops;
+      }
+
+      // Pale grey-blue -> deep navy. Rare paths recede toward the basemap, busy
+      // ones read as saturated dark blue. The ramp keeps lightness falling
+      // monotonically (not just hue shifting), so the busiest corridors stay
+      // readable as "darker + thicker" even in greyscale or for colour-blind
+      // viewers.
+      var RAMP_COLORS = ['#dbe3ea', '#a8c6e0', '#5b93c9', '#1f5da8', '#0a2f66'];
+
+      function colorExpression() {
+        var expression = ['interpolate', ['linear'], ['get', 'count']];
+        breaks.forEach(function (value, index) {
+          expression.push(value, RAMP_COLORS[index]);
+        });
+        return expression;
+      }
+
+      function widthExpression(scale) {
+        // Zoom-aware: thin at overview zooms, chunky when zoomed into a street.
+        // Inner interpolate maps count -> width; outer scales the whole thing by zoom.
+        function ramp(lo, hi) {
+          var expression = ['interpolate', ['linear'], ['get', 'count']];
+          var widths = [lo, lo + (hi - lo) * 0.22, lo + (hi - lo) * 0.48,
+                        lo + (hi - lo) * 0.74, hi];
+          breaks.forEach(function (value, index) {
+            expression.push(value, widths[index] * scale);
+          });
+          return expression;
+        }
+        return ['interpolate', ['linear'], ['zoom'],
+          12, ramp(0.4, 3.2),
+          14, ramp(0.8, 6.5),
+          16, ramp(1.6, 13),
+          18, ramp(3.0, 26)
+        ];
+      }
+
+      function opacityExpression() {
+        // Faint paths stay visible but let the basemap through.
+        var expression = ['interpolate', ['linear'], ['get', 'count']];
+        var alphas = [0.42, 0.6, 0.78, 0.9, 0.97];
+        breaks.forEach(function (value, index) {
+          expression.push(value, alphas[index]);
+        });
+        return expression;
+      }
+
+      function addFlowLayers() {
+        map.addSource('flow', { type: 'geojson', data: flowData });
+
+        // Soft wide halo beneath the heaviest corridors, so the main routes
+        // stay legible where many segments converge.
+        map.addLayer({
+          id: 'flow-glow',
+          type: 'line',
+          source: 'flow',
+          filter: ['>=', ['get', 'count'], breaks[3]],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': '#2f7fd4',
+            'line-blur': 7,
+            'line-opacity': 0.3,
+            'line-width': ['*', 3.1, ['coalesce', ['feature-state', 'w'], 1]]
+          }
+        });
+
+        map.addLayer({
+          id: 'flow-lines',
+          type: 'line',
+          source: 'flow',
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': colorExpression(),
+            'line-width': widthExpression(1),
+            'line-opacity': opacityExpression()
+          }
+        });
+
+        // Keep basemap labels above the flow so street names stay readable.
+        raiseLabelLayers();
+        applyGlowWidth(1);
+      }
+
+      // Positron draws its labels as symbol layers; move them back on top after
+      // the flow lines are inserted, otherwise thick flow lines bury street names.
+      function raiseLabelLayers() {
+        var layers = map.getStyle().layers || [];
+        layers.forEach(function (layer) {
+          if (layer.type === 'symbol') {
+            try { map.moveLayer(layer.id); } catch (_e) {}
+          }
+        });
+      }
+
+      function applyGlowWidth(scale) {
+        if (!map.getLayer('flow-glow')) return;
+        var expression = ['interpolate', ['linear'], ['zoom'],
+          12, 3.5 * scale, 14, 8 * scale, 16, 17 * scale, 18, 34 * scale];
+        map.setPaintProperty('flow-glow', 'line-width', expression);
+      }
+
+      function refreshFilter() {
+        if (!map.getLayer('flow-lines')) return;
+        var pct = Number($('minCount').value) / 100;
+        // Map the slider across the observed count range.
+        var threshold = Math.round(pct * maxCount);
+        var filter = threshold > 0 ? ['>=', ['get', 'count'], threshold] : null;
+        map.setFilter('flow-lines', filter);
+        map.setFilter('flow-glow', threshold > breaks[3]
+          ? ['>=', ['get', 'count'], threshold]
+          : ['>=', ['get', 'count'], breaks[3]]);
+        $('minCountVal').textContent = Math.round(pct * 100) + '%';
+      }
+
+      function setStatus(message, isError) {
+        var el = $('status');
+        el.textContent = message || '';
+        el.className = isError ? 'err' : '';
+      }
+
+      // ---------- load ----------
+      fetch('paths.geojson', { cache: 'no-store' })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error('paths.geojson missing — run "python build_data.py" first.');
+          }
+          return response.json();
+        })
+        .then(function (data) {
+          flowData = data;
+          var counts = data.features.map(function (f) { return f.properties.count; });
+          breaks = quantileBreaks(counts);
+          maxCount = Math.max.apply(null, counts);
+
+          $('legendMin').textContent = breaks[0] + '×';
+          $('legendMax').textContent = maxCount + '×';
+
+          var meta = data.properties || {};
+          $('stats').innerHTML =
+            '<b>' + data.features.length.toLocaleString() + '</b> street segments<br>' +
+            'counts <b>' + Math.min.apply(null, counts) + '</b>–<b>' + maxCount + '</b>' +
+            ' · median <b>' + (meta.p50 != null ? meta.p50 : '–') + '</b><br>' +
+            'geometry © OpenStreetMap';
+
+          function ready() {
+            addFlowLayers();
+            refreshFilter();
+            setStatus('Ready — hover a street to inspect it.');
+          }
+          if (map.isStyleLoaded()) ready(); else map.once('load', ready);
+        })
+        .catch(function (error) {
+          setStatus(error.message || String(error), true);
+        });
+
+      // ---------- controls ----------
+      $('minCount').addEventListener('input', refreshFilter);
+
+      $('widthScale').addEventListener('input', function () {
+        var scale = Number(this.value);
+        $('widthScaleVal').textContent = scale.toFixed(1) + '×';
+        if (map.getLayer('flow-lines')) {
+          map.setPaintProperty('flow-lines', 'line-width', widthExpression(scale));
+        }
+        applyGlowWidth(scale);
+      });
+
+      $('labelsChk').addEventListener('change', function () {
+        var visible = this.checked ? 'visible' : 'none';
+        (map.getStyle().layers || []).forEach(function (layer) {
+          if (layer.type === 'symbol') {
+            try { map.setLayoutProperty(layer.id, 'visibility', visible); } catch (_e) {}
+          }
+        });
+      });
+
+      $('glowChk').addEventListener('change', function () {
+        if (!map.getLayer('flow-glow')) return;
+        map.setLayoutProperty('flow-glow', 'visibility', this.checked ? 'visible' : 'none');
+      });
+
+      // ---------- hover readout ----------
+      var tip = $('tip');
+      map.on('mousemove', function (event) {
+        if (!map.getLayer('flow-lines')) return;
+        var hits = map.queryRenderedFeatures(event.point, { layers: ['flow-lines'] });
+        if (!hits.length) { tip.style.display = 'none'; map.getCanvas().style.cursor = ''; return; }
+        var props = hits[0].properties;
+        map.getCanvas().style.cursor = 'crosshair';
+        tip.innerHTML =
+          '<span class="nm">' + (props.name || 'unnamed ' + (props.highway || 'way')) + '</span><br>' +
+          'taken <b>' + props.count + '</b> times';
+        tip.style.display = 'block';
+        tip.style.left = Math.min(event.originalEvent.clientX + 14, window.innerWidth - 250) + 'px';
+        tip.style.top = (event.originalEvent.clientY + 14) + 'px';
+      });
+      map.on('mouseout', function () { tip.style.display = 'none'; });
+
+      // ---------- panel ----------
+      var panel = $('panel');
+      $('panelToggle').addEventListener('click', function () {
+        panel.classList.toggle('collapsed');
+      });
+      window.addEventListener('keydown', function (event) {
+        var tag = event.target && event.target.tagName ? event.target.tagName.toLowerCase() : '';
+        if ((event.key === 'h' || event.key === 'H') && tag !== 'input') {
+          panel.classList.toggle('collapsed');
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,551 @@
+@use "vars";
+
+@use 'sass:color';
+// TOOLBAR
+.maputnik-toolbar {
+  position: fixed;
+  height: vars.$toolbar-height;
+  width: 100%;
+  z-index: 100;
+  left: 0;
+  top: vars.$toolbar-offset;
+  background-color: vars.$color-black;
+}
+
+.maputnik-toolbar-logo-container {
+  position: relative;
+}
+
+.maputnik-toolbar-logo {
+  text-decoration: none;
+  display: block;
+  flex: 0 0 190px;
+  width: 200px;
+  text-align: left;
+  background-color: vars.$color-black;
+  padding: vars.$margin-2;
+  height: vars.$toolbar-height;
+  position: relative;
+  overflow: hidden;
+
+  h1 {
+    display: inline;
+    line-height: 26px;
+  }
+
+  img {
+    width: 30px;
+    padding-right: vars.$margin-2;
+    vertical-align: top;
+  }
+}
+
+.maputnik-toolbar-link {
+  vertical-align: top;
+  height: vars.$toolbar-height;
+  display: inline-block;
+  padding: vars.$margin-3;
+  font-size: vars.$font-size-5;
+  cursor: pointer;
+  color: vars.$color-white;
+  text-decoration: none;
+  line-height: 20px;
+
+  h1 {
+    position: relative;
+  }
+
+  &:hover {
+    background-color: vars.$color-midgray;
+  }
+}
+
+.maputnik-toolbar-link--highlighted {
+  line-height: 1;
+  padding: vars.$margin-2 vars.$margin-3;
+
+  .maputnik-toolbar-link-wrapper {
+    background-color: vars.$color-white;
+    border-radius: 2px;
+    padding: vars.$margin-2;
+    margin-top: vars.$margin-1;
+    color: vars.$color-black;
+    display: block;
+  }
+
+  &:hover {
+    background-color: vars.$color-black;
+  }
+
+  &:hover .maputnik-toolbar-link-wrapper {
+    background-color: color.adjust(vars.$color-midgray, $lightness: 12%);
+    color: vars.$color-white;
+  }
+}
+
+.maputnik-toolbar-name {
+  text-transform: capitalize;
+}
+
+.maputnik-toolbar-version {
+  font-size: 10px;
+  margin: 0 4px;
+  white-space: nowrap;
+}
+
+.maputnik-toolbar-action {
+  background: inherit;
+  border-width: 0;
+  @extend .maputnik-toolbar-link !optional; /* stylelint-disable-line */
+}
+
+.maputnik-toolbar-select {
+  background: inherit;
+  border-width: 0;
+  @extend .maputnik-toolbar-link !optional; /* stylelint-disable-line */
+
+  select {
+    margin: 0 6px;
+    display: inline;
+    width: auto;
+    border: solid 1px vars.$color-midgray;
+    vertical-align: inherit;
+    margin-top: -2px;
+  }
+}
+
+.maputnik-icon-text {
+  padding: 0 vars.$margin-1;
+}
+
+.maputnik-icon-action {
+  display: inline;
+  margin: 0 vars.$margin-1;
+}
+
+.maputnik-toolbar__inner {
+  display: flex;
+}
+
+.maputnik-toolbar__actions {
+  white-space: nowrap;
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.maputnik-paper-tools {
+  height: vars.$toolbar-height;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: top;
+  color: vars.$color-white;
+  border-inline: solid 1px vars.$color-midgray;
+
+  &__group {
+    height: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 7px;
+    font-size: vars.$font-size-6;
+    border-inline-end: solid 1px vars.$color-midgray;
+
+    &:last-child {
+      border-inline-end: 0;
+    }
+
+    > svg {
+      flex: 0 0 auto;
+      width: 16px;
+      height: 16px;
+      color: #63cec5;
+    }
+  }
+
+  &__check {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    cursor: pointer;
+
+    input {
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      accent-color: #39aa9f;
+    }
+  }
+
+  &__minutes,
+  &__map-id,
+  &__copies {
+    height: 24px;
+    padding: 2px 5px;
+    color: vars.$color-white;
+    background: vars.$color-gray;
+    border: solid 1px vars.$color-midgray;
+    border-radius: 2px;
+
+    &:focus {
+      border-color: vars.$color-lowgray;
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+  }
+
+  &__minutes {
+    flex: 0 0 60px;
+    width: 60px;
+  }
+
+  &__map-id {
+    width: 72px;
+
+    &.is-used {
+      border-color: #e2b84f;
+      background: color.adjust(#e2b84f, $alpha: -0.84);
+    }
+  }
+
+  &__copies {
+    width: 58px;
+  }
+
+  &__unit {
+    color: vars.$color-lowgray;
+  }
+
+  &__state {
+    width: 7px;
+    height: 7px;
+    display: inline-block;
+    flex: 0 0 auto;
+    background: vars.$color-lowgray;
+    border-radius: 50%;
+
+    &.is-ok {
+      background: #53d4c5;
+      box-shadow: 0 0 5px color.adjust(#53d4c5, $alpha: -0.3);
+    }
+
+    &.is-error {
+      background: #f06d62;
+    }
+  }
+
+  &__page-size {
+    height: 24px;
+    min-width: 48px;
+    margin: 0;
+    padding: 2px 20px 2px 6px;
+    font-size: vars.$font-size-6;
+  }
+
+  &__pdf {
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    color: #10201f;
+    font-size: vars.$font-size-6;
+    font-weight: bold;
+    background: #63cec5;
+    border: 0;
+    border-radius: 2px;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      background: #83ddd5;
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+
+    svg {
+      width: 15px;
+      height: 15px;
+    }
+  }
+
+  &__message {
+    max-width: 110px;
+    overflow: hidden;
+    color: vars.$color-lowgray;
+    text-overflow: ellipsis;
+
+    &:empty {
+      display: none;
+    }
+
+    &.is-ok {
+      color: #67d8cc;
+    }
+
+    &.is-warn {
+      color: #e2b84f;
+    }
+
+    &.is-error {
+      color: #f08076;
+    }
+  }
+}
+
+.maputnik-transit-trigger {
+  width: 38px;
+  height: vars.$toolbar-height;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: top;
+  padding: 0;
+  color: vars.$color-white;
+  font-size: vars.$font-size-6;
+  background: transparent;
+  border: 0;
+  border-inline-start: solid 1px vars.$color-midgray;
+  cursor: pointer;
+
+  &:hover,
+  &.is-open {
+    background: vars.$color-midgray;
+  }
+
+  svg {
+    width: 17px;
+    height: 17px;
+    color: #63cec5;
+  }
+}
+
+.maputnik-pinpoint-trigger {
+  position: relative;
+  width: 38px;
+  height: vars.$toolbar-height;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: top;
+  padding: 0;
+  color: vars.$color-white;
+  background: transparent;
+  border: 0;
+  border-inline-start: solid 1px vars.$color-midgray;
+  cursor: pointer;
+
+  &:hover,
+  &.is-active {
+    background: vars.$color-midgray;
+  }
+
+  &.is-active {
+    box-shadow: inset 0 -2px #4da3ff;
+  }
+
+  svg {
+    width: 19px;
+    height: 19px;
+    color: #4da3ff;
+  }
+
+  span {
+    position: absolute;
+    inset-inline-end: 2px;
+    top: 2px;
+    min-width: 13px;
+    height: 13px;
+    padding: 0 3px;
+    color: #fff;
+    font-size: 9px;
+    line-height: 13px;
+    text-align: center;
+    background: #1769aa;
+    border-radius: 7px;
+  }
+}
+
+.maputnik-pinpoint-mode .maplibregl-popup {
+  display: none;
+}
+
+.maputnik-pinpoint-mode .maplibregl-canvas {
+  cursor: crosshair !important;
+}
+
+.maputnik-transit-popover {
+  position: fixed;
+  z-index: 3100;
+  width: 300px;
+  padding: 12px;
+  color: vars.$color-white;
+  font-family: vars.$font-family;
+  font-size: vars.$font-size-6;
+  background: color.adjust(vars.$color-black, $lightness: 4%);
+  border: solid 1px vars.$color-midgray;
+  border-radius: 5px;
+  box-shadow: 0 8px 24px color.adjust(#000, $alpha: -0.55);
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    font-size: vars.$font-size-5;
+
+    button {
+      width: 24px;
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      color: vars.$color-lowgray;
+      background: transparent;
+      border: 0;
+      border-radius: 2px;
+      cursor: pointer;
+
+      &:hover {
+        color: vars.$color-white;
+        background: vars.$color-midgray;
+      }
+    }
+  }
+
+  &__mode {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    margin: 0;
+    padding: 9px 0;
+    border-top: solid 1px vars.$color-midgray;
+
+    > input[type="range"] {
+      width: 100%;
+      margin: 0;
+      accent-color: #39aa9f;
+
+      &:disabled {
+        opacity: 0.4;
+      }
+    }
+  }
+
+  &__mode-header {
+    display: grid;
+    grid-template-columns: 18px 1fr auto;
+    align-items: center;
+    gap: 7px;
+
+    > svg {
+      width: 17px;
+      height: 17px;
+      color: #63cec5;
+    }
+
+    label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+
+      input {
+        margin: 0;
+        accent-color: #39aa9f;
+      }
+    }
+
+    > span {
+      color: vars.$color-lowgray;
+      font-size: 11px;
+    }
+  }
+
+  &__hint,
+  &__unavailable {
+    margin: 8px 0 0;
+    color: vars.$color-lowgray;
+    line-height: 1.35;
+  }
+}
+
+.maputnik-paper-preview {
+  position: fixed;
+  z-index: 90;
+  overflow: visible;
+  pointer-events: none;
+
+  &__shade {
+    fill: rgba(0, 0, 0, 0.3);
+  }
+
+  &__frame {
+    fill: none;
+    stroke: #ffca28;
+    stroke-width: 2;
+    stroke-dasharray: 10 7;
+  }
+
+  &__tag {
+    fill: #fff;
+    stroke: #111;
+    stroke-width: 1;
+  }
+
+  &__tag-image {
+    image-rendering: pixelated;
+  }
+
+  &__badge {
+    fill: #fff;
+    stroke: #999;
+    stroke-width: 0.7;
+  }
+
+  &__caption {
+    fill: #171717;
+    stroke: #fff;
+    stroke-width: 3px;
+    paint-order: stroke;
+    font-family: vars.$font-family;
+    font-size: 12px;
+    font-weight: bold;
+  }
+}
+
+.maputnik-paper-render-host {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.maputnik-toolbar-skip {
+  all: unset;
+  border: solid 1px transparent;
+  position: absolute;
+  overflow: hidden;
+  width: 0px;
+  height: 100%;
+  text-align: center;
+  display: block;
+  background-color: vars.$color-black;
+  z-index: 999;
+  line-height: 40px;
+  left: 0;
+  top: 0;
+
+  &:active,
+  &:focus {
+    width: 100%;
+    border-color: vars.$color-lowgray;
+  }
+}

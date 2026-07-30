@@ -113,7 +113,12 @@
       pitch: Number.isFinite(config.pitch) ? config.pitch : 0,
       bearing: Number.isFinite(config.bearing) ? config.bearing : 0,
       attributionControl: config.attributionControl !== false,
-      trackResize: false,
+      // Most workshop views manage resizing themselves, but fullscreen map
+      // capture pages need MapLibre to rebuild its backing canvas whenever the
+      // browser viewport changes. Otherwise CSS stretches the old canvas and
+      // both the live map and the subsequently selected extent look soft.
+      trackResize: Boolean(options && options.trackResize),
+      preserveDrawingBuffer: Boolean(options && options.preserveDrawingBuffer),
       ...(currentThemeDefinition.styleOptions || {})
     });
 

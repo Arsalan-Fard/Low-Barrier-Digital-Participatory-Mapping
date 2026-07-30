@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <title>Participatory Mapping Studio</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #16302b;
+      --muted: #5f7c77;
+      --green: #2f8f86;
+      --green-dark: #21726b;
+      --green-soft: #e4f4f0;
+      --green-tint: #f1faf8;
+      --line: #cfe6e0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      color: var(--ink);
+      background: #ffffff;
+      font-family: Inter, "Segoe UI", system-ui, sans-serif;
+    }
+
+    .page {
+      width: min(1240px, 100%);
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: clamp(28px, 5vw, 72px);
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: clamp(28px, 5vh, 54px);
+    }
+
+    header {
+      text-align: center;
+    }
+
+    h1 {
+      margin: 0;
+      color: var(--ink);
+      font-size: clamp(1.8rem, 3vw, 2.8rem);
+      font-weight: 600;
+      letter-spacing: -0.035em;
+    }
+
+    header p {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 1rem;
+    }
+
+    .choices {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: clamp(12px, 2vw, 24px);
+      align-items: stretch;
+    }
+
+    .choice {
+      min-height: min(62vh, 600px);
+      padding: clamp(24px, 4vw, 48px);
+      display: grid;
+      place-items: center;
+      color: var(--green-dark);
+      text-align: center;
+      text-decoration: none;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      transition:
+        color 160ms ease,
+        background-color 160ms ease,
+        border-color 160ms ease;
+    }
+
+    .choice h2 {
+      max-width: 12ch;
+      margin: 0;
+      font-size: clamp(1.55rem, 2.5vw, 2.5rem);
+      font-weight: 600;
+      line-height: 1.15;
+      letter-spacing: -0.035em;
+    }
+
+    .choice:hover {
+      color: var(--green);
+      background: var(--green-tint);
+      border-color: var(--green);
+    }
+
+    .choice:focus-visible {
+      outline: 3px solid var(--green);
+      outline-offset: 4px;
+    }
+
+    .choice:active {
+      background: var(--green-soft);
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        padding: 28px 18px;
+      }
+
+      .choices {
+        grid-template-columns: 1fr;
+      }
+
+      .choice {
+        min-height: 150px;
+      }
+
+      .choice h2 {
+        max-width: 18ch;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .choice {
+        transition: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <h1>Choose a workspace</h1>
+      <p>Select how you want to begin.</p>
+    </header>
+
+    <nav class="choices" aria-label="Mapping workflows">
+      <a class="choice" href="/maputnik/?style=/maputnik/styles/liberty.json#15.22/48.873388/2.387845">
+        <h2>Generate Paper Map</h2>
+      </a>
+
+      <a class="choice" href="/paper-test">
+        <h2>Digitize Paper Map</h2>
+      </a>
+
+      <a class="choice" href="/home">
+        <h2>Participatory Mapping Workshop</h2>
+      </a>
+    </nav>
+  </main>
+</body>
+</html>

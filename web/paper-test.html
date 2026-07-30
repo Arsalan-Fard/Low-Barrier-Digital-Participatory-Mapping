@@ -3,12 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Paper → Map test</title>
+  <title>Digitize Paper Map</title>
   <link href="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.js" crossorigin="anonymous"></script>
   <script src="src/maplibreCompat.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    /* The browser's own [hidden] rule is only a user-agent default, so ANY
+       display declaration in this sheet (e.g. .level{display:flex}) silently
+       beats it and the element stays on screen. Assert it once, globally. */
+    [hidden] { display: none !important; }
     html, body {
       width: 100%; height: 100%;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
@@ -18,50 +22,168 @@
     #wrap { width: 100vw; height: 100vh; }
     #map { position: fixed; inset: 0; }
 
-    #panel {
-      position: fixed; top: 0; right: 0; bottom: 0; z-index: 20;
-      width: 400px;
+    /* Export-frame preview. An SVG overlay sits above the map (never
+       intercepting pointer events) showing exactly what the PDF will contain:
+       the page outline, the inset map frame, and the eight AprilTag patches in
+       their true printed positions. Geometry comes from /api/map-sheet-layout,
+       so it cannot drift from what the PDF generator actually draws. */
+    #exportPreview {
+      position: fixed; inset: 0; z-index: 10;
+      pointer-events: none; overflow: visible;
+    }
+    #exportPreview .page { fill: rgba(0,0,0,0.30); }
+    #exportPreview .frame {
+      fill: none; stroke: #ffd000; stroke-width: 2;
+      stroke-dasharray: 9 6; vector-effect: non-scaling-stroke;
+    }
+    #exportPreview .tag { fill: #fff; stroke: #111; stroke-width: 1; }
+    #exportPreview .tagimg { image-rendering: pixelated; }
+    #exportPreview .badge { fill: #fff; stroke: #999; stroke-width: 0.7; }
+    #exportPreview .cap {
+      fill: #ffd000; font: 700 12px -apple-system, "Segoe UI", Arial, sans-serif;
+      paint-order: stroke; stroke: rgba(0,0,0,0.75); stroke-width: 3px;
+    }
+
+    /* Digitization controls float above the shared map workspace. */
+    .panel {
+      position: fixed; top: 14px; z-index: 20;
+      width: min(360px, calc(100vw - 28px)); max-height: calc(100vh - 28px);
       display: flex; flex-direction: column; gap: 12px;
       padding: 14px; overflow-y: auto;
-      background: rgba(26, 26, 26, 0.96); border-left: 1px solid #333;
-      box-shadow: -14px 0 34px rgba(0, 0, 0, 0.45);
-      transition: transform 0.22s ease;
+      background: rgba(20, 20, 20, 0.88); border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 14px; backdrop-filter: blur(10px);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
+      transition: transform 0.18s ease, opacity 0.18s ease;
     }
-    #panel.collapsed { transform: translateX(100%); }
+    #panel { right: 14px; }
+    .panel.collapsed { transform: translateY(-10px); opacity: 0; pointer-events: none; }
 
-    /* Reopen tab, shown when the panel is tucked away. */
-    #panelTab {
-      position: fixed; top: 14px; right: 0; z-index: 21;
-      padding: 9px 14px; border-radius: 8px 0 0 8px;
-      background: rgba(26, 26, 26, 0.94); border: 1px solid #444; border-right: none;
-      color: #eee; font: 600 12.5px inherit; cursor: pointer;
-      display: none;
-    }
-    #panelTab.visible { display: block; }
-
-    /* Floating chip while picking map corners (panel is hidden then). */
-    #pickChip {
-      position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
-      z-index: 22; display: none; align-items: center; gap: 10px;
-      padding: 9px 12px 9px 16px; border-radius: 999px;
-      background: rgba(20, 20, 20, 0.92); border: 1px solid #555;
-      font: 600 13px inherit; color: #fff; box-shadow: 0 8px 26px rgba(0,0,0,0.45);
-    }
-    #pickChip.visible { display: flex; }
-    #pickChip button { padding: 5px 12px; border-radius: 999px; }
     h1 { font-size: 16px; font-weight: 700; }
-    .step {
-      border: 1px solid #333; border-radius: 10px; padding: 10px 12px;
-      display: flex; flex-direction: column; gap: 8px; background: #202020;
-    }
-    .step.done { border-color: #2f8f86; }
-    .step h2 { font-size: 13.5px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
-    .step h2 .n {
-      width: 22px; height: 22px; border-radius: 50%; flex: 0 0 auto;
+    .panel-title { display: flex; align-items: center; gap: 9px; }
+    .panel-title span { flex: 1; }
+    /* Back arrow closes the panel; the hotkey still toggles it. */
+    .panel-title .back {
+      flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
       display: inline-flex; align-items: center; justify-content: center;
-      border: 1.5px solid #888; font-size: 12px;
+      font: 700 17px/1 inherit; color: #ddd;
+      background: #2c2c2c; border: 1px solid #555; border-radius: 7px;
     }
-    .step.done h2 .n { border-color: #2f8f86; color: #6fe3d6; }
+    .panel-title .back:hover { background: #3a3a3a; color: #fff; }
+
+    /* Launcher, hidden while the digitization panel is open. */
+    .launch {
+      position: fixed; top: 14px; z-index: 25;
+      padding: 8px 14px; font: 700 12.5px inherit; color: #fff;
+      background: rgba(20,20,20,0.86); border: 1px solid rgba(255,255,255,0.28);
+      border-radius: 9px; backdrop-filter: blur(8px);
+      box-shadow: 0 6px 18px rgba(0,0,0,0.32);
+    }
+    .launch:hover { background: rgba(45,45,45,0.92); }
+    .launch-right { right: 14px; }
+    .launch[hidden] { display: none; }
+
+    /* Toggle switches (basemap, POI/label on-off). */
+    label.sw { display: flex; align-items: center; gap: 9px; font-size: 12px; cursor: pointer; }
+    /* Only the checkbox is hidden behind the drawn track — scoped to
+       [type=checkbox] so other inputs inside the label stay visible. */
+    label.sw input[type="checkbox"] { position: absolute; opacity: 0; pointer-events: none; }
+    label.sw .track {
+      flex: 0 0 auto; width: 34px; height: 19px; border-radius: 10px; position: relative;
+      background: #3a3a3a; border: 1px solid #555; transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    label.sw .track::after {
+      content: ''; position: absolute; top: 2px; left: 2px;
+      width: 13px; height: 13px; border-radius: 50%; background: #ccc;
+      transition: transform 0.15s ease, background 0.15s ease;
+    }
+    label.sw input[type="checkbox"]:checked + .track { background: #2f8f86; border-color: #1f6f68; }
+    label.sw input[type="checkbox"]:checked + .track::after { transform: translateX(15px); background: #fff; }
+    label.sw input[type="checkbox"]:focus-visible + .track { outline: 2px solid #6fe3d6; outline-offset: 2px; }
+    label.sw .txt { flex: 1; }
+
+    /* Walking reach: label, toggle, minutes, unit and state on a single row.
+       The number input overrides the full-width rule the ID fields use, and the
+       state text is the flexible element so it absorbs the leftover space and
+       ellipsises rather than wrapping the row. */
+    .reach-line { display: flex; align-items: center; gap: 8px; }
+    .reach-line .rl-label { flex: 0 0 auto; font-size: 12px; }
+    .reach-line .rl-sw { flex: 0 0 auto; gap: 0; }
+    .reach-line input[type="number"] {
+      flex: 0 0 auto; width: 58px; min-width: 0;
+      padding: 6px 4px 6px 8px; text-align: left; font-size: 12.5px;
+    }
+    .reach-line .rl-unit { flex: 0 0 auto; font-size: 11.5px; color: #9a9a9a; }
+    .reach-line .rl-state {
+      flex: 1 1 auto; min-width: 0; text-align: right; font-size: 11px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* Detail sliders snap to named levels rather than raw numbers. */
+    .level { display: flex; flex-direction: column; gap: 4px; }
+    .level .lv-head { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+    .level .lv-head .lv-name { flex: 1; color: #9a9a9a; text-align: right; font-size: 11.5px; }
+    .level input[type="range"] { width: 100%; accent-color: #2f8f86; }
+    .level.off, label.sw.off, section.off { opacity: 0.4; pointer-events: none; }
+
+    /* Slim disclosure row. Kept short so a collapsed group costs almost no
+       vertical space in an already dense panel. */
+    .disclose {
+      display: flex; align-items: center; gap: 7px; width: 100%;
+      padding: 3px 6px; background: transparent; border: 0; border-radius: 5px;
+      color: #9a9a9a; font: 600 11.5px inherit; text-align: left; cursor: pointer;
+    }
+    .disclose:hover { background: rgba(255,255,255,0.06); color: #ddd; }
+    .disclose .caret { flex: 0 0 auto; font-size: 9px; transition: transform 0.15s ease; }
+    .disclose[aria-expanded="true"] .caret { transform: rotate(90deg); }
+    .disclose .disclose-txt { flex: 0 0 auto; }
+    .disclose .disclose-note {
+      flex: 1; text-align: right; font-weight: 600; color: #7d858d;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .disclose .disclose-note.filtered { color: #6fe3d6; }
+
+    .cats-actions { gap: 6px; }
+    .cats-actions button { padding: 3px 9px; font-size: 11px; }
+
+    /* Per-category label toggles, two per row. */
+    .cats { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
+    .cats label { display: flex; align-items: center; gap: 6px; font-size: 11.5px; cursor: pointer; }
+    .cats input { flex: 0 0 auto; accent-color: #2f8f86; margin: 0; }
+    .cats label.unavailable { opacity: 0.35; }
+
+    /* Colour pickers, two per row. */
+    .swatches { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 10px; align-items: center; }
+    .swatches label { display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer; }
+    .swatches input[type="color"] {
+      flex: 0 0 auto; width: 30px; height: 22px; padding: 2px; cursor: pointer;
+      background: #2c2c2c; border: 1px solid #555; border-radius: 6px;
+    }
+    .swatches button { grid-column: 1 / -1; justify-self: start; padding: 5px 10px; font-size: 11.5px; }
+    /* Sections are plain stacked groups separated by a rule, not boxes. The
+       divider plus an uppercase caption gives structure without the visual
+       weight of nested panels. */
+    section { display: flex; flex-direction: column; gap: 8px; }
+    section + section {
+      margin-top: 3px; padding-top: 12px;
+      border-top: 1px solid rgba(255,255,255,0.12);
+    }
+    /* A hidden section must not leave its divider (or gap) behind. */
+    section[hidden] { display: none; }
+    section[hidden] + section { margin-top: 0; padding-top: 0; border-top: 0; }
+    section h2 {
+      font-size: 10.5px; font-weight: 700; letter-spacing: 0.8px;
+      text-transform: uppercase; color: #8f97a0;
+      display: flex; align-items: baseline; gap: 8px;
+    }
+    /* Optional right-aligned reading beside a section title. */
+    section h2 .h2-note {
+      flex: 1; text-align: right; font-weight: 600; letter-spacing: 0;
+      text-transform: none; font-size: 11px; color: #7d858d;
+    }
+    /* The zoom note warns when the tiles lack street names at this zoom. */
+    section h2 .h2-note.warn { color: #ffd66b; }
+    /* A sub-label inside a section (e.g. "Level" under Points of interest). */
+    .sub-label { font-size: 11.5px; color: #9a9a9a; }
     .hint { font-size: 12px; line-height: 1.45; color: #9a9a9a; }
     .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     button {
@@ -76,114 +198,279 @@
     .status { font-size: 12px; min-height: 15px; color: #bbb; }
     .status.ok { color: #6fe3d6; }
     .status.err { color: #ff8d7e; }
+    .status.warn { color: #ffd66b; }
+    /* An ID that already exists on disk: exporting would replace it. */
+    input.used { border-color: #b89200; background: #2a2410; color: #ffd66b; }
 
-    #camBox {
-      position: relative; width: 100%; aspect-ratio: 4 / 3;
-      background: #000; border-radius: 8px; overflow: hidden;
-      display: flex; align-items: center; justify-content: center;
+    /* Drag-and-drop target. Replaces the old "load photo" text link and the
+       camera preview box: the map itself is the preview now. */
+    #dropZone {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 3px; padding: 18px 12px; cursor: pointer; text-align: center;
+      border: 1.5px dashed #565656; border-radius: 10px; background: #1c1c1c;
+      transition: border-color 0.15s ease, background 0.15s ease;
     }
-    #camBox img { max-width: 100%; max-height: 100%; display: block; cursor: crosshair; }
-    #camOverlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-    #camEmpty { position: absolute; font-size: 12px; color: #888; text-align: center; padding: 10px; }
+    #dropZone:hover, #dropZone:focus-visible { border-color: #6fe3d6; background: #202626; outline: none; }
+    #dropZone.dragover { border-color: #2f8f86; background: #17302d; border-style: solid; }
+    #dropZone strong { font-size: 12.5px; font-weight: 700; color: #e6e6e6; }
+    #dropZone span { font-size: 11.5px; color: #8f8f8f; }
+
+    /* One row per loaded image, with its own per-sheet state. */
+    #sheetList { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+    #sheetList:empty { display: none; }
+    #sheetList li {
+      display: flex; align-items: center; gap: 8px; font-size: 11.5px;
+      padding: 5px 8px; border-radius: 6px; background: #1e1e1e; border: 1px solid #333;
+    }
+    #sheetList .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #sheetList .st { flex: 0 0 auto; color: #9a9a9a; font-variant-numeric: tabular-nums; }
+    #sheetList li.ok { border-color: #2f8f86; }
+    #sheetList li.ok .st { color: #6fe3d6; }
+    #sheetList li.err { border-color: #7a3a33; }
+    #sheetList li.err .st { color: #ff8d7e; }
+    #sheetList .x {
+      flex: 0 0 auto; padding: 1px 6px; font: 700 12px inherit; line-height: 1.3;
+      background: transparent; border: 1px solid #4a4a4a; border-radius: 5px; color: #bbb;
+    }
 
     label.slider { display: flex; align-items: center; gap: 8px; font-size: 12px; }
     label.slider input[type="range"] { flex: 1; accent-color: #2f8f86; }
     label.slider .val { min-width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
-    input[type="color"] { width: 34px; height: 26px; border: 1px solid #555; border-radius: 6px; background: #2c2c2c; padding: 2px; cursor: pointer; }
-    label.chk { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+    input[type="text"], input[type="number"], select {
+      min-width: 0; flex: 1; padding: 7px 9px; border-radius: 7px;
+      color: #eee; background: #292929; border: 1px solid #555; font: 12px inherit;
+    }
     input[type="file"] { display: none; }
 
-    /* Numbered corner markers dropped on the map */
-    .map-corner-marker {
-      width: 22px; height: 22px; border-radius: 50%;
-      background: #ffd000; border: 2px solid #000;
-      display: flex; align-items: center; justify-content: center;
-      font: 700 12px Arial, sans-serif; color: #000;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.5);
-    }
-    /* Hidden working canvases (rectified ink canvas must stay in the DOM for
-       the maplibre canvas source). */
-    #camCanvas, #inkCanvas { display: none; }
+    /* Hidden working elements. The rectified ink canvas must stay in the DOM for
+       the maplibre canvas source; camImg is the decode target for each photo /
+       the MJPEG stream, and is never shown now that the preview box is gone. */
+    #camCanvas, #inkCanvas, #camImg { display: none; }
   </style>
 </head>
 <body>
   <div id="wrap">
     <div id="map"></div>
+    <svg id="exportPreview" hidden aria-hidden="true"></svg>
 
-    <aside id="panel">
-      <h1 style="display:flex;align-items:center;gap:8px;">Paper drawing → digital map
-        <span style="flex:1"></span>
-        <button type="button" id="panelHideBtn" title="Hide the panel to see the whole map">Hide →</button>
+    <!-- The launcher opens the digitization workflow. -->
+    <button type="button" id="openH" class="launch launch-right" title="Digitize map (H)">Digitize Map</button>
+
+    <aside id="panel" class="panel collapsed">
+      <h1 class="panel-title">
+        <button type="button" class="back" data-close="panel" title="Close (H)" aria-label="Close">‹</button>
+        <span>Digitize Map</span>
       </h1>
-      <p class="hint">
-        Draw paths on a white sheet, then bring the drawing onto the live map.
-        Corner order matters: corner&nbsp;1 on the map is where corner&nbsp;1 of the
-        paper lands, and so on (clockwise from the paper's top-left works well).
-      </p>
 
-      <!-- Step 1: map corners -->
-      <section class="step" id="stepMap">
-        <h2><span class="n">1</span> Map corners <span style="flex:1"></span>
-          <button type="button" id="mapPickBtn">Pick on map</button>
-          <button type="button" id="mapResetBtn">Reset</button>
-        </h2>
-        <div class="hint">Click the 4 map points the paper's corners represent (the area the paper covers).</div>
-        <div class="status" id="mapStatus">0/4 set.</div>
+      <section id="tempRasterControls" hidden>
+        <label class="slider">Raster opacity
+          <input type="range" id="tempRasterOpacity" min="0" max="1" step="0.05" value="0.65" />
+          <span class="val" id="tempRasterOpacityVal">65%</span>
+        </label>
       </section>
 
-      <!-- Step 2: paper corners in the camera -->
-      <section class="step" id="stepCam">
-        <h2><span class="n">2</span> Paper corners <span style="flex:1"></span>
-          <button type="button" id="camSourceBtn">Use camera</button>
-          <label for="photoInput"><span class="hint" style="cursor:pointer;text-decoration:underline;">load photo</span></label>
-          <input type="file" id="photoInput" accept="image/*" />
-          <button type="button" id="camResetBtn">Reset</button>
-        </h2>
-        <div id="camBox">
-          <img id="camImg" alt="Camera view" style="display:none;" />
-          <canvas id="camOverlay"></canvas>
-          <span id="camEmpty">No image — click “Use camera” (needs a connected camera) or load a photo of the paper.</span>
+      <!-- Scan: camera or dropped photos. Loading runs detection automatically. -->
+      <section id="stepCam">
+        <h2>Scan marked map</h2>
+        <div id="dropZone" tabindex="0" role="button"
+             aria-label="Drop photos of the marked map here, or click to choose files">
+          <strong>Drop photos here</strong>
+          <span>or click to choose — several at once is fine</span>
+          <input type="file" id="photoInput" accept="image/*" multiple />
         </div>
-        <div class="status" id="camStatus">Click the paper's 4 corners in the image, same order as step 1.</div>
+        <div class="row">
+          <button type="button" id="camSourceBtn">Use camera</button>
+          <button type="button" id="camResetBtn">Reset</button>
+        </div>
+        <ul id="sheetList"></ul>
+        <div class="status" id="camStatus"></div>
       </section>
 
-      <!-- Step 3: extract + project -->
-      <section class="step" id="stepInk">
-        <h2><span class="n">3</span> Project the drawing</h2>
-        <label class="slider">Ink threshold
-          <input type="range" id="threshold" min="30" max="230" step="1" value="130" />
-          <span class="val" id="thresholdVal">130</span>
+      <!-- Detection runs on load; the threshold re-runs it. -->
+      <section id="stepInk">
+        <h2>Detected drawing</h2>
+        <label class="slider">Difference threshold
+          <input type="range" id="threshold" min="5" max="100" step="1" value="28" />
+          <span class="val" id="thresholdVal">28</span>
         </label>
         <div class="row">
-          <span class="hint">Stroke</span>
-          <input type="color" id="strokeColor" value="#d3302f" />
-          <label class="slider" style="flex:1">Opacity
-            <input type="range" id="inkOpacity" min="0.2" max="1" step="0.05" value="0.95" />
-            <span class="val" id="inkOpacityVal">0.95</span>
-          </label>
-        </div>
-        <div class="row">
-          <button type="button" class="primary" id="projectBtn" disabled>Project onto map</button>
-          <label class="chk"><input type="checkbox" id="liveChk" /> live (re-capture)</label>
-          <button type="button" id="clearBtn">Clear</button>
+          <button type="button" id="exportGeojsonBtn" disabled>Export GeoJSON</button>
         </div>
         <div class="status" id="inkStatus"></div>
       </section>
+    </aside>
 
-      <p class="hint">
-        The paper needs no printed map — it is matched to the map purely by the
-        two sets of corners (camera quad → paper → map quad homography). Ink =
-        anything darker than the threshold.
-      </p>
+    <!-- Retained only as inert renderer state for the digitizer. Paper-map
+         generation is now provided by Maputnik. -->
+    <aside id="panelG" class="panel collapsed" hidden aria-hidden="true">
+      <h1 class="panel-title">
+        <button type="button" class="back" data-close="panelG" title="Close (G)" aria-label="Close">‹</button>
+        <span>Create Map</span>
+      </h1>
+
+      <section>
+        <h2>Basemap</h2>
+        <label class="sw">
+          <input type="checkbox" id="basemapToggle" />
+          <span class="track"></span>
+          <span class="txt">MapLibre vector basemap</span>
+        </label>
+      </section>
+
+      <section>
+        <h2>Points of interest</h2>
+        <label class="sw">
+          <input type="checkbox" id="poiOn" checked />
+          <span class="track"></span>
+          <span class="txt">Show POI icons</span>
+        </label>
+        <div class="level" id="poiLevelWrap">
+          <div class="lv-head"><span class="sub-label">Level</span><span class="lv-name" id="poiLevelName">3 · Common</span></div>
+          <input type="range" id="poiLevel" min="1" max="6" step="1" value="3" aria-label="POI detail level" />
+        </div>
+        <label class="sw" id="poiOverlapOnWrap">
+          <input type="checkbox" id="poiOverlapOn" />
+          <span class="track"></span>
+          <span class="txt">Show overlapping icons</span>
+        </label>
+        <label class="sw" id="poiOverlapLabelsWrap">
+          <input type="checkbox" id="poiOverlapLabels" disabled />
+          <span class="track"></span>
+          <span class="txt">Include labels</span>
+        </label>
+        <div class="level" id="poiCollisionWrap">
+          <div class="lv-head"><span class="sub-label">Icon spacing</span><span class="lv-name" id="poiCollisionName">Touching</span></div>
+          <input type="range" id="poiCollisionDistance" min="0" max="24" step="1" value="0"
+                 aria-label="POI icon spacing" />
+        </div>
+
+        <!-- Type filter, collapsed by default so it costs no height until used. -->
+        <button type="button" class="disclose" id="poiTypesToggle"
+                aria-expanded="false" aria-controls="poiTypesWrap">
+          <span class="caret">▸</span>
+          <span class="disclose-txt">Types</span>
+          <span class="disclose-note" id="poiTypesNote">all</span>
+        </button>
+        <div class="level" id="poiTypesWrap" hidden>
+          <div class="cats" id="poiCats">
+            <label><input type="checkbox" data-poi="food"      checked /> Food &amp; drink</label>
+            <label><input type="checkbox" data-poi="shop"      checked /> Shops</label>
+            <label><input type="checkbox" data-poi="education" checked /> Education</label>
+            <label><input type="checkbox" data-poi="health"    checked /> Health</label>
+            <label><input type="checkbox" data-poi="transport" checked /> Transport</label>
+            <label><input type="checkbox" data-poi="leisure"   checked /> Culture &amp; leisure</label>
+            <label><input type="checkbox" data-poi="civic"     checked /> Civic</label>
+            <label><input type="checkbox" data-poi="street"    /> Street furniture</label>
+            <label><input type="checkbox" data-poi="other"     checked /> Other</label>
+          </div>
+          <div class="row cats-actions">
+            <button type="button" id="poiCatsAll">All</button>
+            <button type="button" id="poiCatsNone">None</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Text labels<span class="h2-note" id="labelZoomNote"></span></h2>
+        <label class="sw">
+          <input type="checkbox" id="labelOn" checked />
+          <span class="track"></span>
+          <span class="txt">Show labels</span>
+        </label>
+        <div class="level" id="labelCatsWrap">
+          <div class="cats" id="labelCats">
+            <label><input type="checkbox" data-cat="major"     checked /> Major roads</label>
+            <label><input type="checkbox" data-cat="secondary" checked /> Secondary / tertiary</label>
+            <label><input type="checkbox" data-cat="minor"     checked /> Minor streets</label>
+            <label><input type="checkbox" data-cat="path"      /> Paths &amp; service</label>
+            <label><input type="checkbox" data-cat="place"     checked /> Place names</label>
+            <label><input type="checkbox" data-cat="water"     checked /> Water names</label>
+          </div>
+        </div>
+        <div class="level" id="densityWrap">
+          <div class="lv-head"><span class="sub-label">Packing</span><span class="lv-name" id="densityName">Normal</span></div>
+          <input type="range" id="labelDensity" min="0" max="3" step="1" value="0"
+                 aria-label="Label packing" />
+        </div>
+        <div class="status" id="detailStatus"></div>
+      </section>
+
+      <!-- Appearance: map colours and building treatment. -->
+      <section id="appearanceSection">
+        <h2>Appearance</h2>
+        <button type="button" class="disclose" id="colorsToggle"
+                aria-expanded="false" aria-controls="colorsWrap">
+          <span class="caret">&#9656;</span>
+          <span class="disclose-txt">Colours</span>
+          <span class="disclose-note">5 colours</span>
+        </button>
+        <div class="level" id="colorsWrap" hidden>
+          <div class="swatches">
+            <label><input type="color" id="cBackground" value="#f8f4f0" /> Background</label>
+            <label><input type="color" id="cPark" value="#d8e8c8" /> Park</label>
+            <label><input type="color" id="cWater" value="#9ebdff" /> Water</label>
+            <label><input type="color" id="cRoad" value="#ffeeaa" /> Roads</label>
+            <label><input type="color" id="cBuilding" value="#dcd9d6" /> Building</label>
+            <button type="button" id="colorReset">Reset colours</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <span class="sub-label">Buildings</span>
+          <select id="buildingMode" aria-label="Building display">
+            <option value="normal" selected>Normal</option>
+            <option value="fade">Faded</option>
+            <option value="outline">Outline</option>
+            <option value="hide">Hidden</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- Walking reach: toggle, minutes and state all on one line. -->
+      <section id="reachSection">
+        <h2>Analysis</h2>
+        <div class="reach-line">
+          <span class="rl-label">Walking reach</span>
+          <label class="sw rl-sw" title="Show walking reach">
+            <input type="checkbox" id="reachOn" />
+            <span class="track"></span>
+          </label>
+          <input type="number" id="reachMinutes" min="1" max="60" step="1" value="10"
+                 title="Minutes on foot" aria-label="Walking minutes" />
+          <span class="rl-unit">min</span>
+          <span class="status rl-state" id="reachStatus"></span>
+        </div>
+      </section>
+
+      <!-- Reference sheet: printable map + persisted georeferencing values -->
+      <section id="stepReference">
+        <h2>Export</h2>
+        <div class="row">
+          <input type="number" id="sheetType" min="1" max="999999999" step="1"
+                 placeholder="Map type" aria-label="Map type" />
+          <input type="number" id="sheetParticipants" min="1" max="200" step="1"
+                 placeholder="Participants" aria-label="Number of participants" />
+        </div>
+        <div class="row">
+          <select id="pageSize" aria-label="Page size">
+            <option value="A4" selected>A4</option>
+            <option value="A3">A3</option>
+          </select>
+          <button type="button" class="primary" id="exportPdfBtn">Export</button>
+        </div>
+
+        <label class="sw">
+          <input type="checkbox" id="previewOn" checked />
+          <span class="track"></span>
+          <span class="txt">Show export frame</span>
+        </label>
+
+        <div class="status" id="referenceStatus"></div>
+      </section>
     </aside>
   </div>
 
-  <button type="button" id="panelTab">◂ Panel</button>
-  <div id="pickChip">
-    <span id="pickChipText">Click map corner 1/4</span>
-    <button type="button" id="pickChipDone">Done</button>
-  </div>
-
+  <img id="camImg" alt="" />
   <canvas id="camCanvas"></canvas>
   <canvas id="inkCanvas" width="1000" height="707"></canvas>
 
@@ -196,366 +483,2210 @@
       function $(id) { return document.getElementById(id); }
       function setStatus(el, msg, kind) {
         el.textContent = msg || '';
-        el.className = 'status' + (kind ? ' ' + kind : '');
+        // Only the state classes are swapped. Rewriting className wholesale
+        // would strip layout classes such as rl-state, which carries the
+        // flex sizing for the inline walking-reach row.
+        el.classList.remove('ok', 'err', 'warn');
+        el.classList.add('status');
+        if (kind) el.classList.add(kind);
       }
 
-      // ==================== map (same view as the main map page) ====================
+      // ==================== printable OSM / MapLibre basemaps ====================
       var CONFIG = window.CompactMapConfig.CONFIG;
+      // Streets remain the normal OSM raster requested for this workflow.
+      // The alternate basemap is a token-free MapLibre VECTOR style:
+      // OpenFreeMap "Liberty" (OpenMapTiles schema, OSM-derived). It is chosen
+      // over MapLibre's own demotiles style (world-scale country polygons only,
+      // so blank at this project's ~z16 working zoom) and over VersaTiles
+      // "colorful", because it carries far more landmark/POI detail: on the
+      // z14 tile covering this campus it has ~860 POIs (245 named) vs ~380.
+      // The vector source caps at z14 and MapLibre overzooms beyond it, which
+      // keeps streets and labels crisp at z16+. Style, tiles, glyphs and
+      // sprites are all served with Access-Control-Allow-Origin:*, so the POI
+      // icons load and the PDF canvas export stays untainted.
+      var PAPER_MAPLIBRE_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+      var PAPER_OSM_STYLE = {
+        version: 8,
+        sources: {
+          'paper-osm-source': {
+            type: 'raster',
+            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            tileSize: 256,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          }
+        },
+        layers: [{
+          id: 'paper-osm-tiles',
+          type: 'raster',
+          source: 'paper-osm-source',
+          minzoom: 0,
+          maxzoom: 19,
+          // Linear raster sampling softens labels whenever the map is between
+          // integer zoom levels. Preserve the original OSM tile pixels for a
+          // crisper live view and reference-sheet capture.
+          paint: {
+            'raster-resampling': 'nearest',
+            'raster-fade-duration': 0
+          }
+        }]
+      };
+
+      // Default view: Rue de Ménilmontant, Paris 20e. Centre is the midpoint of
+      // the street's real OSM extent (lon 2.38286..2.39923, lat 48.86700..48.87078),
+      // at a zoom that fits its length on a printable sheet. Overridden locally
+      // rather than in config.js so other pages keep their own default view.
+      var PAPER_DEFAULT_CENTER = [2.39104, 48.86889];
+      var PAPER_DEFAULT_ZOOM = 15.6;
+
       var setup = window.CompactMapSetup.initMap({
-        config: CONFIG,
-        themeStyles: CONFIG.styles,
+        config: Object.assign({}, CONFIG, {
+          style: PAPER_OSM_STYLE,
+          useMapboxServices: false,
+          center: PAPER_DEFAULT_CENTER,
+          zoom: PAPER_DEFAULT_ZOOM,
+          pitch: 0,
+          bearing: 0
+        }),
+        // useBuiltIn3D:true tells mapSetup NOT to inject its own extruded
+        // buildings layer — this page wants a flat map on both basemaps.
+        themeStyles: {
+          streets: { style: PAPER_OSM_STYLE, useBuiltIn3D: true },
+          maplibre: { style: PAPER_MAPLIBRE_STYLE, useBuiltIn3D: true }
+        },
         initialTheme: 'streets',
-        onStyleLoad: function () { reAddInkLayer(); }
+        // Fullscreen changes the CSS viewport. Keep the WebGL backing canvas at
+        // the same physical size instead of stretching its previous pixels.
+        trackResize: true,
+        preserveDrawingBuffer: true,
+        onStyleLoad: function (event) {
+          if (event && event.theme === 'maplibre') applyMapLibreAppearance();
+          reAddTempSketchMapRasterResult();
+          reAddTempSketchMapResult();
+          reAddInkLayer();
+          reAddPinLayer();
+          // A style swap tears down custom sources; rebuild the reach overlay.
+          if ($('reachOn') && $('reachOn').checked) updateReach();
+        }
       });
       var map = setup.map;
 
-      // ==================== homography (4-point DLT) ====================
-      // Returns H (row-major 9) mapping src[i] -> dst[i] for 4 point pairs.
-      function solveHomography(src, dst) {
-        // Build the 8x9 system A·h = 0 with h33 pinned to 1 → 8x8 linear solve.
-        var A = [];
-        var b = [];
-        for (var i = 0; i < 4; i++) {
-          var x = src[i][0], y = src[i][1];
-          var u = dst[i][0], v = dst[i][1];
-          A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
-          A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
-        }
-        // Gaussian elimination with partial pivoting.
-        for (var col = 0; col < 8; col++) {
-          var piv = col;
-          for (var r = col + 1; r < 8; r++) {
-            if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
-          }
-          if (Math.abs(A[piv][col]) < 1e-12) return null;
-          var tmp = A[col]; A[col] = A[piv]; A[piv] = tmp;
-          var tb = b[col]; b[col] = b[piv]; b[piv] = tb;
-          for (var r2 = col + 1; r2 < 8; r2++) {
-            var f = A[r2][col] / A[col][col];
-            for (var c = col; c < 8; c++) A[r2][c] -= f * A[col][c];
-            b[r2] -= f * b[col];
-          }
-        }
-        var h = new Array(8);
-        for (var row = 7; row >= 0; row--) {
-          var s = b[row];
-          for (var c2 = row + 1; c2 < 8; c2++) s -= A[row][c2] * h[c2];
-          h[row] = s / A[row][row];
-        }
-        return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+      // ==================== POI / label detail levels ====================
+      // Liberty gates detail two different ways, so each needs its own ladder:
+      //
+      //  * POIs carry a numeric `rank` (1 = most important). The stock style
+      //    splits them across three layers by rank AND minzoom (rank 1-6 from
+      //    z15, 7-19 from z16, 20+ from z17). Sorting by rank is therefore the
+      //    style's own notion of importance, and on this campus tile the
+      //    The first four ceilings select roughly 12% / 21% / 32% / 55% of
+      //    POIs on the measured tile. Rank 50 is an intentionally bounded step
+      //    between rank 20 and the unfiltered "Everything" setting, avoiding the
+      //    large density jump that previously happened at the end of the slider.
+      //
+      //  * Labels have no rank; their importance is encoded as minzoom
+      //    (country 2 -> state 5 -> town 6 -> place 8 -> major road 12.2 ->
+      //    minor road 15 -> path 15.5). A label that appears when zoomed far
+      //    out is by definition a more important one, so the native minzoom IS
+      //    the ranking, and each level admits everything at or below a ceiling.
+      //
+      // For both, the selected level is shown REGARDLESS of current zoom: the
+      // layer's own minzoom is forced down to 0 so nothing is hidden just
+      // because the map is zoomed out. MapLibre still collision-culls
+      // overlapping text, so a high level adds density without illegible pileup.
+      // POI TYPE groups, over the OpenMapTiles `class` field. Rank measures
+      // importance, not kind, so the level slider cannot single out clutter:
+      // turning it down to hide bollards hides real shops too. These groups are
+      // the orthogonal axis — what a thing IS — and compose with the ceiling.
+      //
+      // The class lists were taken from a decoded z14 tile over this area
+      // (8233 POIs, 78 distinct classes). Street furniture alone — gates,
+      // bollards, waste baskets, bicycle parking, recycling — is ~2600 of them,
+      // which is why it is the one group off by default.
+      var POI_TYPE_GROUPS = {
+        food:      ['restaurant', 'cafe', 'fast_food', 'bar', 'beer', 'ice_cream', 'pub'],
+        shop:      ['shop', 'grocery', 'bakery', 'butcher', 'clothing_store', 'alcohol_shop',
+                    'hairdresser', 'laundry', 'florist', 'jewelry', 'books', 'marketplace'],
+        education: ['school', 'college', 'university', 'library', 'kindergarten'],
+        health:    ['pharmacy', 'doctors', 'dentist', 'hospital', 'veterinary', 'clinic'],
+        transport: ['bus', 'railway', 'subway', 'tram', 'ferry_terminal', 'airport',
+                    'bicycle_rental', 'car_rental', 'parking', 'fuel', 'charging_station'],
+        leisure:   ['art_gallery', 'theatre', 'museum', 'cinema', 'attraction', 'castle',
+                    'park', 'garden', 'playground', 'pitch', 'sports_centre', 'swimming_pool',
+                    'dog_park', 'stadium', 'zoo', 'picnic_site'],
+        civic:     ['town_hall', 'post', 'bank', 'atm', 'police', 'fire_station',
+                    'place_of_worship', 'office', 'lodging', 'embassy', 'courthouse',
+                    'community_centre'],
+        street:    ['gate', 'bollard', 'lift_gate', 'cycle_barrier', 'waste_basket',
+                    'bicycle_parking', 'motorcycle_parking', 'recycling', 'drinking_water',
+                    'bench', 'toilets', 'shelter', 'entrance', 'information']
+      };
+
+      // Every class that belongs to a named group; anything else falls to "other".
+      var POI_KNOWN_CLASSES = Object.keys(POI_TYPE_GROUPS).reduce(function (all, key) {
+        return all.concat(POI_TYPE_GROUPS[key]);
+      }, []);
+
+      function poiTypeEnabled(name) {
+        var input = document.querySelector('#poiCats input[data-poi="' + name + '"]');
+        return !!(input && input.checked);
       }
 
-      function applyH(H, x, y) {
-        var w = H[6] * x + H[7] * y + H[8];
-        return [
-          (H[0] * x + H[1] * y + H[2]) / w,
-          (H[3] * x + H[4] * y + H[5]) / w
+      // Build the class test for the enabled groups.
+      //   null  -> no filtering needed (everything is on)
+      //   false -> nothing is on; the caller hides the layers entirely
+      function poiClassFilter() {
+        var groups = Object.keys(POI_TYPE_GROUPS);
+        var enabled = groups.filter(poiTypeEnabled);
+        var otherOn = poiTypeEnabled('other');
+        if (enabled.length === groups.length && otherOn) return null;      // all on
+        if (!enabled.length && !otherOn) return false;                     // all off
+
+        var allowed = [];
+        enabled.forEach(function (key) {
+          POI_TYPE_GROUPS[key].forEach(function (cls) {
+            if (allowed.indexOf(cls) < 0) allowed.push(cls);
+          });
+        });
+        var test = allowed.length
+          ? ['match', ['get', 'class'], allowed, true, false]
+          : null;
+        if (otherOn) {
+          // "Other" = any class not claimed by a named group, so unfamiliar
+          // classes in other cities stay visible instead of vanishing silently.
+          var unknown = ['!', ['match', ['get', 'class'], POI_KNOWN_CLASSES, true, false]];
+          test = test ? ['any', test, unknown] : unknown;
+        }
+        return test;
+      }
+
+      function refreshPoiTypesNote() {
+        var groups = Object.keys(POI_TYPE_GROUPS).concat(['other']);
+        var on = groups.filter(poiTypeEnabled).length;
+        var note = $('poiTypesNote');
+        if (!note) return;
+        var all = on === groups.length;
+        note.textContent = all ? 'all' : (on === 0 ? 'none' : on + ' of ' + groups.length);
+        note.classList.toggle('filtered', !all);
+      }
+
+      var POI_RANK_CEILING = {
+        1: 3,
+        2: 6,
+        3: 10,
+        4: 20,
+        5: 50,
+        6: Infinity
+      };
+      var POI_LEVEL_NAME = {
+        1: '1 · Landmarks only', 2: '2 · Major', 3: '3 · Common',
+        4: '4 · Detailed', 5: '5 · Very detailed', 6: '6 · Everything'
+      };
+      // Label control is per-CATEGORY, not a single importance ladder.
+      //
+      // The old "Countries -> Towns -> Streets" ladder ordered layers by their
+      // native minzoom, which mixes place names, water names and road names
+      // into one axis and gives no way to say "street names but not paths".
+      // Road names are what matters on a paper map, so each road class gets its
+      // own switch. `highway-name-major` covers trunk/primary/secondary/tertiary
+      // in ONE layer, so the split is done by rewriting its class filter.
+      //
+      // Every enabled layer is forced to minzoom 0, so a choice holds at any
+      // zoom — but only down to z14. Below that OpenMapTiles omits minor road
+      // names from the tiles entirely (measured over this area: 438 named roads
+      // in the z14 tile, 17 at z13, 14 at z12), so nothing can reveal them and
+      // the controls are marked unavailable instead of lying.
+      var LABEL_DATA_MIN_ZOOM = 14;
+
+      var LABEL_CATEGORIES = {
+        major:     { layers: ['highway-name-major'], classes: ['trunk', 'primary'] },
+        secondary: { layers: ['highway-name-major'], classes: ['secondary', 'tertiary'] },
+        minor:     { layers: ['highway-name-minor'], classes: ['minor'] },
+        path:      { layers: ['highway-name-path', 'highway-name-minor'], classes: ['path', 'service', 'track'] },
+        place:     { layers: ['label_other', 'label_village', 'label_town', 'label_state',
+                              'label_city', 'label_city_capital', 'label_country_1',
+                              'label_country_2', 'label_country_3', 'airport'] },
+        water:     { layers: ['water_name_point_label', 'water_name_line_label',
+                              'waterway_line_label'] }
+      };
+
+      function labelCatEnabled(name) {
+        var input = document.querySelector('#labelCats input[data-cat="' + name + '"]');
+        return !!(input && input.checked);
+      }
+
+      // ---- label packing -------------------------------------------------
+      // Even where data exists, MapLibre culls colliding labels using its
+      // defaults: text-padding 2px, symbol-spacing 250px (line labels repeat
+      // only every 250px), and text-optional false (a POI is dropped entirely
+      // when its text will not fit, taking the icon with it). Relaxing these
+      // recovers labels the tiles already contain.
+      //
+      // This does NOT help below z14, where the tiles simply lack minor road
+      // names and non-transit POIs — nothing on the client can invent those.
+      // `shrink` is the multiplier applied to text and icon size at LOW zoom.
+      //
+      // This is the lever that actually recovers POIs when zooming out.
+      // Liberty pins text-size to a constant 12px, so as the map zooms out the
+      // label keeps its pixel size while the world shrinks beneath it: at z17 a
+      // ~120px label covers 94 m of ground, at z16 it covers 189 m, at z15
+      // 377 m. Twice the footprint each step means twice the collisions, and
+      // MapLibre drops whatever loses. Padding and spacing (below) only trim
+      // the margins around a label — shrinking the label itself is what buys
+      // back real space.
+      // A label's collision box scales with BOTH its width and height, so the
+      // area it claims goes as shrink^2 — 0.70 text is roughly half the
+      // footprint. These values are chosen to make a visible difference at
+      // z15-16 while staying legible in print at the smallest step.
+      var LABEL_PACKING = [
+        { name: 'Normal',  padding: null, spacing: null, optional: false, shrink: 1.00 },
+        { name: 'Tight',   padding: 1,    spacing: 200,  optional: true,  shrink: 0.88 },
+        { name: 'Tighter', padding: 0,    spacing: 150,  optional: true,  shrink: 0.78 },
+        { name: 'Max',     padding: 0,    spacing: 100,  optional: true,  shrink: 0.68 }
+      ];
+
+      // Full size when zoomed right in, full shrink by z16 — the crowding shows
+      // up immediately on the first step out, so the ramp has to be short to be
+      // any use there. Below z16 it simply stays at the shrunken size.
+      var SHRINK_ZOOM_START = 17.5; // at/above this zoom: unchanged
+      var SHRINK_ZOOM_END = 16;     // at/below this zoom: full shrink
+
+      // Wrap a size value (a number, or an existing zoom expression) so it is
+      // scaled by `factor` below SHRINK_ZOOM_START and left alone above it.
+      function shrinkBySize(value, factor) {
+        if (value === undefined || value === null || factor >= 1) return value;
+        return ['interpolate', ['linear'], ['zoom'],
+          SHRINK_ZOOM_END, ['*', value, factor],
+          SHRINK_ZOOM_START, value
         ];
       }
 
-      // ==================== panel show/hide ====================
-      var panel = $('panel');
-      var panelTab = $('panelTab');
-      var pickChip = $('pickChip');
-
-      function setPanelCollapsed(collapsed) {
-        panel.classList.toggle('collapsed', collapsed);
-        panelTab.classList.toggle('visible', collapsed && !pickingMap);
+      function currentPacking() {
+        return LABEL_PACKING[Number($('labelDensity').value)] || LABEL_PACKING[0];
       }
-      $('panelHideBtn').addEventListener('click', function () { setPanelCollapsed(true); });
-      panelTab.addEventListener('click', function () { setPanelCollapsed(false); });
 
-      // ==================== step 1: map corners ====================
-      var mapCorners = [];        // [ [lng,lat] x4 ]
-      var mapMarkers = [];
-      var pickingMap = false;
-      var mapPickBtn = $('mapPickBtn');
+      // symbol-spacing only affects line-placed labels; setting it on a point
+      // layer is ignored, but the placement can itself be a zoom expression
+      // (the highway shields), so treat anything non-'point' as line-capable.
+      function isLinePlaced(placement) {
+        if (placement === undefined || placement === null) return false;
+        if (typeof placement === 'string') return placement !== 'point';
+        return true;                       // expression -> may become 'line'
+      }
 
-      // While picking, the panel slides away so the WHOLE map is visible and
-      // clickable; a floating chip shows progress instead.
-      function setPickingMap(next) {
-        pickingMap = next;
-        mapPickBtn.classList.toggle('armed', next);
-        mapPickBtn.textContent = next ? 'Picking… (click map)' : 'Pick on map';
-        map.getCanvas().style.cursor = next ? 'crosshair' : '';
-        pickChip.classList.toggle('visible', next);
-        if (next) {
-          refreshPickChip();
-          setPanelCollapsed(true);
-        } else {
-          setPanelCollapsed(false);
+      function applyPackingTo(target, layerId, base) {
+        var packing = currentPacking();
+        function set(prop, value) {
+          try { target.setLayoutProperty(layerId, prop, value); } catch (_e) {}
+        }
+        // null restores the layer's own value (or the spec default).
+        set('text-padding', packing.padding === null ? base.textPadding : packing.padding);
+        set('text-optional', packing.optional ? true : base.textOptional);
+        if (isLinePlaced(base.placement)) {
+          set('symbol-spacing', packing.spacing === null ? base.symbolSpacing : packing.spacing);
+        }
+        // Scale the label itself down as the map zooms out. Applied from the
+        // captured stock value, so returning to Normal restores it exactly.
+        if (base.textSize !== undefined) {
+          set('text-size', shrinkBySize(base.textSize, packing.shrink));
+        }
+        if (base.iconSize !== undefined) {
+          set('icon-size', shrinkBySize(base.iconSize, packing.shrink));
         }
       }
 
-      function refreshPickChip() {
-        $('pickChipText').textContent = mapCorners.length >= 4
-          ? 'All 4 corners set ✓'
-          : 'Click map corner ' + (mapCorners.length + 1) + '/4';
+      // MapLibre's overlap switches are boolean; the continuous control it
+      // exposes is collision padding. The switches decide whether icons and
+      // labels may ignore collisions, while the slider controls the extra space
+      // around the icon collision box when collision detection remains active.
+      function applyPoiOverlap(target, layerId, base) {
+        var overlapOn = $('poiOverlapOn').checked;
+        var labelsToo = overlapOn && $('poiOverlapLabels').checked;
+        var buffer = Number($('poiCollisionDistance').value);
+        function set(prop, value) {
+          try { target.setLayoutProperty(layerId, prop, value); } catch (_e) {}
+        }
+        function stock(value) {
+          return value === undefined ? null : value;
+        }
+
+        set('icon-padding', buffer);
+        // POI names retain the style's normal collision padding; text-optional
+        // below allows an icon to survive without its label.
+        set('text-padding', stock(base.textPadding));
+        // Liberty's default couples each icon to its text: if a long shop name
+        // collides, MapLibre drops the icon as well. Keep text optional in every
+        // mode so collision avoidance judges icons by their own small boxes.
+        // This is what prevents distant-looking POIs from disappearing merely
+        // because their invisible label boxes overlap.
+        set('text-optional', true);
+        if (!overlapOn) {
+          // POIs are split across several style layers. A label accepted in an
+          // earlier layer must not reserve a large box that suppresses icons in
+          // later layers. Each label still checks existing collisions before it
+          // draws; text-optional lets its icon survive independently.
+          set('text-ignore-placement', true);
+          set('icon-allow-overlap', stock(base.iconAllowOverlap));
+          set('icon-ignore-placement', stock(base.iconIgnorePlacement));
+          set('text-allow-overlap', stock(base.textAllowOverlap));
+          return;
+        }
+
+        set('icon-allow-overlap', true);
+        set('icon-ignore-placement', true);
+        if (!labelsToo) {
+          // Icons bypass collisions, but labels return to the style's normal
+          // collision behavior unless the user explicitly includes them.
+          set('text-allow-overlap', stock(base.textAllowOverlap));
+          set('text-ignore-placement', stock(base.textIgnorePlacement));
+          return;
+        }
+
+        set('text-allow-overlap', true);
+        set('text-ignore-placement', true);
       }
 
-      $('pickChipDone').addEventListener('click', function () { setPickingMap(false); });
+      // Captured from the pristine style so repeated edits never compound.
+      var baseLayerState = {};
+
+      function captureBaseLayerState() {
+        baseLayerState = {};
+        var style;
+        try { style = map.getStyle(); } catch (_e) { return; }
+        (style && style.layers || []).forEach(function (layer) {
+          if (layer.type !== 'symbol') return;
+          var layout = layer.layout || {};
+          baseLayerState[layer.id] = {
+            minzoom: Number.isFinite(layer.minzoom) ? layer.minzoom : 0,
+            maxzoom: Number.isFinite(layer.maxzoom) ? layer.maxzoom : 24,
+            filter: layer.filter ? JSON.parse(JSON.stringify(layer.filter)) : null,
+            isPoi: layer['source-layer'] === 'poi',
+            // Stock placement values, so "Normal" restores them exactly rather
+            // than guessing at the spec defaults.
+            placement: layout['symbol-placement'],
+            textPadding: layout['text-padding'],
+            textOptional: layout['text-optional'],
+            textAllowOverlap: layout['text-allow-overlap'],
+            textIgnorePlacement: layout['text-ignore-placement'],
+            iconAllowOverlap: layout['icon-allow-overlap'],
+            iconIgnorePlacement: layout['icon-ignore-placement'],
+            iconPadding: layout['icon-padding'],
+            symbolSpacing: layout['symbol-spacing'],
+            textSize: layout['text-size'],
+            iconSize: layout['icon-size']
+          };
+        });
+      }
+
+      function setLayerVisible(id, visible) {
+        try { map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none'); } catch (_e) {}
+      }
+
+      // Strip any rank test out of a POI layer's stock filter, so our own
+      // ceiling is the only rank condition left. Without this the layer's
+      // built-in band (e.g. "rank >= 7 AND rank < 20") would intersect ours and
+      // silently hide most of what the level is meant to reveal.
+      function withoutRankTests(filter) {
+        if (!Array.isArray(filter)) return null;
+        var head = filter[0];
+        if (head === 'all' || head === 'any') {
+          var kept = filter.slice(1).map(withoutRankTests).filter(Boolean);
+          return kept.length ? [head].concat(kept) : null;
+        }
+        var mentionsRank = JSON.stringify(filter).indexOf('"rank"') >= 0;
+        if (mentionsRank && ['>=', '<=', '>', '<', '==', '!='].indexOf(head) >= 0) return null;
+        return filter;
+      }
+
+      // Drop any `class` test from a road-name layer's stock filter, so the
+      // allow-list built from the category switches is the only class
+      // condition left. Otherwise the layer's own list (e.g. primary/secondary/
+      // tertiary/trunk) would intersect ours and a single category could never
+      // be isolated.
+      function withoutClassTests(filter) {
+        if (!Array.isArray(filter)) return null;
+        var head = filter[0];
+        if (head === 'all' || head === 'any') {
+          var kept = filter.slice(1).map(withoutClassTests).filter(Boolean);
+          return kept.length ? [head].concat(kept) : null;
+        }
+        var text = JSON.stringify(filter);
+        var mentionsClass = text.indexOf('"class"') >= 0;
+        if (mentionsClass && (head === 'match' || head === '==' || head === '!=' || head === 'in')) {
+          return null;
+        }
+        return filter;
+      }
+
+      // Road classes the enabled categories allow, or null for "not a road-name
+      // layer" (place/water are simple on-off).
+      function allowedRoadClasses() {
+        var allowed = [];
+        ['major', 'secondary', 'minor', 'path'].forEach(function (name) {
+          if (!labelCatEnabled(name)) return;
+          (LABEL_CATEGORIES[name].classes || []).forEach(function (cls) {
+            if (allowed.indexOf(cls) < 0) allowed.push(cls);
+          });
+        });
+        return allowed;
+      }
+
+      var ROAD_NAME_LAYERS = ['highway-name-major', 'highway-name-minor', 'highway-name-path'];
+
+      function categoryLayerIds(names) {
+        var ids = [];
+        names.forEach(function (name) {
+          (LABEL_CATEGORIES[name].layers || []).forEach(function (id) {
+            if (ids.indexOf(id) < 0) ids.push(id);
+          });
+        });
+        return ids;
+      }
+
+      // Below z14 the tiles simply do not carry minor road names, so the
+      // street categories are greyed and the reason is stated rather than
+      // leaving the switches looking broken.
+      function refreshLabelZoomNote() {
+        var zoom = map.getZoom();
+        var thin = zoom < LABEL_DATA_MIN_ZOOM;
+        var note = $('labelZoomNote');
+        if (note) {
+          // Terse: this sits inline in the section heading. The full
+          // explanation is on the tooltip.
+          note.textContent = 'z' + zoom.toFixed(1) + (thin ? ' · no street names' : '');
+          note.title = thin
+            ? 'Below z' + LABEL_DATA_MIN_ZOOM + ' the map tiles do not contain minor '
+              + 'street names, so they cannot be shown at this zoom.'
+            : '';
+          note.classList.toggle('warn', thin);
+        }
+        ['minor', 'path'].forEach(function (name) {
+          var input = document.querySelector('#labelCats input[data-cat="' + name + '"]');
+          if (input && input.parentNode) input.parentNode.classList.toggle('unavailable', thin);
+        });
+      }
+
+      function applyDetailLevels() {
+        if (setup.getCurrentTheme() !== 'maplibre') return;
+        if (!Object.keys(baseLayerState).length) captureBaseLayerState();
+
+        var poiEnabled = $('poiOn').checked;
+        var labelEnabled = $('labelOn').checked;
+        var poiCeiling = POI_RANK_CEILING[Number($('poiLevel').value)] || 10;
+        var poiClasses = poiClassFilter();
+        var roadClasses = allowedRoadClasses();
+        var placeIds = categoryLayerIds(['place']);
+        var waterIds = categoryLayerIds(['water']);
+        var placeOn = labelCatEnabled('place');
+        var waterOn = labelCatEnabled('water');
+        var poiShown = 0, labelShown = 0;
+
+        Object.keys(baseLayerState).forEach(function (id) {
+          var base = baseLayerState[id];
+          // Packing applies to every symbol layer regardless of which branch
+          // below decides its visibility.
+          applyPackingTo(map, id, base);
+          if (base.isPoi) {
+            // classFilter === false means every type is switched off.
+            if (!poiEnabled || poiClasses === false) { setLayerVisible(id, false); return; }
+            applyPoiOverlap(map, id, base);
+            setLayerVisible(id, true);
+            poiShown++;
+            var next = withoutRankTests(base.filter);
+            if (poiCeiling !== Infinity) {
+              var test = ['<=', ['get', 'rank'], poiCeiling];
+              next = next ? ['all', next, test] : test;
+            }
+            if (poiClasses) {
+              next = next ? ['all', next, poiClasses] : poiClasses;
+            }
+            try { map.setFilter(id, next); } catch (_e) {}
+            // Force visible at every zoom, not just the style's own band.
+            try { map.setLayerZoomRange(id, 0, base.maxzoom); } catch (_e) {}
+            return;
+          }
+
+          if (!labelEnabled) { setLayerVisible(id, false); return; }
+
+          if (ROAD_NAME_LAYERS.indexOf(id) >= 0) {
+            // Rebuild the class test from the category switches.
+            if (!roadClasses.length) { setLayerVisible(id, false); return; }
+            var rebuilt = withoutClassTests(base.filter);
+            var classTest = ['match', ['get', 'class'], roadClasses, true, false];
+            rebuilt = rebuilt ? ['all', rebuilt, classTest] : classTest;
+            try { map.setFilter(id, rebuilt); } catch (_e) {}
+            setLayerVisible(id, true);
+            try { map.setLayerZoomRange(id, 0, base.maxzoom); } catch (_e) {}
+            labelShown++;
+            return;
+          }
+
+          var keep = (placeIds.indexOf(id) >= 0 && placeOn)
+                  || (waterIds.indexOf(id) >= 0 && waterOn);
+          setLayerVisible(id, keep);
+          if (!keep) return;
+          labelShown++;
+          try { map.setLayerZoomRange(id, 0, base.maxzoom); } catch (_e) {}
+        });
+
+        $('poiLevelName').textContent = POI_LEVEL_NAME[Number($('poiLevel').value)];
+        var overlapOn = $('poiOverlapOn').checked;
+        var iconSpacing = Number($('poiCollisionDistance').value);
+        $('poiCollisionName').textContent = overlapOn
+          ? 'Bypassed'
+          : iconSpacing === 0
+            ? 'Touching'
+            : iconSpacing + ' px gap';
+        $('densityName').textContent = currentPacking().name;
+        $('poiLevelWrap').classList.toggle('off', !poiEnabled);
+        $('poiOverlapOnWrap').classList.toggle('off', !poiEnabled);
+        $('poiOverlapLabelsWrap').classList.toggle('off', !poiEnabled || !overlapOn);
+        $('poiOverlapLabels').disabled = !poiEnabled || !overlapOn;
+        // When overlap is forced, MapLibre does not evaluate collision boxes at
+        // all, so a distance threshold cannot affect placement. Disable it
+        // explicitly instead of leaving a slider that appears to do nothing.
+        var collisionDisabled = !poiEnabled || overlapOn;
+        $('poiCollisionWrap').classList.toggle('off', collisionDisabled);
+        $('poiCollisionDistance').disabled = collisionDisabled;
+        $('poiTypesWrap').classList.toggle('off', !poiEnabled);
+        $('poiTypesToggle').disabled = !poiEnabled;
+        $('labelCatsWrap').classList.toggle('off', !labelEnabled);
+        $('densityWrap').classList.toggle('off', !labelEnabled && !poiEnabled);
+        refreshLabelZoomNote();
+        setStatus($('detailStatus'),
+          poiShown + ' POI layer' + (poiShown === 1 ? '' : 's') + ', ' +
+          labelShown + ' label layer' + (labelShown === 1 ? '' : 's') + ' shown.');
+      }
+
+      // ==================== appearance: colour / roads / buildings ==========
+      // Liberty writes colours in four different CSS notations (#hex, hsl(),
+      // hsla(), rgb(), rgba()), so everything is parsed to RGBA first, scaled in
+      // HSL space, and written back as rgba(). Scaling LIGHTNESS rather than
+      // replacing the colour keeps each feature recognisable — parks stay green,
+      // water stays blue — while letting the whole sheet be paled down so pen
+      // marks stand out on the printed map.
+      var COLOR_TARGETS = {
+        background: [
+          { id: 'background', prop: 'background-color' }
+        ],
+        park: [
+          { id: 'park', prop: 'fill-color' },
+          { id: 'park_outline', prop: 'line-color' },
+          { id: 'landcover_wood', prop: 'fill-color' },
+          { id: 'landcover_grass', prop: 'fill-color' }
+        ],
+        water: [
+          { id: 'water', prop: 'fill-color' },
+          { id: 'waterway_river', prop: 'line-color' },
+          { id: 'waterway_other', prop: 'line-color' },
+          { id: 'waterway_tunnel', prop: 'line-color' }
+        ],
+        building: [
+          { id: 'building', prop: 'fill-color' }
+        ],
+        // Populated from the loaded Liberty style by discoverRoadColorTargets().
+        // Keeping this dynamic means tunnel/bridge variants added by a future
+        // style update are recoloured without another hard-coded layer list.
+        road: []
+      };
+      var baseColors = {};        // "layerId|prop" -> original paint value
+
+      function discoverRoadColorTargets(target) {
+        var style;
+        try { style = target.getStyle(); } catch (_e) { return []; }
+        var entries = (style && style.layers || []).filter(function (layer) {
+          if (layer.type !== 'line' || layer['source-layer'] !== 'transportation') return false;
+          if (!/^(road|bridge|tunnel)_/.test(layer.id)) return false;
+          // Rail has a deliberately different visual language and is not a road.
+          if (/rail/.test(layer.id)) return false;
+          return layer.paint && layer.paint['line-color'] !== undefined;
+        }).map(function (layer) {
+          return { id: layer.id, prop: 'line-color' };
+        });
+        // A plain, non-expression colour must lead the group because it is the
+        // lightness reference used to preserve fills, casings and tunnel shades.
+        entries.sort(function (a, b) {
+          if (a.id === 'road_trunk_primary') return -1;
+          if (b.id === 'road_trunk_primary') return 1;
+          return a.id.localeCompare(b.id);
+        });
+        return entries;
+      }
+
+      function parseCssColor(css) {
+        if (typeof css !== 'string') return null;
+        var text = css.trim();
+        var m = text.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+        if (m) {
+          var hex = m[1];
+          if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+          return {
+            r: parseInt(hex.slice(0, 2), 16),
+            g: parseInt(hex.slice(2, 4), 16),
+            b: parseInt(hex.slice(4, 6), 16), a: 1
+          };
+        }
+        m = text.match(/^rgba?\(([^)]+)\)$/i);
+        if (m) {
+          var parts = m[1].split(',').map(function (v) { return parseFloat(v); });
+          return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+        }
+        m = text.match(/^hsla?\(([^)]+)\)$/i);
+        if (m) {
+          var hp = m[1].split(',').map(function (v) { return parseFloat(v); });
+          var rgb = hslToRgb(hp[0], hp[1] / 100, hp[2] / 100);
+          rgb.a = hp.length > 3 ? hp[3] : 1;
+          return rgb;
+        }
+        return null;
+      }
+
+      function hslToRgb(h, s, l) {
+        h = ((h % 360) + 360) % 360 / 360;
+        function hue(p, q, t) {
+          if (t < 0) t += 1;
+          if (t > 1) t -= 1;
+          if (t < 1 / 6) return p + (q - p) * 6 * t;
+          if (t < 1 / 2) return q;
+          if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+          return p;
+        }
+        if (s === 0) { var v = Math.round(l * 255); return { r: v, g: v, b: v, a: 1 }; }
+        var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        var p = 2 * l - q;
+        return {
+          r: Math.round(hue(p, q, h + 1 / 3) * 255),
+          g: Math.round(hue(p, q, h) * 255),
+          b: Math.round(hue(p, q, h - 1 / 3) * 255),
+          a: 1
+        };
+      }
+
+      function rgbToHsl(c) {
+        var r = c.r / 255, g = c.g / 255, b = c.b / 255;
+        var max = Math.max(r, g, b), min = Math.min(r, g, b);
+        var l = (max + min) / 2, h = 0, s = 0;
+        if (max !== min) {
+          var d = max - min;
+          s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+          if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+          else if (max === g) h = (b - r) / d + 2;
+          else h = (r - g) / d + 4;
+          h *= 60;
+        }
+        return { h: h, s: s, l: l, a: c.a };
+      }
+
+      // Recolour one layer to the picked colour.
+      //
+      // A group can span several layers that were NOT the same shade to begin
+      // with (park fill vs its outline; the water fill vs the thinner waterway
+      // lines). Painting them all one flat colour would erase that structure,
+      // so each layer keeps its own lightness OFFSET from the group's reference
+      // colour and only adopts the new hue and saturation. Alpha is preserved,
+      // which matters for landcover_wood (0.7) and the faded building mode.
+      function recolor(originalCss, referenceCss, pickedCss) {
+        var original = parseCssColor(originalCss);
+        var reference = parseCssColor(referenceCss);
+        var picked = parseCssColor(pickedCss);
+        if (!original || !reference || !picked) return originalCss;
+        var originalHsl = rgbToHsl(original);
+        var referenceHsl = rgbToHsl(reference);
+        var pickedHsl = rgbToHsl(picked);
+        var delta = originalHsl.l - referenceHsl.l;
+        var lightness = Math.max(0, Math.min(1, pickedHsl.l + delta));
+        var out = hslToRgb(pickedHsl.h, pickedHsl.s, lightness);
+        var alpha = original.a == null ? 1 : original.a;
+        return 'rgba(' + out.r + ',' + out.g + ',' + out.b + ',' + alpha + ')';
+      }
+
+      // Paint colours may be zoom expressions rather than plain strings (the
+      // motorway fill is one). Recolour every colour stop while leaving the
+      // expression operators and numbers untouched.
+      function recolorPaintValue(value, referenceCss, pickedCss) {
+        if (typeof value === 'string') return recolor(value, referenceCss, pickedCss);
+        if (Array.isArray(value)) {
+          return value.map(function (item) {
+            return recolorPaintValue(item, referenceCss, pickedCss);
+          });
+        }
+        if (value && typeof value === 'object') {
+          var copy = {};
+          Object.keys(value).forEach(function (key) {
+            copy[key] = recolorPaintValue(value[key], referenceCss, pickedCss);
+          });
+          return copy;
+        }
+        return value;
+      }
+
+      function captureBaseColors(target) {
+        COLOR_TARGETS.road = discoverRoadColorTargets(target);
+        Object.keys(COLOR_TARGETS).forEach(function (group) {
+          COLOR_TARGETS[group].forEach(function (entry) {
+            var key = entry.id + '|' + entry.prop;
+            if (baseColors[key] !== undefined) return;
+            try {
+              var value = target.getPaintProperty(entry.id, entry.prop);
+              if (value !== undefined && value !== null) {
+                baseColors[key] = (value && typeof value === 'object')
+                  ? JSON.parse(JSON.stringify(value))
+                  : value;
+              }
+            } catch (_e) {}
+          });
+        });
+      }
+
+      function applyColorsTo(target) {
+        Object.keys(COLOR_TARGETS).forEach(function (group) {
+          var control = $('c' + group.charAt(0).toUpperCase() + group.slice(1));
+          if (!control) return;
+          var picked = control.value;
+          var entries = COLOR_TARGETS[group];
+          // The group's first layer is its reference shade; every other layer
+          // shifts relative to it.
+          var reference = baseColors[entries[0].id + '|' + entries[0].prop];
+          if (typeof reference !== 'string') return;
+          entries.forEach(function (entry) {
+            var original = baseColors[entry.id + '|' + entry.prop];
+            if (original === undefined || original === null) return;
+            try {
+              target.setPaintProperty(
+                entry.id,
+                entry.prop,
+                recolorPaintValue(original, reference, picked)
+              );
+            } catch (_e) {}
+          });
+        });
+      }
+
+      // Seed each picker from the style's real colour, so "Reset" restores the
+      // basemap's own palette rather than hard-coded guesses.
+      var defaultPickerColors = {};
+
+      function rgbToHex(css) {
+        var c = parseCssColor(css);
+        if (!c) return null;
+        function two(v) {
+          var h = Math.max(0, Math.min(255, Math.round(v))).toString(16);
+          return h.length === 1 ? '0' + h : h;
+        }
+        return '#' + two(c.r) + two(c.g) + two(c.b);
+      }
+
+      function syncPickersFromStyle() {
+        Object.keys(COLOR_TARGETS).forEach(function (group) {
+          var control = $('c' + group.charAt(0).toUpperCase() + group.slice(1));
+          if (!control) return;
+          var first = COLOR_TARGETS[group][0];
+          var css = baseColors[first.id + '|' + first.prop];
+          var hex = typeof css === 'string' ? rgbToHex(css) : null;
+          if (!hex) return;
+          defaultPickerColors[group] = hex;
+          if (!control.dataset.touched) control.value = hex;
+        });
+      }
+
+      function applyBuildingsTo(target) {
+        var mode = $('buildingMode').value;
+        function set(prop, value) {
+          try { target.setPaintProperty('building', prop, value); } catch (_e) {}
+        }
+        function vis(on) {
+          try { target.setLayoutProperty('building', 'visibility', on ? 'visible' : 'none'); } catch (_e) {}
+        }
+        // Liberty caps the FLAT building layer at maxzoom 14 and hands over to
+        // the 3D extrusion layer above that. Because this page hides the
+        // extrusions (flat printable sheet), buildings would simply vanish from
+        // z14 upwards — which is the whole working range here. Extending the
+        // flat layer to z24 is what keeps footprints on screen at all.
+        try { target.setLayerZoomRange('building', 13, 24); } catch (_e) {}
+        if (mode === 'hide') { vis(false); return; }
+        vis(true);
+        if (mode === 'fade') {
+          set('fill-opacity', 0.25);
+          set('fill-outline-color', 'rgba(0,0,0,0)');
+        } else if (mode === 'outline') {
+          // Transparent body with a visible edge: keeps footprints as
+          // orientation cues while leaving the interior free to draw on.
+          set('fill-opacity', 0.06);
+          set('fill-outline-color', 'rgba(120,112,100,0.85)');
+        } else {
+          set('fill-opacity', 1);
+          // The stock outline colour is a zoom ramp that ends at z14; past the
+          // extended range it would hold the z14 value anyway, so pin a plain
+          // edge that reads correctly at every zoom.
+          set('fill-outline-color', 'hsl(35,6%,72%)');
+        }
+      }
+
+      function applyAppearanceTo(target) {
+        captureBaseColors(target);
+        applyColorsTo(target);
+        applyBuildingsTo(target);
+      }
+
+      // 3D building extrusions are removed from the vector basemap: this page
+      // captures a flat printable sheet, and extruded blocks both obscure the
+      // streets being drawn on and skew the printed geometry.
+      function removeBuildingExtrusions() {
+        var style;
+        try { style = map.getStyle(); } catch (_e) { return; }
+        (style && style.layers || []).forEach(function (layer) {
+          if (layer.type === 'fill-extrusion') setLayerVisible(layer.id, false);
+        });
+      }
+
+      function applyMapLibreAppearance() {
+        removeBuildingExtrusions();
+        captureBaseLayerState();
+        applyDetailLevels();
+        // A style reload rebuilds every layer, so the captured baselines are
+        // stale — drop them and re-read from the fresh style.
+        baseColors = {};
+        captureBaseColors(map);
+        syncPickersFromStyle();
+        applyAppearanceTo(map);
+      }
+
+      // Replay the current appearance settings onto another map instance (the
+      // off-screen print renderer), so the exported PNG matches the screen.
+      function copyAppearanceTo(target) {
+        if (setup.getCurrentTheme() !== 'maplibre') return;
+        var style;
+        try { style = target.getStyle(); } catch (_e) { return; }
+        var poiEnabled = $('poiOn').checked;
+        var labelEnabled = $('labelOn').checked;
+        var poiCeiling = POI_RANK_CEILING[Number($('poiLevel').value)] || 10;
+        var poiClasses = poiClassFilter();
+        var roadClasses = allowedRoadClasses();
+        var placeIds = categoryLayerIds(['place']);
+        var waterIds = categoryLayerIds(['water']);
+        var placeOn = labelCatEnabled('place');
+        var waterOn = labelCatEnabled('water');
+
+        (style && style.layers || []).forEach(function (layer) {
+          var id = layer.id;
+          function vis(on) {
+            try { target.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'); } catch (_e) {}
+          }
+          if (layer.type === 'fill-extrusion') { vis(false); return; }
+          if (layer.type !== 'symbol') return;
+
+          var layout = layer.layout || {};
+          applyPackingTo(target, id, {
+            placement: layout['symbol-placement'],
+            textPadding: layout['text-padding'],
+            textOptional: layout['text-optional'],
+            textAllowOverlap: layout['text-allow-overlap'],
+            textIgnorePlacement: layout['text-ignore-placement'],
+            iconAllowOverlap: layout['icon-allow-overlap'],
+            iconIgnorePlacement: layout['icon-ignore-placement'],
+            iconPadding: layout['icon-padding'],
+            symbolSpacing: layout['symbol-spacing'],
+            textSize: layout['text-size'],
+            iconSize: layout['icon-size']
+          });
+
+          var maxzoom = Number.isFinite(layer.maxzoom) ? layer.maxzoom : 24;
+          if (layer['source-layer'] === 'poi') {
+            if (!poiEnabled || poiClasses === false) { vis(false); return; }
+            applyPoiOverlap(target, id, {
+              textAllowOverlap: layout['text-allow-overlap'],
+              textIgnorePlacement: layout['text-ignore-placement'],
+              iconAllowOverlap: layout['icon-allow-overlap'],
+              iconIgnorePlacement: layout['icon-ignore-placement'],
+              iconPadding: layout['icon-padding']
+            });
+            vis(true);
+            var next = withoutRankTests(layer.filter || null);
+            if (poiCeiling !== Infinity) {
+              var test = ['<=', ['get', 'rank'], poiCeiling];
+              next = next ? ['all', next, test] : test;
+            }
+            if (poiClasses) {
+              next = next ? ['all', next, poiClasses] : poiClasses;
+            }
+            try { target.setFilter(id, next); } catch (_e) {}
+            try { target.setLayerZoomRange(id, 0, maxzoom); } catch (_e) {}
+            return;
+          }
+
+          if (!labelEnabled) { vis(false); return; }
+
+          if (ROAD_NAME_LAYERS.indexOf(id) >= 0) {
+            if (!roadClasses.length) { vis(false); return; }
+            var rebuilt = withoutClassTests(layer.filter || null);
+            var classTest = ['match', ['get', 'class'], roadClasses, true, false];
+            rebuilt = rebuilt ? ['all', rebuilt, classTest] : classTest;
+            try { target.setFilter(id, rebuilt); } catch (_e) {}
+            vis(true);
+            try { target.setLayerZoomRange(id, 0, maxzoom); } catch (_e) {}
+            return;
+          }
+
+          var keep = (placeIds.indexOf(id) >= 0 && placeOn)
+                  || (waterIds.indexOf(id) >= 0 && waterOn);
+          vis(keep);
+          if (keep) {
+            try { target.setLayerZoomRange(id, 0, maxzoom); } catch (_e) {}
+          }
+        });
+
+        // Colours, road weight and building treatment must reach the printed
+        // sheet too, otherwise the PDF would not match what is on screen.
+        captureBaseColors(target);
+        applyColorsTo(target);
+        applyBuildingsTo(target);
+      }
+
+      // ==================== temporary SketchMap preview ====================
+      // ?sketchmap=1 -> vector-results.geojson
+      // ?sketchmap=2 -> vector-results1.geojson
+      // No query value leaves the normal paper-map workflow unchanged.
+      var tempSketchMapData = null;
+
+      function sketchMapColor() {
+        return ['match', ['get', 'color'],
+          'red', '#d3302f',
+          'blue', '#2563eb',
+          '#f59e0b'
+        ];
+      }
+
+      function reAddTempSketchMapResult() {
+        if (!tempSketchMapData || (map.isStyleLoaded && !map.isStyleLoaded())) return;
+        if (!map.getSource('temp-sketchmap-result')) {
+          map.addSource('temp-sketchmap-result', {
+            type: 'geojson',
+            data: tempSketchMapData
+          });
+        }
+        if (!map.getLayer('temp-sketchmap-fill')) {
+          map.addLayer({
+            id: 'temp-sketchmap-fill',
+            type: 'fill',
+            source: 'temp-sketchmap-result',
+            filter: ['==', ['geometry-type'], 'Polygon'],
+            paint: {
+              'fill-color': sketchMapColor(),
+              'fill-opacity': 0.55
+            }
+          });
+        }
+        if (!map.getLayer('temp-sketchmap-outline')) {
+          map.addLayer({
+            id: 'temp-sketchmap-outline',
+            type: 'line',
+            source: 'temp-sketchmap-result',
+            filter: ['==', ['geometry-type'], 'Polygon'],
+            paint: {
+              'line-color': sketchMapColor(),
+              'line-width': 2,
+              'line-opacity': 0.95
+            }
+          });
+        }
+        if (!map.getLayer('temp-sketchmap-points')) {
+          map.addLayer({
+            id: 'temp-sketchmap-points',
+            type: 'circle',
+            source: 'temp-sketchmap-result',
+            filter: ['==', ['geometry-type'], 'Point'],
+            paint: {
+              'circle-color': sketchMapColor(),
+              'circle-radius': 7,
+              'circle-stroke-color': '#ffffff',
+              'circle-stroke-width': 2
+            }
+          });
+        }
+      }
+
+      function extendSketchMapBounds(bounds, coordinates) {
+        if (!Array.isArray(coordinates)) return;
+        if (coordinates.length >= 2 && Number.isFinite(coordinates[0]) && Number.isFinite(coordinates[1])) {
+          bounds.extend([coordinates[0], coordinates[1]]);
+          return;
+        }
+        coordinates.forEach(function (item) { extendSketchMapBounds(bounds, item); });
+      }
+
+      function loadTempSketchMapResult() {
+        var requestedResult = new URLSearchParams(window.location.search).get('sketchmap');
+        var resultUrl = requestedResult === '1'
+          ? '/temp-sketchmap-result-1.geojson'
+          : (requestedResult === '2' ? '/temp-sketchmap-result-2.geojson' : '');
+        if (!resultUrl) return;
+        fetch(resultUrl, { cache: 'no-store' })
+          .then(function (response) {
+            if (!response.ok) throw new Error('Temporary SketchMap result was not found: ' + resultUrl);
+            return response.json();
+          })
+          .then(function (data) {
+            tempSketchMapData = data;
+            reAddTempSketchMapResult();
+            var bounds = new maplibregl.LngLatBounds();
+            (data.features || []).forEach(function (feature) {
+              if (feature && feature.geometry) extendSketchMapBounds(bounds, feature.geometry.coordinates);
+            });
+            if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 70, duration: 0, maxZoom: 18 });
+          })
+          .catch(function (error) { console.warn(error.message || error); });
+      }
+      map.once('load', loadTempSketchMapResult);
+
+      // ==================== temporary SketchMap GeoTIFF preview ====================
+      // The browser receives PNG mirrors, while these coordinates come directly
+      // from each GeoTIFF's EPSG:3857 pixel scale and tie point.
+      var tempRasterSpecs = {
+        '1': {
+          url: '/temp-sketchmap-raster-1.png',
+          coordinates: [
+            [2.3838282535, 48.8754454706],
+            [2.3971817225, 48.8754454706],
+            [2.3971817225, 48.8680937986],
+            [2.3838282535, 48.8680937986]
+          ]
+        },
+        '2': {
+          url: '/temp-sketchmap-raster-2.png',
+          coordinates: [
+            [2.3836276409, 48.8720671435],
+            [2.3935254073, 48.8720671435],
+            [2.3935254073, 48.8666177234],
+            [2.3836276409, 48.8666177234]
+          ]
+        }
+      };
+      var requestedRaster = new URLSearchParams(window.location.search).get('sketchmap-raster');
+      var tempSketchMapRasterSpec = tempRasterSpecs[requestedRaster] || null;
+
+      function reAddTempSketchMapRasterResult() {
+        if (!tempSketchMapRasterSpec || (map.isStyleLoaded && !map.isStyleLoaded())) return;
+        if (!map.getSource('temp-sketchmap-raster')) {
+          map.addSource('temp-sketchmap-raster', {
+            type: 'image',
+            url: tempSketchMapRasterSpec.url,
+            coordinates: tempSketchMapRasterSpec.coordinates
+          });
+        }
+        if (!map.getLayer('temp-sketchmap-raster-layer')) {
+          map.addLayer({
+            id: 'temp-sketchmap-raster-layer',
+            type: 'raster',
+            source: 'temp-sketchmap-raster',
+            paint: {
+              'raster-opacity': Number($('tempRasterOpacity').value),
+              'raster-resampling': 'linear',
+              'raster-fade-duration': 0
+            }
+          });
+        }
+      }
+
+      function loadTempSketchMapRasterResult() {
+        if (!tempSketchMapRasterSpec) return;
+        $('tempRasterControls').hidden = false;
+        reAddTempSketchMapRasterResult();
+        var bounds = new maplibregl.LngLatBounds();
+        tempSketchMapRasterSpec.coordinates.forEach(function (coordinate) { bounds.extend(coordinate); });
+        map.fitBounds(bounds, { padding: 50, duration: 0, maxZoom: 18 });
+      }
+
+      $('tempRasterOpacity').addEventListener('input', function () {
+        var opacity = Number(this.value);
+        $('tempRasterOpacityVal').textContent = Math.round(opacity * 100) + '%';
+        if (map.getLayer('temp-sketchmap-raster-layer')) {
+          map.setPaintProperty('temp-sketchmap-raster-layer', 'raster-opacity', opacity);
+        }
+      });
+      map.once('load', loadTempSketchMapRasterResult);
+
+      // ==================== digitization panel (H) ====================
+      var panel = $('panel');
+      var basemapToggle = $('basemapToggle');
+
+      function syncBasemapToggle() {
+        basemapToggle.checked = setup.getCurrentTheme() === 'maplibre';
+        // These controls read and rewrite vector style layers, so they do
+        // nothing on the OSM raster basemap.
+        var detail = $('poiOn').closest('section');
+        if (detail) detail.classList.toggle('off', !basemapToggle.checked);
+        $('appearanceSection').classList.toggle('off', !basemapToggle.checked);
+      }
+
+      basemapToggle.addEventListener('change', function () {
+        setup.applyTheme(this.checked ? 'maplibre' : 'streets');
+        syncBasemapToggle();
+        if (!this.checked) setStatus($('detailStatus'), 'Detail levels apply to the MapLibre basemap.');
+      });
+      syncBasemapToggle();
+
+      ['poiOn', 'labelOn', 'poiLevel', 'poiOverlapOn', 'poiOverlapLabels',
+       'poiCollisionDistance', 'labelDensity'].forEach(function (id) {
+        $(id).addEventListener('input', applyDetailLevels);
+      });
+      Array.prototype.forEach.call(
+        document.querySelectorAll('#labelCats input[data-cat]'),
+        function (input) { input.addEventListener('change', applyDetailLevels); }
+      );
+
+      // POI type filter: slim disclosure row + the group checkboxes.
+      $('poiTypesToggle').addEventListener('click', function () {
+        var open = this.getAttribute('aria-expanded') === 'true';
+        this.setAttribute('aria-expanded', String(!open));
+        $('poiTypesWrap').hidden = open;
+      });
+      Array.prototype.forEach.call(
+        document.querySelectorAll('#poiCats input[data-poi]'),
+        function (input) {
+          input.addEventListener('change', function () {
+            refreshPoiTypesNote();
+            applyDetailLevels();
+          });
+        }
+      );
+      function setAllPoiTypes(on) {
+        Array.prototype.forEach.call(
+          document.querySelectorAll('#poiCats input[data-poi]'),
+          function (input) { input.checked = on; }
+        );
+        refreshPoiTypesNote();
+        applyDetailLevels();
+      }
+      $('poiCatsAll').addEventListener('click', function () { setAllPoiTypes(true); });
+      $('poiCatsNone').addEventListener('click', function () { setAllPoiTypes(false); });
+      refreshPoiTypesNote();
+      // The note reports the live zoom and whether street names exist there.
+      map.on('zoomend', refreshLabelZoomNote);
+
+      $('colorsToggle').addEventListener('click', function () {
+        var open = this.getAttribute('aria-expanded') === 'true';
+        this.setAttribute('aria-expanded', String(!open));
+        $('colorsWrap').hidden = open;
+      });
+
+      ['cBackground', 'cPark', 'cWater', 'cRoad', 'cBuilding'].forEach(function (id) {
+        $(id).addEventListener('input', function () {
+          // Mark as user-set so a style reload does not overwrite the choice.
+          this.dataset.touched = '1';
+          if (setup.getCurrentTheme() === 'maplibre') applyColorsTo(map);
+        });
+      });
+      $('colorReset').addEventListener('click', function () {
+        ['background', 'park', 'water', 'road', 'building'].forEach(function (group) {
+          var control = $('c' + group.charAt(0).toUpperCase() + group.slice(1));
+          if (!control) return;
+          delete control.dataset.touched;
+          if (defaultPickerColors[group]) control.value = defaultPickerColors[group];
+        });
+        if (setup.getCurrentTheme() === 'maplibre') applyColorsTo(map);
+      });
+      $('buildingMode').addEventListener('change', function () {
+        if (setup.getCurrentTheme() === 'maplibre') applyBuildingsTo(map);
+      });
+
+      // The launcher is only shown while the digitization panel is closed.
+      function syncLaunchers() {
+        $('openH').hidden = !panel.classList.contains('collapsed');
+      }
+
+      function setPanel(open) {
+        panel.classList.toggle('collapsed', !open);
+        syncLaunchers();
+      }
+
+      function togglePanel() {
+        setPanel(panel.classList.contains('collapsed'));
+      }
+
+      $('openH').addEventListener('click', function () { setPanel(true); });
+      Array.prototype.forEach.call(document.querySelectorAll('#panel .panel-title .back'), function (button) {
+        button.addEventListener('click', function () {
+          setPanel(false);
+        });
+      });
+
       window.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape' && pickingMap) setPickingMap(false);
+        var tag = e.target && e.target.tagName ? e.target.tagName.toLowerCase() : '';
+        if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+        if (e.key === 'h' || e.key === 'H') togglePanel();
       });
+      syncLaunchers();
 
-      function refreshMapStep() {
-        $('stepMap').classList.toggle('done', mapCorners.length === 4);
-        setStatus($('mapStatus'), mapCorners.length + '/4 set.' +
-          (mapCorners.length === 4 ? ' ✓' : ''), mapCorners.length === 4 ? 'ok' : '');
-        refreshProjectBtn();
+      // Geographic corners are loaded from the numeric map ID. There is no
+      // manual corner-picking mode in this paper workflow.
+      var mapCorners = [];        // [ [lng,lat] x4 ]
+
+      // ==================== export-frame preview ====================
+      // The PDF renders the CURRENT MAP VIEW into a page-shaped frame, so the
+      // exported extent is the largest rectangle of the map's aspect ratio that
+      // fits the viewport — not the whole screen. Drawing that rectangle (plus
+      // the printed AprilTags) makes the crop visible before exporting.
+      //
+      // Layout numbers are fetched from /api/map-sheet-layout rather than
+      // duplicated here, so the preview and the generated PDF cannot disagree.
+      var SVG_NS = 'http://www.w3.org/2000/svg';
+      var previewSvg = $('exportPreview');
+      var sheetLayouts = null;
+
+      function currentLayout() {
+        return sheetLayouts ? sheetLayouts[$('pageSize').value] : null;
       }
 
-      function clearMapCorners() {
-        mapCorners = [];
-        mapMarkers.forEach(function (m) { m.remove(); });
-        mapMarkers = [];
-        refreshMapStep();
+      function el(name, attrs) {
+        var node = document.createElementNS(SVG_NS, name);
+        Object.keys(attrs || {}).forEach(function (key) {
+          node.setAttribute(key, attrs[key]);
+        });
+        return node;
       }
 
-      mapPickBtn.addEventListener('click', function () {
-        if (!pickingMap && mapCorners.length === 4) clearMapCorners();
-        setPickingMap(!pickingMap);
+      // The generator UI no longer reserves part of the digitization viewport.
+      function panelGutters() {
+        return { left: 0, right: 0 };
+      }
+
+      function exportRectPx(layout) {
+        var vw = window.innerWidth, vh = window.innerHeight;
+        var gutter = panelGutters();
+        var availX = gutter.left + 14;
+        var availW = Math.max(120, vw - gutter.left - gutter.right - 28);
+        var pageRatio = layout.page[0] / layout.page[1];
+        var margin = 0.96;
+        var w = availW * margin, h = w / pageRatio;
+        if (h > vh * margin) { h = vh * margin; w = h * pageRatio; }
+        return { x: availX + (availW - w) / 2, y: (vh - h) / 2, w: w, h: h };
+      }
+
+      function renderExportPreview() {
+        while (previewSvg.firstChild) previewSvg.removeChild(previewSvg.firstChild);
+        var layout = currentLayout();
+        if (!layout || !$('previewOn').checked) return;
+
+        var vw = window.innerWidth, vh = window.innerHeight;
+        previewSvg.setAttribute('viewBox', '0 0 ' + vw + ' ' + vh);
+        previewSvg.setAttribute('width', vw);
+        previewSvg.setAttribute('height', vh);
+
+        var box = exportRectPx(layout);
+        var scale = box.w / layout.page[0];          // page points -> CSS px
+        function px(x, y) { return [box.x + x * scale, box.y + y * scale]; }
+
+        // Dim everything outside the page using an even-odd cutout.
+        var outer = 'M0,0H' + vw + 'V' + vh + 'H0Z';
+        var inner = 'M' + box.x + ',' + box.y + 'h' + box.w + 'v' + box.h + 'h' + (-box.w) + 'Z';
+        previewSvg.appendChild(el('path', { class: 'page', d: outer + ' ' + inner, 'fill-rule': 'evenodd' }));
+
+        // The map frame: the actual image area of the PDF.
+        var frame = layout.mapFrame;
+        var topLeft = px(frame[0], frame[1]);
+        previewSvg.appendChild(el('rect', {
+          class: 'frame', x: topLeft[0], y: topLeft[1],
+          width: frame[2] * scale, height: frame[3] * scale, rx: 2
+        }));
+
+        // Eight registration tags, drawn as the real generated markers so the
+        // preview shows what actually gets printed.
+        var patch = layout.patchSize * scale;
+        layout.patches.forEach(function (patchPos, index) {
+          var at = px(patchPos[0], patchPos[1]);
+          previewSvg.appendChild(el('rect', {
+            class: 'tag', x: at[0], y: at[1], width: patch, height: patch
+          }));
+          var image = el('image', {
+            class: 'tagimg', x: at[0], y: at[1], width: patch, height: patch,
+            preserveAspectRatio: 'none'
+          });
+          // tag16h5 matches DICT_APRILTAG_16h5 used by the PDF generator.
+          image.setAttributeNS('http://www.w3.org/1999/xlink', 'href',
+            '/api/apriltag-svg/tag16h5/' + layout.tagIds[index] + '.svg');
+          image.setAttribute('href',
+            '/api/apriltag-svg/tag16h5/' + layout.tagIds[index] + '.svg');
+          previewSvg.appendChild(image);
+        });
+
+        // ID badge placeholder.
+        var badge = layout.badge;
+        var badgeAt = px(badge[0], badge[1]);
+        previewSvg.appendChild(el('rect', {
+          class: 'badge', x: badgeAt[0], y: badgeAt[1],
+          width: badge[2] * scale, height: badge[3] * scale
+        }));
+
+        // Keep the caption on screen even when the frame reaches the top edge.
+        var capY = box.y - 7 < 12 ? box.y + 16 : box.y - 7;
+        var caption = el('text', { class: 'cap', x: box.x + 6, y: capY });
+        caption.textContent = layout.pageSize + ' landscape · export area';
+        previewSvg.appendChild(caption);
+      }
+
+      async function loadSheetLayouts() {
+        try {
+          var response = await fetch('/api/map-sheet-layout', { cache: 'no-store' });
+          var data = await response.json();
+          if (data && data.ok) sheetLayouts = data.layouts;
+        } catch (_e) { sheetLayouts = null; }
+        renderExportPreview();
+      }
+
+      $('previewOn').addEventListener('change', renderExportPreview);
+      $('pageSize').addEventListener('change', renderExportPreview);
+      window.addEventListener('resize', renderExportPreview);
+      loadSheetLayouts();
+
+      // ==================== dropped pins ====================
+      // Click the map to drop a pin, click a pin to remove it. Drawn as a
+      // GeoJSON symbol layer rather than DOM markers so the pins survive a
+      // basemap style switch, sit correctly under the panels, and are captured
+      // by the off-screen renderer that produces the printed sheet.
+      var pins = [];                 // [{ id, lng, lat }]
+      var pinSeq = 0;
+
+      // A teardrop drawn once into a canvas and registered as a sprite image.
+      function pinImage(size) {
+        var scale = 2;               // render at 2x for crisp retina display
+        var w = size * scale, h = size * scale;
+        var canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        var ctx = canvas.getContext('2d');
+        var cx = w / 2, r = w * 0.30, top = h * 0.06;
+        ctx.beginPath();
+        // Round head plus a tapered point at the bottom.
+        ctx.arc(cx, top + r, r, Math.PI, 0, false);
+        ctx.bezierCurveTo(cx + r, top + r * 1.9, cx + r * 0.45, h * 0.72, cx, h * 0.97);
+        ctx.bezierCurveTo(cx - r * 0.45, h * 0.72, cx - r, top + r * 1.9, cx - r, top + r);
+        ctx.closePath();
+        ctx.fillStyle = '#e5322d';
+        ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+        ctx.lineWidth = 1.5 * scale;
+        ctx.fill();
+        ctx.stroke();
+        ctx.beginPath();             // white centre hole
+        ctx.arc(cx, top + r, r * 0.36, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+        return {
+          width: w, height: h,
+          data: ctx.getImageData(0, 0, w, h).data
+        };
+      }
+
+      function pinCollection() {
+        return {
+          type: 'FeatureCollection',
+          features: pins.map(function (pin) {
+            return {
+              type: 'Feature',
+              properties: { id: pin.id },
+              geometry: { type: 'Point', coordinates: [pin.lng, pin.lat] }
+            };
+          })
+        };
+      }
+
+      function ensurePinLayer(target) {
+        if (!target.hasImage('dropped-pin')) {
+          try { target.addImage('dropped-pin', pinImage(28), { pixelRatio: 2 }); } catch (_e) {}
+        }
+        if (!target.getSource('dropped-pins')) {
+          target.addSource('dropped-pins', { type: 'geojson', data: pinCollection() });
+        }
+        if (!target.getLayer('dropped-pins-layer')) {
+          target.addLayer({
+            id: 'dropped-pins-layer',
+            type: 'symbol',
+            source: 'dropped-pins',
+            layout: {
+              'icon-image': 'dropped-pin',
+              'icon-size': 1,
+              // The tip of the teardrop is the anchor, like Google's pins.
+              'icon-anchor': 'bottom',
+              'icon-allow-overlap': true,
+              'icon-ignore-placement': true
+            }
+          });
+        }
+      }
+
+      function refreshPins() {
+        if (!map.getSource('dropped-pins')) {
+          try { ensurePinLayer(map); } catch (_e) { return; }
+        }
+        map.getSource('dropped-pins').setData(pinCollection());
+      }
+
+      // Re-add after a style switch wipes custom sources.
+      function reAddPinLayer() {
+        if (!pins.length) return;
+        try { ensurePinLayer(map); refreshPins(); } catch (_e) {}
+      }
+
+      // ==================== n-minute walking reach ====================
+      // Backed by /api/walk-reach, which proxies Mapbox's Isochrone API and
+      // falls back to the local OSMnx graph when Mapbox is unreachable. Mapbox
+      // needs no street network on this machine, so the multi-second Overpass
+      // download the OSMnx-only path required on first use in an area is gone,
+      // and with it all the bbox/prefetch bookkeeping that used to live here.
+      var reachToken = 0;                  // guards against out-of-order replies
+
+      // Centre of the EXPORT FRAME, not the viewport — the reach must be
+      // anchored to what actually lands on the printed sheet.
+      function exportCenterLngLat() {
+        var layout = currentLayout();
+        if (!layout) return map.getCenter();
+        var box = exportRectPx(layout);
+        var scale = box.w / layout.page[0];
+        var f = layout.mapFrame;
+        return map.unproject([
+          box.x + (f[0] + f[2] / 2) * scale,
+          box.y + (f[1] + f[3] / 2) * scale
+        ]);
+      }
+
+      function drawReach(geojson) {
+        if (!map.getSource('walk-reach')) {
+          map.addSource('walk-reach', { type: 'geojson', data: geojson });
+          map.addLayer({
+            id: 'walk-reach-fill', type: 'fill', source: 'walk-reach',
+            paint: { 'fill-color': '#2f8f86', 'fill-opacity': 0.22 }
+          });
+          map.addLayer({
+            id: 'walk-reach-line', type: 'line', source: 'walk-reach',
+            paint: { 'line-color': '#2f8f86', 'line-width': 2, 'line-opacity': 0.95 }
+          });
+        } else {
+          map.getSource('walk-reach').setData(geojson);
+        }
+      }
+
+      function clearReach() {
+        ['walk-reach-fill', 'walk-reach-line'].forEach(function (id) {
+          if (map.getLayer(id)) map.removeLayer(id);
+        });
+        if (map.getSource('walk-reach')) map.removeSource('walk-reach');
+      }
+
+      async function updateReach() {
+        if (!$('reachOn').checked) { clearReach(); setStatus($('reachStatus'), ''); return; }
+        var minutes = Math.max(1, Math.min(60, Number($('reachMinutes').value) || 10));
+        var center = exportCenterLngLat();
+        var token = ++reachToken;
+
+        try {
+          // One call. The server prefers Mapbox's Isochrone API (~0.1 s, no
+          // local street network needed) and falls back to the OSMnx graph when
+          // Mapbox is unavailable — no token, offline, or over quota. The
+          // pre-fetch/bbox bookkeeping the OSMnx-only path required is gone.
+          setStatus($('reachStatus'), 'computing…');
+          var response = await fetch('/api/walk-reach', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              origin: { lng: center.lng, lat: center.lat },
+              minutes: minutes
+            })
+          });
+          var data = await response.json();
+          if (token !== reachToken) return;      // a newer request superseded this
+          if (!response.ok || !data.ok) {
+            throw new Error(data.error === 'no_local_network'
+              ? 'offline, no local network'
+              : (data.error || 'failed'));
+          }
+          drawReach(data.geojson);
+          // The full detail goes in the tooltip; the row itself stays short.
+          var state = $('reachStatus');
+          setStatus(state, 'done', 'ok');
+          state.title = minutes + ' min on foot · source: ' + (data.source || 'unknown')
+            + (data.reachableNodes ? ' · ' + data.reachableNodes + ' junctions' : '');
+        } catch (error) {
+          if (token !== reachToken) return;
+          clearReach();
+          var failed = $('reachStatus');
+          setStatus(failed, 'failed', 'err');
+          failed.title = error.message || 'Reach failed.';
+        }
+      }
+
+      var reachTimer = 0;
+      function scheduleReach() {
+        window.clearTimeout(reachTimer);
+        reachTimer = window.setTimeout(updateReach, 350);
+      }
+
+      $('reachOn').addEventListener('change', updateReach);
+      // The number input sits inside the toggle's <label>, so clicks and key
+      // presses on it would otherwise flip the checkbox.
+      ['click', 'keydown'].forEach(function (type) {
+        $('reachMinutes').addEventListener(type, function (event) { event.stopPropagation(); });
       });
-      $('mapResetBtn').addEventListener('click', function () {
-        clearMapCorners();
-        setPickingMap(false);
+      $('reachMinutes').addEventListener('input', function () {
+        if ($('reachOn').checked) scheduleReach();
+      });
+      // The origin is tied to the frame, so panning/zooming moves it.
+      map.on('moveend', function () { if ($('reachOn').checked) scheduleReach(); });
+      $('pageSize').addEventListener('change', function () {
+        if ($('reachOn').checked) scheduleReach();
       });
 
-      map.on('click', function (e) {
-        if (!pickingMap || mapCorners.length >= 4) return;
-        mapCorners.push([e.lngLat.lng, e.lngLat.lat]);
-        var el = document.createElement('div');
-        el.className = 'map-corner-marker';
-        el.textContent = String(mapCorners.length);
-        var marker = new mapboxgl.Marker({ element: el }).setLngLat(e.lngLat).addTo(map);
-        mapMarkers.push(marker);
-        refreshPickChip();
-        if (mapCorners.length === 4) setPickingMap(false);
-        refreshMapStep();
+      // ==================== printable reference map ====================
+      var activeMapSheetId = '';
+      var referenceStatus = $('referenceStatus');
+
+      // A sheet ID is either "7" (single) or "7_3" (map type _ participant).
+      var SHEET_ID_RE = /^[1-9][0-9]{0,8}(?:_[1-9][0-9]{0,8})?$/;
+
+      // The IDs this export will write. One participant -> a plain type ID;
+      // several -> "<type>_1" ... "<type>_N", so scans can be told apart later.
+      function plannedSheetIds() {
+        var type = String($('sheetType').value || '').trim();
+        if (!/^[1-9][0-9]{0,8}$/.test(type)) {
+          throw new Error('Enter a map type number (1 or higher).');
+        }
+        var raw = String($('sheetParticipants').value || '').trim();
+        var count = raw === '' ? 1 : parseInt(raw, 10);
+        if (!Number.isFinite(count) || count < 1) {
+          throw new Error('Participants must be 1 or more.');
+        }
+        if (count > 200) throw new Error('Limit is 200 participants per export.');
+        if (count === 1) return [type];
+        var ids = [];
+        for (var n = 1; n <= count; n++) ids.push(type + '_' + n);
+        return ids;
+      }
+
+      // The ID used by the SCAN side (registration / detection / GeoJSON).
+      // Scanning always works on one specific sheet, so a batch export leaves
+      // the first generated ID active.
+      var scanSheetId = '';
+
+      function enteredSheetId() {
+        if (scanSheetId && SHEET_ID_RE.test(scanSheetId)) return scanSheetId;
+        try {
+          return plannedSheetIds()[0];
+        } catch (_e) {
+          throw new Error('Scan a generated paper map so its ID can be detected.');
+        }
+      }
+
+      // IDs already stored on disk. Exporting onto one replaces it, so the
+      // input turns yellow as a warning rather than blocking.
+      var usedSheetIds = new Set();
+
+      async function refreshUsedSheetIds() {
+        try {
+          var response = await fetch('/api/map-sheets', { cache: 'no-store' });
+          var data = await response.json();
+          var list = (data && (data.sheets || data.records || data.items)) ||
+                     (Array.isArray(data) ? data : []);
+          usedSheetIds = new Set(list.map(function (item) { return String(item.id); }));
+        } catch (_e) {
+          usedSheetIds = new Set();
+        }
+        markUsedSheetId();
+      }
+
+      // Flag the type field yellow when any ID this export would write already
+      // exists on disk — a warning, since replacing is legitimate.
+      function markUsedSheetId() {
+        var typeInput = $('sheetType');
+        var ids;
+        try { ids = plannedSheetIds(); }
+        catch (_e) { typeInput.classList.remove('used'); return; }
+        var clash = ids.filter(function (id) { return usedSheetIds.has(id); });
+        typeInput.classList.toggle('used', clash.length > 0);
+        if (clash.length) {
+          setStatus(referenceStatus, clash.length === 1
+            ? 'Map ID ' + clash[0] + ' already exists — exporting replaces it.'
+            : clash.length + ' of these IDs already exist — exporting replaces them.', 'warn');
+        } else if (referenceStatus.classList.contains('warn')) {
+          setStatus(referenceStatus, '');
+        }
+      }
+
+      async function capturePrintableMap() {
+        // Render at the page's map-frame ratio so the PDF fills the sheet
+        // without stretching. The captured extent is the SAME rectangle the
+        // preview outlines — derived by unprojecting that box's corners — so
+        // what the dashed frame shows is what the PDF contains.
+        var layout = currentLayout();
+        var frameRatio = layout
+          ? (layout.mapFrame[2] / layout.mapFrame[3])
+          : (1432 / 1000);
+        var renderH = 1000;
+        var renderW = Math.round(renderH * frameRatio);
+
+        var host = document.createElement('div');
+        host.style.cssText = 'position:fixed;left:-5000px;top:0;width:' +
+          renderW + 'px;height:' + renderH + 'px;';
+        document.body.appendChild(host);
+
+        // Geographic bounds of the previewed map-frame rectangle.
+        var captureBounds = map.getBounds();
+        if (layout) {
+          var box = exportRectPx(layout);
+          var scale = box.w / layout.page[0];
+          var f = layout.mapFrame;
+          var left = box.x + f[0] * scale;
+          var top = box.y + f[1] * scale;
+          var right = left + f[2] * scale;
+          var bottom = top + f[3] * scale;
+          captureBounds = new maplibregl.LngLatBounds();
+          [[left, top], [right, top], [right, bottom], [left, bottom]].forEach(function (point) {
+            captureBounds.extend(map.unproject(point));
+          });
+        }
+
+        var printMap = new maplibregl.Map({
+          container: host,
+          style: setup.getThemeStyle(setup.getCurrentTheme()),
+          bounds: captureBounds,
+          fitBoundsOptions: { padding: 0, duration: 0 },
+          interactive: false,
+          attributionControl: false,
+          preserveDrawingBuffer: true,
+          fadeDuration: 0
+        });
+        try {
+          // Mirror the on-screen appearance onto the off-screen render, or the
+          // printed sheet would show 3D buildings and the stock POI/label
+          // density instead of what was configured in the G panel.
+          printMap.once('style.load', function () {
+            try { copyAppearanceTo(printMap); } catch (_e) {}
+            // Carry the walking-reach overlay onto the printed sheet as well,
+            // reusing the polygon already computed for the screen.
+            try {
+              var source = map.getSource('walk-reach');
+              var data = source && source._data;
+              if ($('reachOn').checked && data) {
+                printMap.addSource('walk-reach', { type: 'geojson', data: data });
+                printMap.addLayer({
+                  id: 'walk-reach-fill', type: 'fill', source: 'walk-reach',
+                  paint: { 'fill-color': '#2f8f86', 'fill-opacity': 0.22 }
+                });
+                printMap.addLayer({
+                  id: 'walk-reach-line', type: 'line', source: 'walk-reach',
+                  paint: { 'line-color': '#2f8f86', 'line-width': 2, 'line-opacity': 0.95 }
+                });
+              }
+            } catch (_e) {}
+            // Dropped pins belong on the printed sheet too.
+            try { if (pins.length) ensurePinLayer(printMap); } catch (_e) {}
+          });
+          await new Promise(function (resolve, reject) {
+            var timeout = window.setTimeout(function () { reject(new Error('Printable map tiles timed out.')); }, 12000);
+            printMap.once('idle', function () { window.clearTimeout(timeout); resolve(); });
+            printMap.once('error', function (event) {
+              if (event && event.error) console.warn(event.error);
+            });
+          });
+          var canvas = printMap.getCanvas();
+          // MapLibre's unproject() accepts CSS pixels, while canvas.width and
+          // canvas.height are backing-store pixels multiplied by the browser's
+          // device/display scale. Mixing the two shifts and enlarges the saved
+          // geographic bounds on scaled displays (and is especially visible
+          // after entering fullscreen). The PNG can stay high-resolution, but
+          // its geographic edges must be calculated from the CSS viewport.
+          var width = canvas.clientWidth || host.clientWidth;
+          var height = canvas.clientHeight || host.clientHeight;
+          var corners = [[0, 0], [width, 0], [width, height], [0, height]].map(function (point) {
+            var lngLat = printMap.unproject(point);
+            return [lngLat.lng, lngLat.lat];
+          });
+          var center = printMap.getCenter();
+          return {
+            image: canvas.toDataURL('image/png'),
+            corners: corners,
+            camera: {
+              center: [center.lng, center.lat],
+              zoom: printMap.getZoom(),
+              bearing: 0,
+              pitch: 0
+            }
+          };
+        } finally {
+          printMap.remove();
+          host.remove();
+        }
+      }
+
+      function applyMapSheet(record, moveMap) {
+        if (!record || !Array.isArray(record.corners) || record.corners.length !== 4) {
+          throw new Error('Reference map has no valid geographic corners.');
+        }
+        activeMapSheetId = String(record.id || '');
+        mapCorners = record.corners.map(function (point) { return [Number(point[0]), Number(point[1])]; });
+        var storedTheme = record.theme === 'maplibre' ? 'maplibre' : 'streets';
+        if (setup.getCurrentTheme() !== storedTheme) setup.applyTheme(storedTheme);
+        syncBasemapToggle();
+        refreshExportBtn();
+        if (moveMap && record.camera && Array.isArray(record.camera.center)) {
+          map.jumpTo({
+            center: record.camera.center,
+            zoom: Number(record.camera.zoom),
+            bearing: Number(record.camera.bearing || 0),
+            pitch: Number(record.camera.pitch || 0)
+          });
+        }
+        // Scanning follows whichever sheet is currently aligned.
+        scanSheetId = activeMapSheetId;
+        setStatus(referenceStatus, 'Loaded map sheet ' + activeMapSheetId + '.', 'ok');
+      }
+
+      async function loadMapSheet(sheetId, moveMap) {
+        var id = String(sheetId || '').trim();
+        if (!id) return;
+        var response = await fetch('/api/map-sheets/' + encodeURIComponent(id), { cache: 'no-store' });
+        var data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || 'Could not load the reference map.');
+        applyMapSheet(data, moveMap);
+        return data;
+      }
+
+      // Save one sheet from an already-captured render. The capture is reused
+      // across a whole batch: every participant sheet shows the same map, so
+      // re-rendering per ID would be slow and could drift between tiles loads.
+      async function saveMapSheet(id, printable) {
+        var response = await fetch('/api/map-sheets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: id,
+            title: 'Map ' + id,
+            image: printable.image,
+            corners: printable.corners,
+            camera: printable.camera,
+            theme: setup.getCurrentTheme(),
+            pageSize: $('pageSize').value
+          })
+        });
+        var data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || 'PDF export failed.');
+        return data;
+      }
+
+      function downloadPdf(data) {
+        var link = document.createElement('a');
+        link.href = data.pdfUrl;
+        link.download = 'map-sheet-' + data.id + '.pdf';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
+
+      $('exportPdfBtn').addEventListener('click', async function () {
+        var button = $('exportPdfBtn');
+        button.disabled = true;
+        try {
+          var ids = plannedSheetIds();
+
+          setStatus(referenceStatus, 'Rendering the reference map...');
+          var printable = await capturePrintableMap();
+
+          var saved = 0, first = null;
+          for (var i = 0; i < ids.length; i++) {
+            setStatus(referenceStatus, 'Saving ' + (i + 1) + ' / ' + ids.length + ' (' + ids[i] + ')...');
+            var data = await saveMapSheet(ids[i], printable);
+            if (!first) first = data;
+            downloadPdf(data);
+            saved++;
+          }
+
+          if (first) applyMapSheet(first, false);
+          await refreshUsedSheetIds();
+          setStatus(referenceStatus, saved === 1
+            ? 'Saved and downloaded map sheet ' + ids[0] + '.'
+            : 'Saved and downloaded ' + saved + ' sheets: ' + ids[0] + ' … ' + ids[ids.length - 1] + '.', 'ok');
+        } catch (error) {
+          var message = error && error.name === 'SecurityError'
+            ? 'The map image could not be captured because a basemap tile server blocks canvas export.'
+            : (error.message || 'PDF export failed.');
+          setStatus(referenceStatus, message, 'err');
+        } finally {
+          button.disabled = false;
+        }
       });
 
-      // ==================== step 2: camera / photo + paper corners ====================
+      // Restore the last map type so a reload keeps working on the same design.
+      try {
+        var rememberedType = window.localStorage.getItem('paperTestMapType');
+        if (rememberedType) $('sheetType').value = rememberedType;
+      } catch (_e) {}
+
+      ['sheetType', 'sheetParticipants'].forEach(function (id) {
+        $(id).addEventListener('input', function () {
+          // Editing the identity invalidates any sheet already aligned on it.
+          scanSheetId = '';
+          if (activeMapSheetId) {
+            activeMapSheetId = '';
+            mapCorners = [];
+            clearPaperCorners();
+          }
+          if (id === 'sheetType') {
+            try { window.localStorage.setItem('paperTestMapType', $(id).value); } catch (_e) {}
+          }
+          markUsedSheetId();
+        });
+      });
+      refreshUsedSheetIds();
+
+      // ==================== scan: camera / dropped photos ====================
       var camImg = $('camImg');
-      var camOverlay = $('camOverlay');
-      var camEmpty = $('camEmpty');
       var camStatus = $('camStatus');
       var paperCorners = [];      // frame-pixel coords [ [x,y] x4 ]
       var usingCamera = false;
+      var registrationBusy = false;
+      var registrationTimer = 0;
+
+      // Multiple photos can be loaded at once. They are processed one at a
+      // time (each needs camImg + the shared canvases), and each keeps its own
+      // row + status in #sheetList. `activeSheet` is the one currently drawn on
+      // the map, which is what the GeoJSON export uses.
+      var sheets = [];            // { name, url, row, statusEl, corners, done }
+      var activeSheet = null;
+      var queueRunning = false;
 
       function frameSize() {
         return { w: camImg.naturalWidth || 0, h: camImg.naturalHeight || 0 };
       }
 
-      function showCamImage() {
-        camImg.style.display = 'block';
-        camEmpty.style.display = 'none';
+      function addSheetRow(name) {
+        var row = document.createElement('li');
+        var label = document.createElement('span');
+        label.className = 'nm';
+        label.textContent = name;
+        var state = document.createElement('span');
+        state.className = 'st';
+        state.textContent = 'queued';
+        var remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'x';
+        remove.title = 'Remove';
+        remove.textContent = '×';
+        row.append(label, state, remove);
+        $('sheetList').appendChild(row);
+        return { row: row, statusEl: state, removeBtn: remove };
       }
 
+      function setSheetState(sheet, text, kind) {
+        sheet.statusEl.textContent = text;
+        sheet.row.className = kind || '';
+      }
+
+      function removeSheet(sheet) {
+        var index = sheets.indexOf(sheet);
+        if (index >= 0) sheets.splice(index, 1);
+        if (sheet.url) URL.revokeObjectURL(sheet.url);
+        sheet.row.remove();
+        if (activeSheet === sheet) {
+          activeSheet = null;
+          clearInkLayer();
+          refreshExportBtn();
+        }
+      }
+
+      // Load one photo, align it, and run detection — the "load = detect" flow.
+      function processSheet(sheet) {
+        return new Promise(function (resolve) {
+          setSheetState(sheet, 'aligning…');
+          usingCamera = false;
+          stopAutoRegistration();
+          paperCorners = [];
+
+          function done(text, kind) {
+            setSheetState(sheet, text, kind);
+            resolve();
+          }
+
+          camImg.onload = async function () {
+            camImg.onload = null;
+            var aligned = await autoRegisterMapSheet(true);
+            if (!aligned) { done('no tags', 'err'); return; }
+            sheet.corners = paperCorners.slice();
+            setSheetState(sheet, 'detecting…');
+            var detected = await renderInk();
+            if (!detected) { done('failed', 'err'); return; }
+            addOrUpdateInkSource();
+            projected = true;
+            activeSheet = sheet;
+            sheet.done = true;
+            refreshExportBtn();
+            done('detected', 'ok');
+          };
+          camImg.onerror = function () {
+            camImg.onerror = null;
+            done('unreadable', 'err');
+          };
+          camImg.src = sheet.url;
+        });
+      }
+
+      async function runQueue() {
+        if (queueRunning) return;
+        queueRunning = true;
+        try {
+          for (var i = 0; i < sheets.length; i++) {
+            if (!sheets[i].done && !sheets[i].failed) {
+              await processSheet(sheets[i]);
+            }
+          }
+        } finally {
+          queueRunning = false;
+        }
+      }
+
+      function acceptFiles(fileList) {
+        var files = Array.prototype.slice.call(fileList || [])
+          .filter(function (file) { return file && file.type.indexOf('image/') === 0; });
+        if (!files.length) return;
+        try { enteredSheetId(); }
+        catch (error) { setStatus(camStatus, error.message, 'err'); return; }
+
+        files.forEach(function (file) {
+          var ui = addSheetRow(file.name || 'photo');
+          var sheet = {
+            name: file.name || 'photo',
+            url: URL.createObjectURL(file),
+            row: ui.row,
+            statusEl: ui.statusEl,
+            done: false,
+            failed: false
+          };
+          ui.removeBtn.addEventListener('click', function () { removeSheet(sheet); });
+          sheets.push(sheet);
+        });
+        setStatus(camStatus, '');
+        runQueue();
+      }
+
+      // ---- drag & drop ----
+      var dropZone = $('dropZone');
+      dropZone.addEventListener('click', function () { $('photoInput').click(); });
+      dropZone.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          $('photoInput').click();
+        }
+      });
+      ['dragenter', 'dragover'].forEach(function (type) {
+        dropZone.addEventListener(type, function (event) {
+          event.preventDefault();
+          dropZone.classList.add('dragover');
+        });
+      });
+      ['dragleave', 'drop'].forEach(function (type) {
+        dropZone.addEventListener(type, function (event) {
+          event.preventDefault();
+          if (type === 'dragleave' && dropZone.contains(event.relatedTarget)) return;
+          dropZone.classList.remove('dragover');
+        });
+      });
+      dropZone.addEventListener('drop', function (event) {
+        acceptFiles(event.dataTransfer && event.dataTransfer.files);
+      });
+      // Dropping anywhere else must not make the browser navigate to the file.
+      ['dragover', 'drop'].forEach(function (type) {
+        window.addEventListener(type, function (event) {
+          if (!dropZone.contains(event.target)) event.preventDefault();
+        });
+      });
+
       $('camSourceBtn').addEventListener('click', function () {
+        try { enteredSheetId(); }
+        catch (error) { setStatus(camStatus, error.message, 'err'); return; }
         usingCamera = true;
+        activeSheet = null;
+        camImg.onload = null;
         camImg.src = '/video_feed?q=70&t=' + Date.now();
-        showCamImage();
         clearPaperCorners();
-        setStatus(camStatus, 'Live camera. Click the paper\'s 4 corners.');
+        setStatus(camStatus, 'Looking for the printed AprilTags...');
       });
 
       camImg.addEventListener('error', function () {
         if (!usingCamera) return;
-        camImg.style.display = 'none';
-        camEmpty.style.display = '';
         setStatus(camStatus, 'Camera stream failed — is a camera connected? (Set it up on /home.)', 'err');
       });
 
-      $('photoInput').addEventListener('change', function (e) {
-        var f = e.target.files && e.target.files[0];
-        if (!f) return;
-        usingCamera = false;
-        camImg.src = URL.createObjectURL(f);
-        showCamImage();
-        clearPaperCorners();
-        setStatus(camStatus, 'Photo loaded. Click the paper\'s 4 corners.');
+      function stopAutoRegistration() {
+        if (registrationTimer) {
+          window.clearInterval(registrationTimer);
+          registrationTimer = 0;
+        }
+      }
+
+      async function autoRegisterMapSheet(reportFailure) {
+        if (registrationBusy || paperCorners.length === 4) return paperCorners.length === 4;
+        var fs = frameSize();
+        if (!fs.w || !fs.h) return false;
+        registrationBusy = true;
+        try {
+          var id = enteredSheetId();
+          var capture = $('camCanvas');
+          capture.width = fs.w;
+          capture.height = fs.h;
+          capture.getContext('2d').drawImage(camImg, 0, 0, fs.w, fs.h);
+          var response = await fetch('/api/map-sheet-registration', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: id, image: capture.toDataURL('image/jpeg', 0.92) })
+          });
+          var data = await response.json();
+          if (!response.ok || !data.ok) {
+            if (reportFailure) {
+              var failure = data.error === 'map_sheet_tags_not_found'
+                ? (data.tagsSpread === false && (data.tagsDetected || []).length >= 3
+                  ? 'The visible tags are all on one edge. Include a tag from another edge.'
+                  : 'Not enough AprilTags found (' + (data.tagsDetected || []).length + '/3 minimum). Include more of the page.')
+                : (data.error === 'map_sheet_reference_not_found'
+                  ? 'Map ID ' + id + ' is not stored on this system.'
+                  : (data.error || 'Automatic page alignment failed.'));
+              setStatus(camStatus, failure, 'err');
+            }
+            return false;
+          }
+          applyMapSheet({
+            id: data.sheetId,
+            corners: data.corners,
+            camera: data.camera,
+            theme: data.theme
+          }, true);
+          paperCorners = data.paperCorners.map(function (point) {
+            return [Number(point[0]), Number(point[1])];
+          });
+          refreshCamStep();
+          stopAutoRegistration();
+          setStatus(camStatus, 'Aligned map ID ' + data.sheetId + ' from ' + data.tagsDetected.length + '/' + data.tagsExpected + ' AprilTags.', 'ok');
+          return true;
+        } catch (error) {
+          if (reportFailure) setStatus(camStatus, error.message || 'Automatic page alignment failed.', 'err');
+          return false;
+        } finally {
+          registrationBusy = false;
+        }
+      }
+
+      // Only the live camera drives registration from this listener; dropped
+      // photos are sequenced by processSheet(), which sets camImg.onload itself.
+      camImg.addEventListener('load', function () {
+        if (!usingCamera) return;
+        stopAutoRegistration();
+        autoRegisterMapSheet(false);
+        registrationTimer = window.setInterval(function () { autoRegisterMapSheet(false); }, 1200);
+      });
+
+      $('photoInput').addEventListener('change', function (event) {
+        acceptFiles(event.target.files);
+        event.target.value = '';        // allow re-picking the same file
       });
 
       function clearPaperCorners() {
         paperCorners = [];
-        drawCamOverlay();
         refreshCamStep();
       }
-      $('camResetBtn').addEventListener('click', clearPaperCorners);
 
-      // client coords -> frame pixels (letterboxed contain-fit image)
-      function clientToFrame(clientX, clientY) {
-        var fs = frameSize();
-        if (!fs.w || !fs.h) return null;
-        var rect = camImg.getBoundingClientRect();
-        if (!rect.width || !rect.height) return null;
-        var scale = Math.min(rect.width / fs.w, rect.height / fs.h);
-        var drawW = fs.w * scale, drawH = fs.h * scale;
-        var ox = (rect.width - drawW) / 2, oy = (rect.height - drawH) / 2;
-        var px = clientX - rect.left - ox, py = clientY - rect.top - oy;
-        if (px < 0 || py < 0 || px > drawW || py > drawH) return null;
-        return [px / scale, py / scale];
-      }
-
-      function frameToOverlay(p) {
-        var fs = frameSize();
-        var box = camOverlay.getBoundingClientRect();
-        var rect = camImg.getBoundingClientRect();
-        var scale = Math.min(rect.width / fs.w, rect.height / fs.h);
-        var drawW = fs.w * scale, drawH = fs.h * scale;
-        var ox = rect.left - box.left + (rect.width - drawW) / 2;
-        var oy = rect.top - box.top + (rect.height - drawH) / 2;
-        return [ox + p[0] * scale, oy + p[1] * scale];
-      }
-
-      camImg.addEventListener('click', function (e) {
-        if (paperCorners.length >= 4) return;
-        var p = clientToFrame(e.clientX, e.clientY);
-        if (!p) return;
-        paperCorners.push(p);
-        drawCamOverlay();
-        refreshCamStep();
+      $('camResetBtn').addEventListener('click', function () {
+        stopAutoRegistration();
+        usingCamera = false;
+        camImg.onload = null;
+        camImg.removeAttribute('src');
+        sheets.slice().forEach(removeSheet);
+        clearPaperCorners();
+        clearInkLayer();
+        setStatus(camStatus, '');
+        setStatus($('inkStatus'), '');
       });
 
       function refreshCamStep() {
-        $('stepCam').classList.toggle('done', paperCorners.length === 4);
-        if (paperCorners.length < 4) {
-          setStatus(camStatus, paperCorners.length + '/4 paper corners — click corner ' + (paperCorners.length + 1) + '.');
-        } else {
-          setStatus(camStatus, 'Paper corners set ✓', 'ok');
-        }
-        refreshProjectBtn();
+        refreshExportBtn();
       }
-
-      function drawCamOverlay() {
-        var box = camOverlay.getBoundingClientRect();
-        camOverlay.width = Math.round(box.width);
-        camOverlay.height = Math.round(box.height);
-        var ctx = camOverlay.getContext('2d');
-        ctx.clearRect(0, 0, camOverlay.width, camOverlay.height);
-        var fs = frameSize();
-        if (!fs.w || !fs.h || !paperCorners.length) return;
-        var pts = paperCorners.map(frameToOverlay);
-        if (pts.length === 4) {
-          ctx.beginPath();
-          ctx.moveTo(pts[0][0], pts[0][1]);
-          for (var k = 1; k < 4; k++) ctx.lineTo(pts[k][0], pts[k][1]);
-          ctx.closePath();
-          ctx.fillStyle = 'rgba(0, 212, 255, 0.15)';
-          ctx.fill();
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = '#00d4ff';
-          ctx.stroke();
-        }
-        pts.forEach(function (p, i) {
-          ctx.beginPath();
-          ctx.arc(p[0], p[1], 9, 0, Math.PI * 2);
-          ctx.fillStyle = '#ffd000';
-          ctx.fill();
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = '#000';
-          ctx.stroke();
-          ctx.font = 'bold 12px Arial';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillStyle = '#000';
-          ctx.fillText(String(i + 1), p[0], p[1]);
-        });
-      }
-
-      // Keep the overlay in sync while the MJPEG stream resizes/first frame lands.
-      setInterval(drawCamOverlay, 800);
 
       // ==================== step 3: rectify + ink extraction + overlay ====================
       var camCanvas = $('camCanvas');
       var inkCanvas = $('inkCanvas');
       var INK_W = inkCanvas.width, INK_H = inkCanvas.height;
-      var EDGE_MARGIN = 0.015;      // skip outermost 1.5% (paper edge shadows)
       var projected = false;
-      var liveTimer = 0;
+      var thresholdTimer = 0;
+      var drawingBusy = false;
+      var lastMaskImage = null;
+
+      // Stroke colour and layer opacity are no longer user controls; the
+      // detected ink is drawn in one fixed colour at a fixed opacity.
+      var INK_COLOR = '#d3302f';
+      var INK_OPACITY = 0.95;
 
       var thresholdInput = $('threshold');
-      var strokeInput = $('strokeColor');
-      var opacityInput = $('inkOpacity');
       thresholdInput.addEventListener('input', function () {
         $('thresholdVal').textContent = thresholdInput.value;
-        if (projected) renderInk();
-      });
-      strokeInput.addEventListener('input', function () { if (projected) renderInk(); });
-      opacityInput.addEventListener('input', function () {
-        $('inkOpacityVal').textContent = opacityInput.value;
-        var lyr = map.getLayer('paper-ink-layer');
-        if (lyr) map.setPaintProperty('paper-ink-layer', 'raster-opacity', Number(opacityInput.value));
+        if (projected) {
+          window.clearTimeout(thresholdTimer);
+          thresholdTimer = window.setTimeout(function () { renderInk(); }, 180);
+        }
       });
 
-      function refreshProjectBtn() {
-        $('projectBtn').disabled = !(mapCorners.length === 4 && paperCorners.length === 4);
+      function refreshExportBtn() {
+        $('exportGeojsonBtn').disabled =
+          !(projected && mapCorners.length === 4 && paperCorners.length === 4);
       }
 
-      function hexToRgb(hex) {
-        var m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
-        if (!m) return [211, 48, 47];
-        var n = parseInt(m[1], 16);
-        return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+      function paintDrawingMask() {
+        if (!lastMaskImage) return;
+        var ictx = inkCanvas.getContext('2d');
+        ictx.clearRect(0, 0, INK_W, INK_H);
+        ictx.globalCompositeOperation = 'source-over';
+        ictx.drawImage(lastMaskImage, 0, 0, INK_W, INK_H);
+        ictx.globalCompositeOperation = 'source-in';
+        ictx.fillStyle = INK_COLOR;
+        ictx.fillRect(0, 0, INK_W, INK_H);
+        ictx.globalCompositeOperation = 'source-over';
       }
 
-      // Grab the current frame/photo, warp the paper quad to the rectified ink
-      // canvas, and keep only pixels darker than the threshold.
-      function renderInk() {
+      function loadDrawingMask(dataUrl) {
+        return new Promise(function (resolve, reject) {
+          var image = new Image();
+          image.onload = function () { resolve(image); };
+          image.onerror = function () { reject(new Error('Could not read the detected drawing mask.')); };
+          image.src = dataUrl;
+        });
+      }
+
+      // Rectification and subtraction run on the backend, where the saved clean
+      // map PNG can be compared with this exact photographed sheet. Only pixels
+      // absent from that reference are returned as a transparent ink mask.
+      async function renderInk() {
+        if (drawingBusy) return false;
         var fs = frameSize();
         if (!fs.w || !fs.h || paperCorners.length !== 4) return false;
-
+        drawingBusy = true;
         camCanvas.width = fs.w;
         camCanvas.height = fs.h;
-        var cctx = camCanvas.getContext('2d', { willReadFrequently: true });
+        var cctx = camCanvas.getContext('2d');
         try {
           cctx.drawImage(camImg, 0, 0, fs.w, fs.h);
-        } catch (_e) { return false; }
-        var frame;
-        try {
-          frame = cctx.getImageData(0, 0, fs.w, fs.h);
-        } catch (_e) {
-          setStatus($('inkStatus'), 'Cannot read pixels from this image.', 'err');
+          var response = await fetch('/api/map-sheet-drawing', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: enteredSheetId(),
+              image: camCanvas.toDataURL('image/jpeg', 0.94),
+              paperCorners: paperCorners,
+              threshold: Number(thresholdInput.value)
+            })
+          });
+          var data = await response.json();
+          if (!response.ok || !data.ok) throw new Error(data.error || 'Drawing subtraction failed.');
+          lastMaskImage = await loadDrawingMask(data.mask);
+          paintDrawingMask();
+          setStatus($('inkStatus'), data.inkPixels
+            ? 'Drawing isolated from the saved clean map ✓'
+            : 'No drawing found — lower the difference threshold.', data.inkPixels ? 'ok' : '');
+          return true;
+        } catch (error) {
+          setStatus($('inkStatus'), error.message || 'Drawing subtraction failed.', 'err');
           return false;
+        } finally {
+          drawingBusy = false;
         }
-
-        // Homography: rectified unit square -> camera quad (inverse sampling).
-        var H = solveHomography(
-          [[0, 0], [1, 0], [1, 1], [0, 1]],
-          paperCorners.map(function (p) { return [p[0], p[1]]; })
-        );
-        if (!H) { setStatus($('inkStatus'), 'Degenerate paper corners.', 'err'); return false; }
-
-        var threshold = Number(thresholdInput.value);
-        var soft = 26;                            // soft edge below the threshold
-        var rgb = hexToRgb(strokeInput.value);
-        var ictx = inkCanvas.getContext('2d', { willReadFrequently: true });
-        var out = ictx.createImageData(INK_W, INK_H);
-        var od = out.data, fd = frame.data;
-
-        for (var yy = 0; yy < INK_H; yy++) {
-          var v = yy / (INK_H - 1);
-          var edgeV = (v < EDGE_MARGIN || v > 1 - EDGE_MARGIN);
-          for (var xx = 0; xx < INK_W; xx++) {
-            var u = xx / (INK_W - 1);
-            var oi = (yy * INK_W + xx) * 4;
-            if (edgeV || u < EDGE_MARGIN || u > 1 - EDGE_MARGIN) continue;
-            var cp = applyH(H, u, v);
-            var cx = Math.round(cp[0]), cy = Math.round(cp[1]);
-            if (cx < 0 || cy < 0 || cx >= fs.w || cy >= fs.h) continue;
-            var fi = (cy * fs.w + cx) * 4;
-            // Luminance → "how inky" (0 at threshold, 1 at threshold - soft).
-            var lum = 0.299 * fd[fi] + 0.587 * fd[fi + 1] + 0.114 * fd[fi + 2];
-            if (lum >= threshold) continue;
-            var a = Math.min(1, (threshold - lum) / soft);
-            od[oi] = rgb[0];
-            od[oi + 1] = rgb[1];
-            od[oi + 2] = rgb[2];
-            od[oi + 3] = Math.round(a * 255);
-          }
-        }
-        ictx.putImageData(out, 0, 0);
-        return true;
       }
 
       function inkCoordinates() {
@@ -581,11 +2712,19 @@
           type: 'raster',
           source: 'paper-ink',
           paint: {
-            'raster-opacity': Number(opacityInput.value),
+            'raster-opacity': INK_OPACITY,
             'raster-fade-duration': 0,
             'raster-resampling': 'linear'
           }
         });
+      }
+
+      function clearInkLayer() {
+        projected = false;
+        lastMaskImage = null;
+        inkCanvas.getContext('2d').clearRect(0, 0, INK_W, INK_H);
+        if (map.getLayer('paper-ink-layer')) map.removeLayer('paper-ink-layer');
+        if (map.getSource('paper-ink')) map.removeSource('paper-ink');
       }
 
       // Re-add after a basemap style switch wipes custom sources.
@@ -595,38 +2734,58 @@
         }
       }
 
-      $('projectBtn').addEventListener('click', function () {
-        if (!renderInk()) return;
-        addOrUpdateInkSource();
-        projected = true;
-        setStatus($('inkStatus'), 'Drawing projected ✓ — tune the threshold if strokes are missing/noisy.', 'ok');
-      });
+      // Vectorised on the backend (contour trace + Douglas-Peucker), which
+      // re-runs detection from the same photo so the polygons always match the
+      // mask currently on screen.
+      $('exportGeojsonBtn').addEventListener('click', async function () {
+        var button = $('exportGeojsonBtn');
+        button.disabled = true;
+        setStatus($('inkStatus'), 'Vectorising the detected drawing...');
+        try {
+          var fs = frameSize();
+          if (!fs.w || !fs.h || paperCorners.length !== 4) {
+            throw new Error('Load a photo and let it align first.');
+          }
+          camCanvas.width = fs.w;
+          camCanvas.height = fs.h;
+          camCanvas.getContext('2d').drawImage(camImg, 0, 0, fs.w, fs.h);
+          var response = await fetch('/api/map-sheet-geojson', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: enteredSheetId(),
+              image: camCanvas.toDataURL('image/jpeg', 0.94),
+              paperCorners: paperCorners,
+              threshold: Number(thresholdInput.value)
+            })
+          });
+          var data = await response.json();
+          if (!response.ok || !data.ok) throw new Error(data.error || 'GeoJSON export failed.');
 
-      $('clearBtn').addEventListener('click', function () {
-        projected = false;
-        $('liveChk').checked = false;
-        stopLive();
-        if (map.getLayer('paper-ink-layer')) map.removeLayer('paper-ink-layer');
-        if (map.getSource('paper-ink')) map.removeSource('paper-ink');
-        setStatus($('inkStatus'), 'Cleared.');
-      });
-
-      function stopLive() {
-        if (liveTimer) { clearInterval(liveTimer); liveTimer = 0; }
-      }
-
-      $('liveChk').addEventListener('change', function (e) {
-        stopLive();
-        if (e.target.checked) {
-          liveTimer = setInterval(function () {
-            if (projected && usingCamera) renderInk();
-          }, 700);
+          var count = (data.geojson.features || []).length;
+          if (!count) {
+            setStatus($('inkStatus'), 'Nothing to export — no drawing was detected.');
+            return;
+          }
+          var blob = new Blob([JSON.stringify(data.geojson)], { type: 'application/geo+json' });
+          var url = URL.createObjectURL(blob);
+          var link = document.createElement('a');
+          link.href = url;
+          link.download = 'map-sheet-' + data.sheetId + '-drawing.geojson';
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          URL.revokeObjectURL(url);
+          setStatus($('inkStatus'), 'Exported ' + count + ' shape' + (count === 1 ? '' : 's') + '.', 'ok');
+        } catch (error) {
+          setStatus($('inkStatus'), error.message || 'GeoJSON export failed.', 'err');
+        } finally {
+          refreshExportBtn();
         }
       });
 
-      refreshMapStep();
       refreshCamStep();
-      refreshProjectBtn();
+      refreshExportBtn();
     })();
   </script>
 </body>

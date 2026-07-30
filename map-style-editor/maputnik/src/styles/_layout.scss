@@ -1,0 +1,51 @@
+@use "vars";
+
+//SCROLLING
+.maputnik-scroll-container {
+  overflow-x: hidden;
+  overflow-y: scroll;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  top: 1px;
+  position: absolute;
+}
+
+//APP LAYOUT
+.maputnik-layout {
+  font-family: vars.$font-family;
+  color: vars.$color-white;
+
+  &-main {
+    position: fixed;
+    bottom: 0;
+    height: calc(100% - #{vars.$toolbar-height + vars.$toolbar-offset});
+    top: vars.$toolbar-height + vars.$toolbar-offset;
+    left: 0;
+    right: 0;
+    z-index: 3;
+
+    display: flex;
+  }
+
+  &-list {
+    width: 200px;
+    background-color: vars.$color-black;
+  }
+
+  &-drawer {
+    width: 370px;
+    background-color: vars.$color-black;
+    // scroll-container is position: absolute
+    position: relative;
+  }
+
+  &-bottom {
+    position: fixed;
+    bottom: 0;
+    right: 0;
+    z-index: 1;
+    width: vars.$layout-map-width;
+    background-color: vars.$color-black;
+  }
+}

@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REQUIRED_IMPORTS = "import flask, cv2, numpy, pupil_apriltags"
+REQUIRED_IMPORTS = "import flask, cv2, numpy, pupil_apriltags, reportlab"
 
 
 def root_dir():

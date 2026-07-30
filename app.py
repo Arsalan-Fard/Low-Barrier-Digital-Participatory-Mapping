@@ -1,4 +1,6 @@
 import argparse
+import base64
+import binascii
 import contextlib
 import ctypes
 try:
@@ -20,6 +22,9 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import wave
 import webbrowser
 from collections import deque
@@ -33,6 +38,7 @@ from pupil_apriltags import Detector
 
 ROOT = Path(__file__).resolve().parent
 WEB_DIR = ROOT / "web"   # all browser-served files (HTML pages, src/, images/, vendor/)
+MAPUTNIK_DIST_DIR = ROOT / "map-style-editor" / "maputnik" / "dist"
 app = Flask(__name__, static_folder=str(WEB_DIR), static_url_path="")
 
 shutdown_event = threading.Event()
@@ -93,7 +99,14 @@ BACKEND_RECORDINGS_DIR = ROOT / "backend_recordings"
 camera_recorder = None   # CameraVoiceRecorder instance (created in main); shared by the Ctrl+Shift+R hotkey and /api/record
 OSMNX_NETWORK_FILE = ROOT / "data" / "osmnx_network.geojson"
 CUSTOM_LAYERS_DIR = ROOT / "data" / "custom_layers"
+MAP_SHEETS_DIR = ROOT / "data" / "map_sheets"
 OSMNX_GRAPH_CACHE = {"graph": None, "bbox": None, "loadedAt": 0.0}
+# Recently built graphs, keyed by "<network_type>|<bbox>", oldest first. OSMnx's
+# own on-disk cache only stores the raw Overpass JSON, which still costs seconds
+# to re-parse into a graph; keeping the built graphs makes revisiting an area
+# free for the rest of the process's life.
+OSMNX_GRAPH_STORE = {}
+OSMNX_GRAPH_STORE_MAX = 6
 osmnx_lock = threading.Lock()
 FLOORPLAN_DIR = ROOT / "floorplan"
 FLOORPLAN_DXF_FILE = FLOORPLAN_DIR / "Télécom Palaiseau_RDC_simplified.dxf"
@@ -1097,6 +1110,43 @@ def _find_chromium_browser():
         if path and os.path.isfile(path):
             return path
     return None
+
+
+def find_available_port(host, preferred_port, search_limit=100):
+    """Return an available TCP port, starting with ``preferred_port``.
+
+    Port 5000 remains the predictable first choice. If it is occupied, nearby
+    ports are tried in ascending order; if that range is exhausted, the OS
+    chooses an available ephemeral port. Passing ``--port 0`` also asks the OS
+    to choose immediately.
+    """
+    preferred_port = int(preferred_port)
+    if preferred_port < 0 or preferred_port > 65535:
+        raise ValueError("Port must be between 0 and 65535.")
+
+    bind_host = "0.0.0.0" if host in ("0.0.0.0", "", None) else str(host)
+    family = socket.AF_INET6 if ":" in bind_host else socket.AF_INET
+
+    def _try_bind(port):
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            # On Windows this prevents a second process from appearing to
+            # acquire a port that is already owned by another socket.
+            if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            probe.bind((bind_host, int(port)))
+            return int(probe.getsockname()[1])
+
+    if preferred_port == 0:
+        return _try_bind(0)
+
+    last_candidate = min(65535, preferred_port + max(1, int(search_limit)) - 1)
+    for candidate in range(preferred_port, last_candidate + 1):
+        try:
+            return _try_bind(candidate)
+        except OSError:
+            continue
+
+    return _try_bind(0)
 
 
 def open_browser_when_ready(host, port, kiosk=False, delay_max_s=5.0):
@@ -2262,7 +2312,7 @@ def get_floorplan_payload(plan_id=None):
 
 @app.route("/")
 def root():
-    return send_from_directory(WEB_DIR, "home.html")
+    return send_from_directory(WEB_DIR, "launcher.html")
 
 
 @app.route("/home")
@@ -2287,9 +2337,778 @@ def map_page():
 
 @app.route("/paper-test")
 def paper_test_page():
-    # Standalone experiment: digitize paths drawn on a blank paper via two
-    # 4-corner picks (map quad + camera paper quad) and a homography.
+    # Printable-map experiment: a numeric sheet ID retrieves geographic bounds
+    # and printed AprilTags recover the photographed paper homography.
     return send_from_directory(WEB_DIR, "paper-test.html")
+
+
+@app.route("/maputnik/")
+def maputnik_page():
+    """Serve the checked-in production build; npm is only needed to rebuild it."""
+    response = send_from_directory(MAPUTNIK_DIST_DIR, "index.html")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.route("/maputnik/<path:filename>")
+def maputnik_asset(filename):
+    response = send_from_directory(MAPUTNIK_DIST_DIR, filename)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+def _clean_map_sheet_id(raw):
+    """Accept a plain sheet ID ("7") or a batch ID ("7_3").
+
+    Batch IDs are "<map type>_<participant>": one printed map design can be
+    filled in by several people, and keeping the participant number in the ID is
+    what lets the scans be told apart again afterwards. Both halves reuse the
+    plain-ID rules, so the value stays filename-safe.
+    """
+    value = str(raw or "").strip()
+    return value if re.fullmatch(r"[1-9][0-9]{0,8}(?:_[1-9][0-9]{0,8})?", value) else ""
+
+
+def _clean_lnglat_corners(raw_corners):
+    if not isinstance(raw_corners, list) or len(raw_corners) != 4:
+        raise ValueError("invalid_corners")
+    cleaned = []
+    for point in raw_corners:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            raise ValueError("invalid_corners")
+        try:
+            lng, lat = float(point[0]), float(point[1])
+        except (TypeError, ValueError):
+            raise ValueError("invalid_corners") from None
+        if not (math.isfinite(lng) and math.isfinite(lat) and -180 <= lng <= 180 and -90 <= lat <= 90):
+            raise ValueError("invalid_corners")
+        cleaned.append([round(lng, 10), round(lat, 10)])
+    return cleaned
+
+
+def _map_sheet_summary(record):
+    return {
+        "id": record.get("id"),
+        "title": record.get("title") or "Reference map",
+        "createdAt": record.get("createdAt"),
+        "corners": record.get("corners"),
+        "camera": record.get("camera"),
+        "theme": record.get("theme") or "",
+        "pdfUrl": f"/api/map-sheets/{record.get('id')}/pdf",
+    }
+
+
+SHEET_PAGE_SIZES = ("A4", "A3")
+
+
+def _clean_sheet_page_size(raw):
+    value = str(raw or "").strip().upper()
+    return value if value in SHEET_PAGE_SIZES else "A4"
+
+
+def map_sheet_layout(page_size="A4"):
+    """Geometry of a printable sheet, in PDF points, origin at the page's
+    TOP-LEFT (image convention — the browser preview and OpenCV both use it).
+
+    This is the single source of truth for the layout: _draw_map_sheet_pdf()
+    renders from it, and /api/map-sheet-layout serves it to the page so the
+    on-screen preview shows the true export frame and tag placement instead of
+    a hand-copied approximation that could silently drift out of sync.
+    """
+    # A4/A3 landscape in points (1 pt = 1/72 in), matching reportlab.
+    page_w, page_h = (1190.55, 841.89) if _clean_sheet_page_size(page_size) == "A3" else (841.89, 595.28)
+    map_x = map_y = 12.0
+    map_w, map_h = page_w - 24.0, page_h - 24.0
+    tag_size = 20.0 if _clean_sheet_page_size(page_size) == "A4" else 28.0
+    quiet = 3.0
+    patch = tag_size + 2.0 * quiet
+    # Eight tags: three across the top, one mid-left, one mid-right, three
+    # across the bottom — expressed top-left-origin.
+    patches = [
+        (map_x, map_y),
+        ((page_w - patch) * 0.5, map_y),
+        (page_w - map_x - patch, map_y),
+        (map_x, (page_h - patch) * 0.5),
+        (page_w - map_x - patch, (page_h - patch) * 0.5),
+        (map_x, page_h - map_y - patch),
+        ((page_w - patch) * 0.5, page_h - map_y - patch),
+        (page_w - map_x - patch, page_h - map_y - patch),
+    ]
+    badge_w, badge_h = 70.0, 14.0
+    return {
+        "pageSize": _clean_sheet_page_size(page_size),
+        "page": [page_w, page_h],
+        "mapFrame": [map_x, map_y, map_w, map_h],
+        "tagIds": list(range(21, 29)),
+        "tagSize": tag_size,
+        "quiet": quiet,
+        "patchSize": patch,
+        "patches": [[round(x, 3), round(y, 3)] for x, y in patches],
+        "badge": [
+            round(page_w * 0.5 + patch * 0.7, 3),
+            round(page_h - (map_y + 2.0) - badge_h, 3),
+            badge_w, badge_h,
+        ],
+    }
+
+
+@app.route("/api/map-sheet-layout")
+def api_map_sheet_layout():
+    return jsonify({
+        "ok": True,
+        "sizes": list(SHEET_PAGE_SIZES),
+        "layouts": {size: map_sheet_layout(size) for size in SHEET_PAGE_SIZES},
+    })
+
+
+def _draw_map_sheet_pdf(png_bytes, record, page_size="A4"):
+    """Build an almost edge-to-edge A4/A3 map with eight registration tags."""
+    try:
+        from reportlab.lib.utils import ImageReader
+        from reportlab.pdfgen import canvas
+    except ImportError as exc:
+        raise RuntimeError("reportlab_not_installed") from exc
+
+    layout = map_sheet_layout(page_size)
+    page_w, page_h = layout["page"]
+    map_x, map_y, map_w, map_h = layout["mapFrame"]
+
+    # Dedicated high-numbered IDs avoid the low AprilTag IDs used elsewhere by
+    # the project's tangible drawing tools. These tags register the paper only.
+    tag_family = "DICT_APRILTAG_16h5"
+    # IDs 21-28 stay outside the project's currently assigned tangible-tool
+    # range (1-20) while fitting inside the compact 16h5 dictionary.
+    tag_ids = layout["tagIds"]
+    tag_size = layout["tagSize"]
+    quiet = layout["quiet"]
+    patch_size = layout["patchSize"]
+    # layout["patches"] is top-left-origin; reportlab draws from bottom-left.
+    tag_positions = [
+        (px, page_h - py - patch_size) for px, py in layout["patches"]
+    ]
+
+    # Metadata uses image coordinates (origin at page top-left), matching
+    # OpenCV and the browser. ReportLab itself uses a bottom-left origin.
+    fiducials = []
+    mask_rects = []
+    for tag_id, (patch_x, patch_y) in zip(tag_ids, tag_positions):
+        black_left = patch_x + quiet
+        black_top = page_h - (patch_y + patch_size) + quiet
+        black_right = black_left + tag_size
+        black_bottom = black_top + tag_size
+        patch_top = page_h - (patch_y + patch_size)
+        fiducials.append({
+            "id": tag_id,
+            "cornersPagePoints": [
+                [round(black_left, 3), round(black_top, 3)],
+                [round(black_right, 3), round(black_top, 3)],
+                [round(black_right, 3), round(black_bottom, 3)],
+                [round(black_left, 3), round(black_bottom, 3)],
+            ],
+        })
+        mask_rects.append([
+            round((patch_x - map_x) / map_w, 6),
+            round((patch_top - map_y) / map_h, 6),
+            round((patch_x + patch_size - map_x) / map_w, 6),
+            round((patch_top + patch_size - map_y) / map_h, 6),
+        ])
+
+    badge_x, badge_top, badge_w, badge_h = layout["badge"]
+    badge_y = page_h - badge_top - badge_h
+    mask_rects.append([
+        round((badge_x - map_x) / map_w, 6),
+        round((badge_top - map_y) / map_h, 6),
+        round((badge_x + badge_w - map_x) / map_w, 6),
+        round((badge_top + badge_h - map_y) / map_h, 6),
+    ])
+
+    record["print"] = {
+        "paper": f"{layout['pageSize']} landscape",
+        "pageSize": layout["pageSize"],
+        "pagePoints": [round(page_w, 3), round(page_h, 3)],
+        "mapFramePoints": [round(map_x, 3), round(map_y, 3), round(map_w, 3), round(map_h, 3)],
+        "mapCornerPagePoints": [
+            [round(map_x, 3), round(map_y, 3)],
+            [round(map_x + map_w, 3), round(map_y, 3)],
+            [round(map_x + map_w, 3), round(map_y + map_h, 3)],
+            [round(map_x, 3), round(map_y + map_h, 3)],
+        ],
+        "fiducialFamily": tag_family,
+        "fiducials": fiducials,
+        "maskRectsNormalized": mask_rects,
+    }
+
+    out = io.BytesIO()
+    pdf = canvas.Canvas(out, pagesize=(page_w, page_h), pageCompression=1)
+    pdf.setTitle(f"Map sheet {record['id']}")
+    pdf.setAuthor("Low-Barrier Digital Participatory Mapping")
+    pdf.setSubject("Printable georeferenced reference map")
+
+    pdf.setFillColorRGB(1, 1, 1)
+    pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+    pdf.drawImage(ImageReader(io.BytesIO(png_bytes)), map_x, map_y, map_w, map_h,
+                  preserveAspectRatio=False, mask="auto")
+    pdf.setStrokeColorRGB(0, 0, 0)
+    pdf.setLineWidth(0.8)
+    pdf.rect(map_x, map_y, map_w, map_h, fill=0, stroke=1)
+
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_16h5)
+    for tag_id, (patch_x, patch_y) in zip(tag_ids, tag_positions):
+        marker = cv2.aruco.generateImageMarker(dictionary, tag_id, 600, borderBits=1)
+        border_px = 90
+        marker = cv2.copyMakeBorder(
+            marker, border_px, border_px, border_px, border_px,
+            cv2.BORDER_CONSTANT, value=255,
+        )
+        ok, encoded = cv2.imencode(".png", marker)
+        if not ok:
+            raise RuntimeError("fiducial_generation_failed")
+        pdf.drawImage(
+            ImageReader(io.BytesIO(encoded.tobytes())),
+            patch_x, patch_y, patch_size, patch_size,
+            preserveAspectRatio=False, mask="auto",
+        )
+
+    pdf.setFillColorRGB(1, 1, 1)
+    pdf.rect(badge_x, badge_y, badge_w, badge_h, fill=1, stroke=0)
+    pdf.setFillColorRGB(0, 0, 0)
+    pdf.setFont("Helvetica-Bold", 9)
+    pdf.drawCentredString(badge_x + badge_w * 0.5, badge_y + 3.5, f"MAP ID: {record['id']}")
+    pdf.showPage()
+    pdf.save()
+    return out.getvalue()
+
+
+@app.route("/api/map-sheets", methods=["GET", "POST"])
+def api_map_sheets():
+    if request.method == "GET":
+        records = []
+        if MAP_SHEETS_DIR.exists():
+            for path in MAP_SHEETS_DIR.glob("*.json"):
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                    if _clean_map_sheet_id(record.get("id")):
+                        records.append(_map_sheet_summary(record))
+                except (OSError, ValueError, TypeError):
+                    continue
+        records.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
+        return jsonify({"ok": True, "items": records})
+
+    payload = request.get_json(silent=True) or {}
+    sheet_id = _clean_map_sheet_id(payload.get("id"))
+    if not sheet_id:
+        return jsonify({"ok": False, "error": "invalid_map_sheet_id"}), 400
+    overwritten = (MAP_SHEETS_DIR / f"{sheet_id}.json").exists()
+    try:
+        corners = _clean_lnglat_corners(payload.get("corners"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    image_uri = str(payload.get("image") or "")
+    match = re.fullmatch(r"data:image/png;base64,([A-Za-z0-9+/=\r\n]+)", image_uri)
+    if not match:
+        return jsonify({"ok": False, "error": "invalid_png"}), 400
+    try:
+        png_bytes = base64.b64decode(match.group(1), validate=True)
+    except (binascii.Error, ValueError):
+        return jsonify({"ok": False, "error": "invalid_png"}), 400
+    if not png_bytes.startswith(b"\x89PNG\r\n\x1a\n") or len(png_bytes) > 30 * 1024 * 1024:
+        return jsonify({"ok": False, "error": "invalid_png"}), 400
+    decoded = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
+    if decoded is None or decoded.ndim < 2 or decoded.shape[0] > 12000 or decoded.shape[1] > 12000:
+        return jsonify({"ok": False, "error": "invalid_png"}), 400
+
+    camera = payload.get("camera") if isinstance(payload.get("camera"), dict) else {}
+    center = camera.get("center") if isinstance(camera.get("center"), list) else []
+    try:
+        clean_camera = {
+            "center": [round(float(center[0]), 10), round(float(center[1]), 10)],
+            "zoom": round(float(camera.get("zoom")), 6),
+            "bearing": round(float(camera.get("bearing", 0)), 6),
+            "pitch": round(float(camera.get("pitch", 0)), 6),
+        }
+        if not all(math.isfinite(value) for value in clean_camera["center"] + [clean_camera["zoom"], clean_camera["bearing"], clean_camera["pitch"]]):
+            raise ValueError
+    except (IndexError, TypeError, ValueError):
+        return jsonify({"ok": False, "error": "invalid_camera"}), 400
+
+    created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    record = {
+        "version": 2,
+        "id": sheet_id,
+        "title": str(payload.get("title") or "Reference map").strip()[:80] or "Reference map",
+        "createdAt": created_at,
+        "coordinateSystem": "EPSG:4326",
+        "cornerOrder": ["top-left", "top-right", "bottom-right", "bottom-left"],
+        "corners": corners,
+        "camera": clean_camera,
+        "theme": str(payload.get("theme") or "")[:40],
+        "imageSize": {"width": int(decoded.shape[1]), "height": int(decoded.shape[0])},
+    }
+    try:
+        pdf_bytes = _draw_map_sheet_pdf(png_bytes, record, payload.get("pageSize"))
+        MAP_SHEETS_DIR.mkdir(parents=True, exist_ok=True)
+        targets = {
+            "png": MAP_SHEETS_DIR / f"{sheet_id}.png",
+            "pdf": MAP_SHEETS_DIR / f"{sheet_id}.pdf",
+            "json": MAP_SHEETS_DIR / f"{sheet_id}.json",
+        }
+        temporary = {
+            key: MAP_SHEETS_DIR / f".{sheet_id}.{os.getpid()}.{threading.get_ident()}.{key}.tmp"
+            for key in targets
+        }
+        try:
+            temporary["png"].write_bytes(png_bytes)
+            temporary["pdf"].write_bytes(pdf_bytes)
+            temporary["json"].write_text(
+                json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+            # Replace the metadata last so readers never observe a new record
+            # before its matching image and PDF have reached disk.
+            os.replace(temporary["png"], targets["png"])
+            os.replace(temporary["pdf"], targets["pdf"])
+            os.replace(temporary["json"], targets["json"])
+        finally:
+            for path in temporary.values():
+                with contextlib.suppress(OSError):
+                    path.unlink()
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    except OSError:
+        logging.exception("Could not save map sheet")
+        return jsonify({"ok": False, "error": "map_sheet_save_failed"}), 500
+
+    return jsonify({
+        "ok": True,
+        "overwritten": overwritten,
+        **_map_sheet_summary(record),
+    }), 200 if overwritten else 201
+
+
+@app.route("/api/map-sheets/<sheet_id>", methods=["GET"])
+def api_map_sheet(sheet_id):
+    clean_id = _clean_map_sheet_id(sheet_id)
+    if not clean_id:
+        return jsonify({"ok": False, "error": "invalid_map_sheet_id"}), 400
+    path = MAP_SHEETS_DIR / f"{clean_id}.json"
+    if not path.exists():
+        return jsonify({"ok": False, "error": "map_sheet_not_found"}), 404
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return jsonify({"ok": False, "error": "map_sheet_unreadable"}), 500
+    return jsonify({"ok": True, **record, "pdfUrl": f"/api/map-sheets/{clean_id}/pdf"})
+
+
+@app.route("/api/map-sheets/<sheet_id>/pdf", methods=["GET"])
+def api_map_sheet_pdf(sheet_id):
+    clean_id = _clean_map_sheet_id(sheet_id)
+    if not clean_id or not (MAP_SHEETS_DIR / f"{clean_id}.pdf").exists():
+        return jsonify({"ok": False, "error": "map_sheet_not_found"}), 404
+    return send_from_directory(
+        MAP_SHEETS_DIR, f"{clean_id}.pdf", as_attachment=True,
+        download_name=f"map-sheet-{clean_id}.pdf", mimetype="application/pdf"
+    )
+
+
+def _decode_map_sheet_camera_image(image_uri):
+    match = re.fullmatch(r"data:image/(?:png|jpeg);base64,([A-Za-z0-9+/=\r\n]+)", str(image_uri or ""))
+    if not match:
+        raise ValueError("invalid_image")
+    try:
+        image_bytes = base64.b64decode(match.group(1), validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("invalid_image") from None
+    if len(image_bytes) > 30 * 1024 * 1024:
+        raise ValueError("invalid_image")
+    decoded = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None or decoded.shape[0] > 12000 or decoded.shape[1] > 12000:
+        raise ValueError("invalid_image")
+    return decoded
+
+
+def _clean_camera_quad(raw_corners, frame_shape):
+    try:
+        corners = np.asarray(raw_corners, dtype=np.float32)
+    except (TypeError, ValueError):
+        raise ValueError("invalid_paper_corners") from None
+    if corners.shape != (4, 2) or not np.isfinite(corners).all():
+        raise ValueError("invalid_paper_corners")
+    height, width = frame_shape[:2]
+    # A projected page edge may land just outside a tightly cropped frame, but
+    # reject wildly unrelated coordinates before passing them to OpenCV.
+    if (np.abs(corners[:, 0]) > width * 3).any() or (np.abs(corners[:, 1]) > height * 3).any():
+        raise ValueError("invalid_paper_corners")
+    if abs(float(cv2.contourArea(corners))) < max(100.0, width * height * 0.02):
+        raise ValueError("invalid_paper_corners")
+    return corners
+
+
+def _map_sheet_exclusion_mask(width, height, normalized_rects):
+    valid = np.full((height, width), 255, dtype=np.uint8)
+    for rect in normalized_rects if isinstance(normalized_rects, list) else []:
+        try:
+            x0, y0, x1, y1 = [float(value) for value in rect]
+        except (TypeError, ValueError):
+            continue
+        x0 = max(0, min(width, int(math.floor(x0 * width))))
+        y0 = max(0, min(height, int(math.floor(y0 * height))))
+        x1 = max(0, min(width, int(math.ceil(x1 * width))))
+        y1 = max(0, min(height, int(math.ceil(y1 * height))))
+        if x1 > x0 and y1 > y0:
+            valid[y0:y1, x0:x1] = 0
+    edge = max(2, int(round(min(width, height) * 0.012)))
+    valid[:edge, :] = 0
+    valid[-edge:, :] = 0
+    valid[:, :edge] = 0
+    valid[:, -edge:] = 0
+    return valid
+
+
+def _fit_reference_colors(reference, observed, valid):
+    """Robustly map clean digital-map BGR colours into photographed colours."""
+    sample = valid[::5, ::5] > 0
+    ref_sample = reference[::5, ::5][sample].astype(np.float32)
+    obs_sample = observed[::5, ::5][sample].astype(np.float32)
+    if len(ref_sample) < 100:
+        return reference.astype(np.float32)
+    design = np.column_stack([ref_sample, np.ones(len(ref_sample), dtype=np.float32)])
+    keep = np.ones(len(ref_sample), dtype=bool)
+    coefficients = None
+    for _ in range(4):
+        coefficients, _, _, _ = np.linalg.lstsq(design[keep], obs_sample[keep], rcond=None)
+        residual = np.linalg.norm(design @ coefficients - obs_sample, axis=1)
+        cutoff = float(np.quantile(residual, 0.82))
+        keep = residual <= max(4.0, cutoff)
+    full_design = np.concatenate([
+        reference.astype(np.float32),
+        np.ones((*reference.shape[:2], 1), dtype=np.float32),
+    ], axis=2)
+    return np.clip(full_design @ coefficients, 0, 255)
+
+
+def _extract_map_sheet_drawing(frame, reference, paper_corners, normalized_rects, threshold):
+    """Return an alpha mask for ink that is absent from the saved clean map."""
+    output_width, output_height = 1000, 707
+    destination = np.asarray([
+        [0, 0], [output_width - 1, 0],
+        [output_width - 1, output_height - 1], [0, output_height - 1],
+    ], dtype=np.float32)
+    camera_to_map = cv2.getPerspectiveTransform(paper_corners, destination)
+    observed = cv2.warpPerspective(
+        frame, camera_to_map, (output_width, output_height),
+        flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE,
+    )
+    clean = cv2.resize(reference, (output_width, output_height), interpolation=cv2.INTER_AREA)
+    valid = _map_sheet_exclusion_mask(output_width, output_height, normalized_rects)
+
+    predicted = _fit_reference_colors(clean, observed, valid)
+    observed_float = observed.astype(np.float32)
+    # Remove slow lighting/shadow changes while retaining narrow pen strokes.
+    illumination = cv2.GaussianBlur(observed_float - predicted, (0, 0), 28.0)
+    normalized_observed = np.clip(observed_float - illumination, 0, 255).astype(np.uint8)
+    predicted_u8 = np.clip(predicted, 0, 255).astype(np.uint8)
+
+    observed_lab = cv2.cvtColor(
+        cv2.GaussianBlur(normalized_observed, (3, 3), 0), cv2.COLOR_BGR2LAB
+    ).astype(np.float32)
+    predicted_lab = cv2.cvtColor(
+        cv2.GaussianBlur(predicted_u8, (3, 3), 0), cv2.COLOR_BGR2LAB
+    ).astype(np.float32)
+
+    # A 5x5 neighbourhood minimum prevents a one- or two-pixel registration
+    # error around printed roads/text from becoming a false drawing contour.
+    padded = cv2.copyMakeBorder(predicted_lab, 2, 2, 2, 2, cv2.BORDER_REPLICATE)
+    best_distance = np.full((output_height, output_width), np.inf, dtype=np.float32)
+    for offset_y in range(5):
+        for offset_x in range(5):
+            shifted = padded[offset_y:offset_y + output_height, offset_x:offset_x + output_width]
+            difference = observed_lab - shifted
+            distance = np.sqrt(np.sum(difference * difference, axis=2))
+            best_distance = np.minimum(best_distance, distance)
+
+    best_distance[valid == 0] = 0
+    score = np.clip(best_distance, 0, 255).astype(np.uint8)
+    score = cv2.medianBlur(score, 3)
+    threshold = max(5.0, min(100.0, float(threshold)))
+    alpha = np.clip((score.astype(np.float32) - threshold) * (255.0 / 18.0), 0, 255).astype(np.uint8)
+
+    # Eliminate isolated JPEG/halftone speckles but retain connected pen lines.
+    binary = np.where(alpha >= 24, 255, 0).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+    keep_mask = np.zeros_like(binary)
+    for label in range(1, count):
+        if int(stats[label, cv2.CC_STAT_AREA]) >= 14:
+            keep_mask[labels == label] = 255
+    alpha[keep_mask == 0] = 0
+    alpha[valid == 0] = 0
+    return alpha
+
+
+@app.route("/api/map-sheet-registration", methods=["POST"])
+def api_map_sheet_registration():
+    payload = request.get_json(silent=True) or {}
+    sheet_id = _clean_map_sheet_id(payload.get("id"))
+    if not sheet_id:
+        return jsonify({"ok": False, "error": "invalid_map_sheet_id"}), 400
+    record_path = MAP_SHEETS_DIR / f"{sheet_id}.json"
+    if not record_path.exists():
+        return jsonify({"ok": False, "error": "map_sheet_reference_not_found"}), 404
+    try:
+        frame = _decode_map_sheet_camera_image(payload.get("image"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        print_info = record.get("print") or {}
+        page_size = np.asarray(print_info["pagePoints"], dtype=np.float32)
+        map_page_points = np.asarray(print_info["mapCornerPagePoints"], dtype=np.float32)
+        fiducials = print_info["fiducials"]
+    except (OSError, ValueError, TypeError, KeyError):
+        return jsonify({"ok": False, "error": "map_sheet_reference_incomplete"}), 409
+    if page_size.shape != (2,) or map_page_points.shape != (4, 2) or not isinstance(fiducials, list):
+        return jsonify({"ok": False, "error": "map_sheet_reference_incomplete"}), 409
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_16h5)
+    parameters = cv2.aruco.DetectorParameters()
+    parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    detected_corners, detected_ids, _ = cv2.aruco.ArucoDetector(
+        dictionary, parameters
+    ).detectMarkers(gray)
+    by_id = {}
+    if detected_ids is not None:
+        for corners, tag_id in zip(detected_corners, detected_ids.flatten().tolist()):
+            by_id[int(tag_id)] = np.asarray(corners, dtype=np.float32).reshape(4, 2)
+
+    page_samples = []
+    camera_samples = []
+    matched_ids = []
+    matched_page_centers = []
+    try:
+        for item in fiducials:
+            tag_id = int(item["id"])
+            if tag_id not in by_id:
+                continue
+            page_tag_corners = np.asarray(item["cornersPagePoints"], dtype=np.float32)
+            if page_tag_corners.shape != (4, 2):
+                continue
+            page_samples.extend(page_tag_corners.tolist())
+            camera_samples.extend(by_id[tag_id].tolist())
+            matched_ids.append(tag_id)
+            matched_page_centers.append(np.mean(page_tag_corners, axis=0))
+    except (TypeError, ValueError, KeyError):
+        return jsonify({"ok": False, "error": "map_sheet_reference_incomplete"}), 409
+
+    spread_area = 0.0
+    if len(matched_page_centers) >= 3:
+        spread_area = abs(float(cv2.contourArea(cv2.convexHull(
+            np.asarray(matched_page_centers, dtype=np.float32)
+        ))))
+    minimum_spread = float(page_size[0] * page_size[1]) * 0.02
+    if len(matched_ids) < 3 or spread_area < minimum_spread:
+        return jsonify({
+            "ok": False,
+            "error": "map_sheet_tags_not_found",
+            "tagsDetected": matched_ids,
+            "tagsRequired": 3,
+            "tagsSpread": spread_area >= minimum_spread,
+        }), 409
+
+    page_to_camera, inliers = cv2.findHomography(
+        np.asarray(page_samples, dtype=np.float32),
+        np.asarray(camera_samples, dtype=np.float32),
+        cv2.RANSAC, 5.0,
+    )
+    if page_to_camera is None:
+        return jsonify({"ok": False, "error": "map_sheet_alignment_failed"}), 409
+    projected = cv2.perspectiveTransform(
+        map_page_points.reshape(1, -1, 2), page_to_camera
+    ).reshape(-1, 2)
+    paper_corners = [[round(float(x), 3), round(float(y), 3)] for x, y in projected]
+    return jsonify({
+        "ok": True,
+        "sheetId": sheet_id,
+        "corners": record.get("corners"),
+        "camera": record.get("camera"),
+        "theme": record.get("theme") or "streets",
+        "paperCorners": paper_corners,
+        "maskRects": print_info.get("maskRectsNormalized") or [],
+        "tagsDetected": matched_ids,
+        "tagsExpected": len(fiducials),
+        "inlierCorners": int(np.count_nonzero(inliers)) if inliers is not None else 0,
+        "method": "manual-id+apriltags",
+    })
+
+
+@app.route("/api/map-sheet-drawing", methods=["POST"])
+def api_map_sheet_drawing():
+    payload = request.get_json(silent=True) or {}
+    sheet_id = _clean_map_sheet_id(payload.get("id"))
+    if not sheet_id:
+        return jsonify({"ok": False, "error": "invalid_map_sheet_id"}), 400
+    record_path = MAP_SHEETS_DIR / f"{sheet_id}.json"
+    image_path = MAP_SHEETS_DIR / f"{sheet_id}.png"
+    if not record_path.exists() or not image_path.exists():
+        return jsonify({"ok": False, "error": "map_sheet_reference_not_found"}), 404
+    try:
+        frame = _decode_map_sheet_camera_image(payload.get("image"))
+        paper_corners = _clean_camera_quad(payload.get("paperCorners"), frame.shape)
+        threshold = float(payload.get("threshold", 28))
+        if not math.isfinite(threshold):
+            raise ValueError("invalid_threshold")
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        normalized_rects = (record.get("print") or {}).get("maskRectsNormalized") or []
+        reference = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    except (OSError, ValueError, TypeError):
+        return jsonify({"ok": False, "error": "map_sheet_reference_unreadable"}), 500
+    if reference is None:
+        return jsonify({"ok": False, "error": "map_sheet_reference_unreadable"}), 500
+    try:
+        alpha = _extract_map_sheet_drawing(
+            frame, reference, paper_corners, normalized_rects, threshold
+        )
+        mask = np.full((*alpha.shape, 4), 255, dtype=np.uint8)
+        mask[:, :, 3] = alpha
+        encoded_ok, encoded = cv2.imencode(".png", mask)
+        if not encoded_ok:
+            raise RuntimeError("drawing_mask_encode_failed")
+    except (cv2.error, np.linalg.LinAlgError, RuntimeError, ValueError):
+        logging.exception("Could not subtract the printable map reference")
+        return jsonify({"ok": False, "error": "drawing_detection_failed"}), 500
+    return jsonify({
+        "ok": True,
+        "sheetId": sheet_id,
+        "width": int(alpha.shape[1]),
+        "height": int(alpha.shape[0]),
+        "inkPixels": int(np.count_nonzero(alpha)),
+        "mask": "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode("ascii"),
+        "method": "registered-reference-subtraction",
+    })
+
+
+def _rectified_pixel_to_lnglat(corners, width, height):
+    """Build a pixel -> [lng, lat] mapper for the rectified drawing space.
+
+    `corners` are the sheet's geographic corners in TL, TR, BR, BL order, and the
+    rectified mask is an axis-aligned `width` x `height` image of that same page,
+    so a bilinear blend of the four corners is the exact inverse mapping.
+    """
+    (tl_lng, tl_lat), (tr_lng, tr_lat), (br_lng, br_lat), (bl_lng, bl_lat) = corners
+    span_x = max(1.0, float(width - 1))
+    span_y = max(1.0, float(height - 1))
+
+    def to_lnglat(x, y):
+        u = min(1.0, max(0.0, float(x) / span_x))
+        v = min(1.0, max(0.0, float(y) / span_y))
+        top_lng = tl_lng + (tr_lng - tl_lng) * u
+        top_lat = tl_lat + (tr_lat - tl_lat) * u
+        bottom_lng = bl_lng + (br_lng - bl_lng) * u
+        bottom_lat = bl_lat + (br_lat - bl_lat) * u
+        return [
+            round(top_lng + (bottom_lng - top_lng) * v, 8),
+            round(top_lat + (bottom_lat - top_lat) * v, 8),
+        ]
+
+    return to_lnglat
+
+
+def _drawing_alpha_to_geojson(alpha, corners, simplify):
+    """Trace the ink mask into simplified geographic polygons.
+
+    Douglas-Peucker (approxPolyDP) is applied in pixel space before projecting,
+    so the tolerance stays a predictable fraction of each shape's own perimeter
+    rather than varying with the sheet's geographic extent.
+    """
+    binary = np.where(alpha >= 24, 255, 0).astype(np.uint8)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    height, width = alpha.shape[:2]
+    to_lnglat = _rectified_pixel_to_lnglat(corners, width, height)
+
+    features = []
+    for contour in contours:
+        area_px = abs(float(cv2.contourArea(contour)))
+        if area_px < 24.0:            # drop speckles the mask stage left behind
+            continue
+        perimeter = float(cv2.arcLength(contour, True))
+        epsilon = max(0.75, simplify * perimeter)
+        reduced = cv2.approxPolyDP(contour, epsilon, True).reshape(-1, 2)
+        if reduced.shape[0] < 3:
+            continue
+        ring = [to_lnglat(point[0], point[1]) for point in reduced]
+        if ring[0] != ring[-1]:
+            ring.append(list(ring[0]))
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "areaPx": int(round(area_px)),
+                "vertices": int(reduced.shape[0]),
+            },
+            "geometry": {"type": "Polygon", "coordinates": [ring]},
+        })
+
+    features.sort(key=lambda feature: feature["properties"]["areaPx"], reverse=True)
+    return features
+
+
+@app.route("/api/map-sheet-geojson", methods=["POST"])
+def api_map_sheet_geojson():
+    """Vectorise the detected drawing into simplified GeoJSON polygons."""
+    payload = request.get_json(silent=True) or {}
+    sheet_id = _clean_map_sheet_id(payload.get("id"))
+    if not sheet_id:
+        return jsonify({"ok": False, "error": "invalid_map_sheet_id"}), 400
+    record_path = MAP_SHEETS_DIR / f"{sheet_id}.json"
+    image_path = MAP_SHEETS_DIR / f"{sheet_id}.png"
+    if not record_path.exists() or not image_path.exists():
+        return jsonify({"ok": False, "error": "map_sheet_reference_not_found"}), 404
+    try:
+        frame = _decode_map_sheet_camera_image(payload.get("image"))
+        paper_corners = _clean_camera_quad(payload.get("paperCorners"), frame.shape)
+        threshold = float(payload.get("threshold", 28))
+        simplify = float(payload.get("simplify", 0.002))
+        if not math.isfinite(threshold) or not math.isfinite(simplify):
+            raise ValueError("invalid_threshold")
+        simplify = max(0.0, min(0.05, simplify))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        corners = _clean_lnglat_corners(record.get("corners"))
+        normalized_rects = (record.get("print") or {}).get("maskRectsNormalized") or []
+        reference = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    except (OSError, ValueError, TypeError):
+        return jsonify({"ok": False, "error": "map_sheet_reference_unreadable"}), 500
+    if reference is None:
+        return jsonify({"ok": False, "error": "map_sheet_reference_unreadable"}), 500
+    try:
+        alpha = _extract_map_sheet_drawing(
+            frame, reference, paper_corners, normalized_rects, threshold
+        )
+        features = _drawing_alpha_to_geojson(alpha, corners, simplify)
+    except (cv2.error, np.linalg.LinAlgError, RuntimeError, ValueError):
+        logging.exception("Could not vectorise the detected drawing")
+        return jsonify({"ok": False, "error": "drawing_vectorisation_failed"}), 500
+    return jsonify({
+        "ok": True,
+        "sheetId": sheet_id,
+        "geojson": {
+            "type": "FeatureCollection",
+            "properties": {
+                "sheetId": sheet_id,
+                "threshold": threshold,
+                "simplify": simplify,
+                "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            },
+            "features": features,
+        },
+    })
 
 
 @app.route("/floorplan")
@@ -4920,9 +5739,28 @@ def api_calibration_clear():
     return jsonify({"ok": True})
 
 
+def _save_osmnx_network(geojson, bbox, network_type="walk"):
+    """Persist the network plus the bbox that was REQUESTED.
+
+    The saved geometry's own extent is always slightly tighter than the window
+    that was asked for (streets rarely touch every edge), so inferring the bbox
+    from the features on reload made the cache look like it did not cover the
+    original request — and the next startup re-downloaded the same area. Storing
+    the requested bbox explicitly is what makes the cache reusable.
+    """
+    try:
+        payload = dict(geojson)
+        payload["bbox"] = [float(v) for v in bbox]
+        payload["networkType"] = str(network_type or "walk")
+        OSMNX_NETWORK_FILE.parent.mkdir(exist_ok=True)
+        OSMNX_NETWORK_FILE.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _load_cached_osmnx_network():
-    """Rebuild a networkx graph from a previously saved GeoJSON so shortest-path
-    works after a restart without re-fetching from Overpass."""
+    """Rebuild a networkx graph from a previously saved GeoJSON so the walking
+    reach and shortest-path work after a restart without re-fetching."""
     if not OSMNX_NETWORK_FILE.exists():
         return
     try:
@@ -4978,11 +5816,47 @@ def _load_cached_osmnx_network():
     if not math.isfinite(min_lng):
         return
 
+    # Prefer the requested bbox saved alongside the features; fall back to the
+    # geometry's own extent for files written before that was recorded.
+    stored = raw.get("bbox") if isinstance(raw, dict) else None
+    bbox = (min_lng, min_lat, max_lng, max_lat)
+    if isinstance(stored, list) and len(stored) == 4:
+        try:
+            candidate = tuple(float(v) for v in stored)
+            if all(math.isfinite(v) for v in candidate) and candidate[0] < candidate[2] and candidate[1] < candidate[3]:
+                bbox = candidate
+        except (TypeError, ValueError):
+            pass
+    network_type = str(raw.get("networkType") or "walk") if isinstance(raw, dict) else "walk"
     with osmnx_lock:
         OSMNX_GRAPH_CACHE["graph"] = graph
-        OSMNX_GRAPH_CACHE["bbox"] = (min_lng, min_lat, max_lng, max_lat)
+        OSMNX_GRAPH_CACHE["bbox"] = bbox
         OSMNX_GRAPH_CACHE["loadedAt"] = time.time()
+        # Also register it in the multi-graph store, or /api/osmnx-ensure would
+        # not see this graph and would re-download the same area on the first
+        # request after every restart.
+        OSMNX_GRAPH_STORE[_osmnx_bbox_key(*bbox, network_type)] = {"graph": graph, "bbox": bbox}
     print(f"[OSMnx] Loaded cached network: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
+
+    # Build the undirected view now, in the background, rather than making the
+    # first walking-reach request pay for it (~4 s on a 27k-node network).
+    def _warm_undirected():
+        try:
+            graph._reach_undirected = graph.to_undirected()
+            # ox.distance.nearest_nodes() builds a spatial index on first use
+            # (~1.8 s here). Trigger it now with a throwaway query so the first
+            # real request does not pay for it either.
+            try:
+                import osmnx as ox
+                ox.distance.nearest_nodes(graph, (bbox[0] + bbox[2]) / 2.0,
+                                          (bbox[1] + bbox[3]) / 2.0)
+            except Exception:
+                pass
+            print("[OSMnx] Reach index ready", flush=True)
+        except Exception:
+            pass
+
+    threading.Thread(target=_warm_undirected, daemon=True).start()
 
 
 def _bbox_contains(outer, point, margin=0.0):
@@ -5065,18 +5939,12 @@ def api_osmnx_fetch():
         return jsonify({"ok": False, "error": "osmnx_fetch_failed", "detail": str(exc)}), 502
 
     geojson = _graph_to_geojson(graph)
-    try:
-        OSMNX_NETWORK_FILE.parent.mkdir(exist_ok=True)
-        OSMNX_NETWORK_FILE.write_text(
-            json.dumps(geojson, ensure_ascii=False), encoding="utf-8"
-        )
-    except Exception:
-        pass
+    _save_osmnx_network(geojson, (min_lng, min_lat, max_lng, max_lat), network_type)
 
-    with osmnx_lock:
-        OSMNX_GRAPH_CACHE["graph"] = graph
-        OSMNX_GRAPH_CACHE["bbox"] = (min_lng, min_lat, max_lng, max_lat)
-        OSMNX_GRAPH_CACHE["loadedAt"] = time.time()
+    _osmnx_remember_graph(
+        _osmnx_bbox_key(min_lng, min_lat, max_lng, max_lat, network_type),
+        graph, (min_lng, min_lat, max_lng, max_lat),
+    )
 
     return jsonify({
         "ok": True,
@@ -5085,6 +5953,222 @@ def api_osmnx_fetch():
         "edges": int(graph.number_of_edges()),
         "geojson": geojson,
     })
+
+
+def _osmnx_bbox_key(min_lng, min_lat, max_lng, max_lat, network_type):
+    return f"{network_type}|{min_lng:.6f},{min_lat:.6f},{max_lng:.6f},{max_lat:.6f}"
+
+
+def _osmnx_remember_graph(key, graph, bbox):
+    """Keep recently built graphs in memory, most-recent last.
+
+    OSMnx's own cache stores the raw Overpass JSON, which still has to be
+    re-parsed into a graph on every call (~4.5 s for a 3.6k-node walk network,
+    even on a cache hit). Holding the built graph avoids repeating that, so
+    returning to a bbox already visited this session is instant.
+    """
+    with osmnx_lock:
+        OSMNX_GRAPH_STORE.pop(key, None)
+        OSMNX_GRAPH_STORE[key] = {"graph": graph, "bbox": bbox}
+        while len(OSMNX_GRAPH_STORE) > OSMNX_GRAPH_STORE_MAX:
+            OSMNX_GRAPH_STORE.pop(next(iter(OSMNX_GRAPH_STORE)))
+        OSMNX_GRAPH_CACHE["graph"] = graph
+        OSMNX_GRAPH_CACHE["bbox"] = bbox
+        OSMNX_GRAPH_CACHE["loadedAt"] = time.time()
+
+
+def _osmnx_find_cached_graph(min_lng, min_lat, max_lng, max_lat, network_type):
+    """Return a cached graph whose bbox fully CONTAINS the requested one.
+
+    A larger window is a valid substitute for a smaller one, so panning inside
+    an area already fetched needs no work at all.
+    """
+    exact = _osmnx_bbox_key(min_lng, min_lat, max_lng, max_lat, network_type)
+    with osmnx_lock:
+        entry = OSMNX_GRAPH_STORE.get(exact)
+        if entry:
+            return entry, exact
+        for key, value in reversed(list(OSMNX_GRAPH_STORE.items())):
+            if not key.startswith(network_type + "|"):
+                continue
+            b = value.get("bbox")
+            if not b:
+                continue
+            if b[0] <= min_lng and b[1] <= min_lat and b[2] >= max_lng and b[3] >= max_lat:
+                return value, key
+    return None, exact
+
+
+@app.route("/api/osmnx-ensure", methods=["POST"])
+def api_osmnx_ensure():
+    """Make a walking graph available for the given bbox, reusing any cached one.
+
+    Unlike /api/osmnx-fetch this never serialises the network to GeoJSON — the
+    isochrone caller only needs the graph to exist server-side, and skipping
+    that step is most of the saving on a repeat request.
+    """
+    payload = request.get_json(silent=True) or {}
+    try:
+        min_lng = float(payload["minLng"]); min_lat = float(payload["minLat"])
+        max_lng = float(payload["maxLng"]); max_lat = float(payload["maxLat"])
+    except Exception:
+        return jsonify({"ok": False, "error": "invalid_bbox"}), 400
+    if not all(math.isfinite(v) for v in (min_lng, min_lat, max_lng, max_lat)):
+        return jsonify({"ok": False, "error": "invalid_bbox"}), 400
+    if min_lng >= max_lng or min_lat >= max_lat:
+        return jsonify({"ok": False, "error": "invalid_bbox"}), 400
+    network_type = str(payload.get("networkType") or "walk").strip() or "walk"
+
+    entry, key = _osmnx_find_cached_graph(min_lng, min_lat, max_lng, max_lat, network_type)
+    if entry is not None:
+        with osmnx_lock:
+            OSMNX_GRAPH_CACHE["graph"] = entry["graph"]
+            OSMNX_GRAPH_CACHE["bbox"] = entry["bbox"]
+            OSMNX_GRAPH_CACHE["loadedAt"] = time.time()
+        return jsonify({
+            "ok": True, "cached": True, "bbox": list(entry["bbox"]),
+            "nodes": int(entry["graph"].number_of_nodes()),
+        })
+
+    try:
+        import osmnx as ox
+    except Exception as exc:
+        return jsonify({"ok": False, "error": "osmnx_unavailable", "detail": str(exc)}), 500
+    try:
+        try:
+            graph = ox.graph_from_bbox(
+                bbox=(min_lng, min_lat, max_lng, max_lat),
+                network_type=network_type, simplify=True,
+            )
+        except TypeError:
+            graph = ox.graph_from_bbox(
+                north=max_lat, south=min_lat, east=max_lng, west=min_lng,
+                network_type=network_type, simplify=True,
+            )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": "osmnx_fetch_failed", "detail": str(exc)}), 502
+
+    bbox = (min_lng, min_lat, max_lng, max_lat)
+    _osmnx_remember_graph(key, graph, bbox)
+    # Persist so the next server start reuses this instead of re-downloading.
+    # Only widen the on-disk copy: a larger saved window serves more requests.
+    try:
+        existing = None
+        if OSMNX_NETWORK_FILE.exists():
+            try:
+                previous = json.loads(OSMNX_NETWORK_FILE.read_text(encoding="utf-8"))
+                existing = previous.get("bbox") if isinstance(previous, dict) else None
+            except (OSError, ValueError):
+                existing = None
+        area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+        keep = False
+        if isinstance(existing, list) and len(existing) == 4:
+            old = [float(v) for v in existing]
+            keep = (old[0] <= bbox[0] and old[1] <= bbox[1]
+                    and old[2] >= bbox[2] and old[3] >= bbox[3]
+                    and (old[2] - old[0]) * (old[3] - old[1]) >= area)
+        if not keep:
+            _save_osmnx_network(_graph_to_geojson(graph), bbox, network_type)
+    except Exception:
+        pass
+    return jsonify({
+        "ok": True, "cached": False, "bbox": list(bbox),
+        "nodes": int(graph.number_of_nodes()),
+    })
+
+
+@app.route("/api/walk-reach", methods=["POST"])
+def api_walk_reach():
+    """n-minute walking reach, preferring Mapbox and falling back to OSMnx.
+
+    Mapbox answers in ~0.1 s with no local street network, which avoids the
+    multi-second Overpass download the OSMnx path needs the first time it sees
+    an area. The request is proxied here rather than called from the browser so
+    the token stays server-side.
+
+    Falls back to the OSMnx implementation whenever Mapbox is unavailable (no
+    token, offline, quota) so the feature still works on a workshop machine
+    with no internet.
+    """
+    payload = request.get_json(silent=True) or {}
+    origin = payload.get("origin") or {}
+    try:
+        lng = float(origin["lng"])
+        lat = float(origin["lat"])
+    except Exception:
+        return jsonify({"ok": False, "error": "invalid_origin"}), 400
+    if not (math.isfinite(lng) and math.isfinite(lat)):
+        return jsonify({"ok": False, "error": "invalid_origin"}), 400
+    try:
+        minutes = int(round(float(payload.get("minutes", 10))))
+    except Exception:
+        minutes = 10
+    # Mapbox accepts 1..60 minutes; clamp rather than error so the slider's own
+    # range is the only thing the user has to respect.
+    minutes = max(1, min(60, minutes))
+    profile = "walking"
+
+    token = load_mapbox_token()
+    if token and not payload.get("forceOsmnx"):
+        query = urllib.parse.urlencode({
+            "contours_minutes": str(minutes),
+            "polygons": "true",
+            "denoise": "1",
+            "access_token": token,
+        })
+        url = (f"https://api.mapbox.com/isochrone/v1/mapbox/{profile}/"
+               f"{lng:.6f},{lat:.6f}?{query}")
+        try:
+            with urllib.request.urlopen(url, timeout=12) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            if isinstance(data, dict) and data.get("features"):
+                return jsonify({
+                    "ok": True, "source": "mapbox", "minutes": minutes,
+                    "geojson": {"type": "FeatureCollection", "features": data["features"]},
+                })
+            mapbox_error = "empty_response"
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", "replace")[:200]
+            except Exception:
+                pass
+            mapbox_error = f"http_{exc.code}: {body}"
+        except Exception as exc:
+            mapbox_error = f"{type(exc).__name__}: {exc}"
+        print(f"[Reach] Mapbox failed ({mapbox_error}); falling back to OSMnx", flush=True)
+    else:
+        mapbox_error = "no_token" if not token else "forced_osmnx"
+
+    # ---- fallback: local OSMnx graph -----------------------------------
+    with osmnx_lock:
+        graph = OSMNX_GRAPH_CACHE.get("graph")
+        bbox = OSMNX_GRAPH_CACHE.get("bbox")
+    if graph is None or not _bbox_contains(bbox, (lng, lat), 0.0005):
+        return jsonify({
+            "ok": False, "error": "no_local_network",
+            "mapboxError": mapbox_error,
+        }), 409
+
+    try:
+        with app.test_request_context(
+            "/api/osmnx-isochrone", method="POST",
+            json={"origin": {"lng": lng, "lat": lat}, "minutes": minutes},
+        ):
+            response = api_osmnx_isochrone()
+        body = response[0] if isinstance(response, tuple) else response
+        data = body.get_json()
+        if not data.get("ok"):
+            return jsonify({"ok": False, "error": data.get("error") or "reach_failed",
+                            "mapboxError": mapbox_error}), 502
+        return jsonify({
+            "ok": True, "source": "osmnx", "minutes": minutes,
+            "geojson": data["geojson"], "reachableNodes": data.get("reachableNodes"),
+            "mapboxError": mapbox_error,
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                        "mapboxError": mapbox_error}), 500
 
 
 @app.route("/api/osmnx-shortest-path", methods=["POST"])
@@ -5242,7 +6326,16 @@ def api_osmnx_isochrone():
 
     # Use an undirected view for reach so one-way edges don't cut off the area
     # unnaturally for a pedestrian walking budget.
-    ug = graph.to_undirected() if graph.is_multigraph() or graph.is_directed() else graph
+    # to_undirected() deep-copies the whole graph, which on a large cached
+    # network costs seconds on EVERY request. The undirected view depends only
+    # on the graph, so memoise it on the object itself.
+    ug = getattr(graph, "_reach_undirected", None)
+    if ug is None:
+        ug = graph.to_undirected() if graph.is_multigraph() or graph.is_directed() else graph
+        try:
+            graph._reach_undirected = ug
+        except Exception:
+            pass
 
     # Weight function: travel time in seconds from edge length.
     def _time_weight(u, v, data):
@@ -5367,7 +6460,12 @@ def main():
     parser.add_argument("--auto-exposure-floor", type=float, default=100.0,
                         help="Auto-exposure anti-darkening floor (p75 luminance): never darken below this, so bright UI/glare can't spiral the scene to black")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=5000,
+        help="Preferred local port. If occupied, the app automatically uses the next available port.",
+    )
     parser.add_argument("--detector", choices=["pupil", "aruco"], default="aruco",
                         help="Detection backend: 'aruco' (default, OpenCV ArUco) or 'pupil' (pupil_apriltags)")
     parser.add_argument(
@@ -5457,20 +6555,24 @@ def main():
     if not args.no_recording_hotkey:
         start_recording_hotkey(camera_recorder)
 
-    print(f"[Backend] http://{args.host}:{args.port}")
+    selected_port = find_available_port(args.host, args.port)
+    if selected_port != args.port:
+        print(f"[Backend] port {args.port} is unavailable; using {selected_port}")
+    display_host = "127.0.0.1" if args.host in ("0.0.0.0", "", None) else args.host
+    print(f"[Backend] http://{display_host}:{selected_port}")
     print(f"[Camera] source: {source if source is not None else '(none)'}")
 
     if not args.no_browser:
-        open_browser_when_ready(args.host, args.port, kiosk=args.kiosk)
+        open_browser_when_ready(args.host, selected_port, kiosk=args.kiosk)
     if args.cloudflare_tunnel:
-        start_quick_tunnel(args.port)
+        start_quick_tunnel(selected_port)
     else:
         update_quick_tunnel_state(status="disabled", enabled=False)
 
     # Silence per-request access logs from the Flask dev server.
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
     try:
-        app.run(host=args.host, port=args.port, debug=False, use_reloader=False, threaded=True)
+        app.run(host=args.host, port=selected_port, debug=False, use_reloader=False, threaded=True)
     finally:
         shutdown_event.set()
         stop_quick_tunnel()

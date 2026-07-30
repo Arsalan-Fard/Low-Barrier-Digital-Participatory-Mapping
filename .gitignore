@@ -16,6 +16,8 @@ Expo/school-scenario/mapbox.txt
 # --- Local-only notes (not published) ---
 /Guide.txt
 
+/.agents
+
 # --- Launcher-created environment & logs ---
 /.venv/
 launcher.log
@@ -33,6 +35,9 @@ launcher.log
 # Runtime-generated marker settings
 /data/marker_settings.json
 
+# Runtime-generated printable map sheets (PDF, reference PNG, coordinate JSON)
+/data/map_sheets/
+
 # Recorded media & audio
 /audio_chunks/
 /backend_recordings/
@@ -47,6 +52,12 @@ launcher.log
 
 # Runtime-generated marker images
 /web/apriltags/
+
+# Temporary SketchMap result mirrored into the static web root for comparison
+/web/temp-sketchmap-result.geojson
+/web/temp-sketchmap-result-1.geojson
+/web/temp-sketchmap-result-2.geojson
+/web/temp-sketchmap-raster-*.png
 
 # Site/deployment-specific data & calibration
 ip_paris_amenities.geojson
