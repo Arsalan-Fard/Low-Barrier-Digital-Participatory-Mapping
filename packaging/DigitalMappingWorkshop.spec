@@ -29,6 +29,7 @@ datas = []
 for dirname in (
     "web",
     "data",
+    "map-style-editor/maputnik/dist",
 ):
     datas += add_tree(dirname)
 
