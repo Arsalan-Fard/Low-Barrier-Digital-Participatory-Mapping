@@ -3,6 +3,9 @@ flask
 numpy
 opencv-python>=4.7      # cv2.aruco with AprilTag dictionaries ships in the main wheel since 4.7
 pupil-apriltags
+scikit-image            # skeletonising detected pen strokes into routes
+# Optional: opencv-contrib-python supplies cv2.ximgproc.thinning, which does the
+# same job several times faster. scikit-image is used automatically without it.
 
 # Audio / video recording
 sounddevice

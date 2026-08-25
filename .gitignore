@@ -37,6 +37,7 @@ launcher.log
 
 # Runtime-generated printable map sheets (PDF, reference PNG, coordinate JSON)
 /data/map_sheets/
+/data
 
 # Recorded media & audio
 /audio_chunks/
@@ -67,3 +68,5 @@ calibration_offsets.json
 /Expo
 Expo/school-scenario/data/*
 !Expo/school-scenario/data/.gitkeep
+
+map-sheet-3-drawing.geojson

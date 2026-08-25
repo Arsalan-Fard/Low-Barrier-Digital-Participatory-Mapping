@@ -59,7 +59,9 @@ function createCategoryLayers(baseLayer) {
       layout: {
         ...clone(baseLayer.layout || {}),
         "icon-allow-overlap": true,
-        "icon-ignore-placement": true,
+        // Icons always draw but still reserve their space, so labels placed
+        // later (street names sit below the POI layers) route around them.
+        "icon-ignore-placement": false,
         "icon-padding": 2,
         "symbol-sort-key": ["coalesce", ["get", "rank"], 999],
         "text-optional": true,
@@ -105,7 +107,7 @@ const transitLayer = {
   layout: {
     ...clone(legacyTransitLayer.layout || {}),
     "icon-allow-overlap": true,
-    "icon-ignore-placement": true,
+    "icon-ignore-placement": false,
     "text-optional": true,
   },
 };

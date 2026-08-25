@@ -87,7 +87,9 @@ function createCategoryLayers(baseLayer: SymbolLayerSpecification) {
       layout: {
         ...cloneDeep(baseLayer.layout),
         "icon-allow-overlap": true,
-        "icon-ignore-placement": true,
+        // Icons always draw but still reserve their space, so labels placed
+        // later (street names sit below the POI layers) route around them.
+        "icon-ignore-placement": false,
         "icon-padding": 2,
         "symbol-sort-key": ["coalesce", ["get", "rank"], 999],
         "text-optional": true,
@@ -130,7 +132,7 @@ export function upgradePoiCategoryLayers(mapStyle: StyleSpecificationWithId) {
     layout: {
       ...cloneDeep(legacyTransitLayer.layout),
       "icon-allow-overlap": true,
-      "icon-ignore-placement": true,
+      "icon-ignore-placement": false,
       "text-optional": true,
     },
   } satisfies SymbolLayerSpecification;

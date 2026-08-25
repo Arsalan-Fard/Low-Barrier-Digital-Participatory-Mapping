@@ -202,6 +202,7 @@
     width: 60px;
   }
 
+
   &__map-id {
     width: 72px;
 
@@ -243,6 +244,36 @@
     margin: 0;
     padding: 2px 20px 2px 6px;
     font-size: vars.$font-size-6;
+  }
+
+  // "Fix zoom" toggle: amber while the render zoom is frozen, so the locked
+  // state is unmissable -- everything on the map behaves differently under it.
+  &__fix {
+    height: 26px;
+    padding: 3px 8px;
+    color: vars.$color-white;
+    font-size: vars.$font-size-6;
+    white-space: nowrap;
+    background: vars.$color-gray;
+    border: solid 1px vars.$color-midgray;
+    border-radius: 2px;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      border-color: vars.$color-lowgray;
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+
+    &.is-active {
+      color: #10201f;
+      font-weight: bold;
+      background: #e2b84f;
+      border-color: transparent;
+    }
   }
 
   &__pdf {
@@ -477,13 +508,23 @@
 }
 
 .maputnik-paper-preview {
+  --paper-preview-shade: rgba(0, 0, 0, 0.3);
+
   position: fixed;
   z-index: 90;
   overflow: visible;
   pointer-events: none;
 
+  > svg {
+    position: absolute;
+    z-index: 3;
+    inset: 0;
+    overflow: visible;
+    pointer-events: none;
+  }
+
   &__shade {
-    fill: rgba(0, 0, 0, 0.3);
+    fill: var(--paper-preview-shade);
   }
 
   &__frame {
@@ -518,6 +559,88 @@
     font-size: 12px;
     font-weight: bold;
   }
+
+  &__handle {
+    fill: transparent;
+    pointer-events: all;
+    touch-action: none;
+
+    &.is-left,
+    &.is-right {
+      cursor: ew-resize;
+    }
+
+    &.is-top,
+    &.is-bottom {
+      cursor: ns-resize;
+    }
+
+    &:hover {
+      fill: rgba(255, 202, 40, 0.16);
+    }
+  }
+
+  &__text-toggle {
+    position: absolute;
+    z-index: 4;
+    width: 25px;
+    height: 25px;
+    padding: 0;
+    color: #fff;
+    font-family: vars.$font-family;
+    font-size: 20px;
+    line-height: 23px;
+    text-align: center;
+    background: rgba(28, 31, 34, 0.92);
+    border: solid 1px rgba(255, 255, 255, 0.72);
+    border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    cursor: pointer;
+    pointer-events: auto;
+
+    &:hover,
+    &.is-active {
+      color: #10201f;
+      background: #63cec5;
+      border-color: #b9f1ec;
+    }
+  }
+
+  &__text {
+    position: absolute;
+    z-index: 2;
+    box-sizing: border-box;
+    min-width: 0;
+    min-height: 0;
+    padding: 1px 6px;
+    overflow: hidden;
+    // The band behind these boxes is the darkened area outside the map, so the
+    // text needs its own light backing: black-on-30%-black was unreadable, and
+    // the placeholder at 72% black was invisible. Paper-white here also makes
+    // the box read as the piece of paper it will be printed on.
+    color: #000;
+    font-family: vars.$font-family;
+    font-weight: 500;
+    line-height: 1.15;
+    resize: none;
+    background: rgba(255, 255, 255, 0.92);
+    border: dashed 1px rgba(22, 72, 68, 0.82);
+    border-radius: 3px;
+    outline: none;
+    pointer-events: auto;
+
+    &::placeholder {
+      color: rgba(0, 0, 0, 0.55);
+      font-weight: 400;
+    }
+
+    &:focus {
+      color: #000;
+      background: #fff;
+      border-color: #1d746c;
+      box-shadow: 0 0 0 2px rgba(99, 206, 197, 0.35);
+    }
+  }
 }
 
 .maputnik-paper-render-host {
@@ -547,5 +670,120 @@
   &:focus {
     width: 100%;
     border-color: vars.$color-lowgray;
+  }
+}
+
+// ---------------------------------------------------------------- export dialog
+//
+// Composition moved off the editing map and into this dialog, so the paper
+// frame and its AprilTag patches no longer clutter the style editor. The stage
+// is locked to the sheet's aspect ratio and holds its own map, which is what
+// gets captured -- what you compose here is exactly what prints.
+
+// .maputnik-modal caps every dialog at 600px. The stage needs the sheet's full
+// proportions to be usable, so this one opts out; the stage itself is sized in
+// JS against the window, so nothing here can overflow.
+.maputnik-modal.maputnik-paper-modal {
+  max-width: 97vw;
+}
+
+.maputnik-paper-modal {
+  &__body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  &__controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  &__field {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: vars.$font-size-6;
+    color: vars.$color-lowgray;
+
+    select {
+      max-width: 170px;
+    }
+  }
+
+  // The live scale is the primary number in this dialog -- scrolling changes
+  // it directly, so it reads as the thing under the user's control.
+  &__scale {
+    font-variant-numeric: tabular-nums;
+    font-size: vars.$font-size-4;
+    font-weight: bold;
+    color: #63cec5;
+    min-width: 104px;
+  }
+
+  &__hint {
+    font-size: vars.$font-size-6;
+    color: vars.$color-lowgray;
+    opacity: 0.8;
+  }
+
+  &__spacer {
+    flex: 1 1 auto;
+  }
+
+  // Legible-label budget is fixed by paper area, so warn before a class set of
+  // unreadable sheets is printed rather than after.
+  &__readout {
+    font-variant-numeric: tabular-nums;
+    font-size: vars.$font-size-6;
+    white-space: nowrap;
+    padding: 3px 7px;
+    border-radius: 2px;
+    color: vars.$color-lowgray;
+    background: color.adjust(vars.$color-black, $alpha: -0.6);
+
+    &.is-warn {
+      color: #e2b84f;
+      background: color.adjust(#e2b84f, $alpha: -0.86);
+    }
+  }
+}
+
+.maputnik-paper-stage {
+  position: relative;
+  flex: 0 0 auto;
+  align-self: center;
+  background: vars.$color-black;
+  border: solid 1px vars.$color-midgray;
+  overflow: hidden;
+
+  &__map {
+    position: absolute;
+    inset: 0;
+  }
+
+  // Only shown while the stage map is not yet drawing, so a blank stage always
+  // says why instead of being an unexplained black rectangle.
+  &__diag {
+    position: absolute;
+    z-index: 130;
+    left: 8px;
+    top: 8px;
+    max-width: 90%;
+    padding: 4px 8px;
+    color: #e2b84f;
+    font-size: vars.$font-size-6;
+    font-family: monospace;
+    background: rgba(0, 0, 0, 0.75);
+    border-radius: 2px;
+    pointer-events: none;
+  }
+
+  // The overlay is fixed-positioned against the viewport, so it must not be
+  // clipped by the stage's own stacking context.
+  .maputnik-paper-preview {
+    z-index: 120;
   }
 }

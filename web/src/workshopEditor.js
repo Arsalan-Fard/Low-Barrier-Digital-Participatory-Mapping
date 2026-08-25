@@ -43,16 +43,11 @@
       return w.steps[state.stepIndex] || null;
     }
     function makeStep(n) {
-      return { id: n, label: 'Step ' + n, theme: 'streets', indoor: false, indoorId: '', mapView: null, labels: [], dataLayers: [] };
+      return { id: n, label: 'Part ' + n, theme: 'streets', indoor: false, indoorId: '', mapView: null, labels: [], images: [], dataLayers: [] };
     }
-    // A step's display name = its first text label, else "Step N".
+    // A part's display name is independent from text placed on the map.
     function stepName(step, idx) {
-      var labels = (step && Array.isArray(step.labels)) ? step.labels : [];
-      for (var i = 0; i < labels.length; i++) {
-        var t = String((labels[i] && labels[i].text) || '').trim();
-        if (t) return t;
-      }
-      return 'Step ' + (Number(step && step.id) || (idx + 1));
+      return 'Part ' + (idx + 1);
     }
     function syncStepLabel(step, idx) {
       if (step) step.label = stepName(step, idx);
@@ -84,9 +79,11 @@
           // Normalize: every step needs labels + dataLayers arrays.
           state.workshops.forEach(function (w) {
             if (!Array.isArray(w.steps)) w.steps = [];
-            w.steps.forEach(function (s) {
+            w.steps.forEach(function (s, i) {
               if (!Array.isArray(s.labels)) s.labels = [];
+              if (!Array.isArray(s.images)) s.images = [];
               if (!Array.isArray(s.dataLayers)) s.dataLayers = [];
+              syncStepLabel(s, i);
             });
           });
           if (!state.workshops.length) {
@@ -158,6 +155,8 @@
       if (!open || !step) return;
       var labels = Array.isArray(step.labels) ? step.labels : [];
       labels.forEach(function (l, i) { overlay.appendChild(buildLabelChip(l, i, step)); });
+      var images = Array.isArray(step.images) ? step.images : [];
+      images.forEach(function (img, i) { overlay.appendChild(buildImageChip(img, i, step)); });
     }
 
     function buildLabelChip(label, index, step) {
@@ -242,6 +241,97 @@
       return chip;
     }
 
+    function buildImageChip(image, index, step) {
+      var chip = document.createElement('div');
+      var widthPct = Math.max(0.05, Math.min(0.8, Number(image.widthPct) || 0.2));
+      Object.assign(chip.style, {
+        position: 'absolute',
+        left: (clamp01(image.xPct) * 100) + '%',
+        top: (clamp01(image.yPct) * 100) + '%',
+        width: (widthPct * 100) + '%',
+        transform: 'translate(-50%, -50%)',
+        pointerEvents: 'auto', cursor: 'move',
+        outline: '1px dashed rgba(111,227,214,0.9)',
+        userSelect: 'none'
+      });
+
+      var img = document.createElement('img');
+      img.src = String(image.src || '');
+      img.alt = String(image.name || 'Workshop image');
+      img.draggable = false;
+      Object.assign(img.style, {
+        display: 'block', width: '100%', height: 'auto',
+        pointerEvents: 'none', userSelect: 'none'
+      });
+      chip.appendChild(img);
+
+      var del = document.createElement('button');
+      del.type = 'button';
+      del.textContent = '×';
+      Object.assign(del.style, {
+        position: 'absolute', top: '-10px', right: '-10px',
+        width: '20px', height: '20px', lineHeight: '18px', padding: '0',
+        borderRadius: '50%', border: '1px solid #b0483e', background: '#fff',
+        color: '#b0483e', fontWeight: '700', cursor: 'pointer'
+      });
+      del.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      del.addEventListener('click', function (e) {
+        e.stopPropagation();
+        step.images.splice(index, 1);
+        renderLabels();
+        scheduleSave();
+      });
+      chip.appendChild(del);
+
+      var resize = document.createElement('span');
+      resize.title = 'Resize image';
+      Object.assign(resize.style, {
+        position: 'absolute', right: '-6px', bottom: '-6px',
+        width: '13px', height: '13px', borderRadius: '2px',
+        background: '#6fe3d6', border: '1px solid rgba(0,0,0,0.55)',
+        cursor: 'nwse-resize'
+      });
+      resize.addEventListener('mousedown', function (e) {
+        e.preventDefault(); e.stopPropagation();
+        var containerRect = getContainer().getBoundingClientRect();
+        var startX = e.clientX;
+        var startWidth = chip.getBoundingClientRect().width;
+        function onMove(ev) {
+          var next = Math.max(0.05, Math.min(0.8, (startWidth + ev.clientX - startX) / containerRect.width));
+          image.widthPct = next;
+          chip.style.width = (next * 100) + '%';
+        }
+        function onUp() {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          scheduleSave();
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+      chip.appendChild(resize);
+
+      chip.addEventListener('mousedown', function (e) {
+        if (e.target === del || e.target === resize) return;
+        e.preventDefault();
+        var rect = getContainer().getBoundingClientRect();
+        function onMove(ev) {
+          image.xPct = clamp01((ev.clientX - rect.left) / rect.width);
+          image.yPct = clamp01((ev.clientY - rect.top) / rect.height);
+          chip.style.left = (image.xPct * 100) + '%';
+          chip.style.top = (image.yPct * 100) + '%';
+        }
+        function onUp() {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          scheduleSave();
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+      return chip;
+    }
+
     function addLabel() {
       var step = curStep();
       if (!step) return;
@@ -251,6 +341,31 @@
       renderLabels();
       renderStepList();
       scheduleSave();
+    }
+
+    function addImage(file) {
+      var step = curStep();
+      if (!step || !file) return;
+      var form = new FormData();
+      form.append('file', file);
+      setStatus('Uploading image…');
+      fetch('/api/workshop-assets', { method: 'POST', body: form })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+        .then(function (result) {
+          if (!result.ok || !result.data || !result.data.url) {
+            throw new Error((result.data && result.data.error) || 'upload_failed');
+          }
+          if (!Array.isArray(step.images)) step.images = [];
+          step.images.push({
+            src: result.data.url,
+            name: result.data.name || file.name || 'Workshop image',
+            xPct: 0.5, yPct: 0.5, widthPct: 0.2
+          });
+          renderLabels();
+          setStatus('Image added ✓');
+          scheduleSave();
+        })
+        .catch(function (err) { setStatus('Image upload failed: ' + (err && err.message || ''), 'err'); });
     }
 
     // ================= panel UI =================
@@ -335,11 +450,11 @@
       });
       body.appendChild(labeled('Name', els.nameInput));
 
-      // Steps (questions)
+      // Workshop parts
       var stepsHead = css(document.createElement('div'), { display: 'flex', alignItems: 'center', gap: '8px' });
-      var stepsLbl = sectionLabel('Questions (steps)'); stepsLbl.style.flex = '1'; stepsLbl.style.margin = '0';
+      var stepsLbl = sectionLabel('Workshop parts'); stepsLbl.style.flex = '1'; stepsLbl.style.margin = '0';
       stepsHead.appendChild(stepsLbl);
-      stepsHead.appendChild(mkBtn('+ Add question', addStep, PRIMARY));
+      stepsHead.appendChild(mkBtn('+ Add part', addStep, PRIMARY));
       body.appendChild(stepsHead);
       els.stepList = css(document.createElement('div'), { display: 'flex', flexDirection: 'column', gap: '4px' });
       body.appendChild(els.stepList);
@@ -464,16 +579,28 @@
       layersWrap.appendChild(els.layerFile);
       c.appendChild(layersWrap);
 
-      // Capture view + add text
+      // Capture view + add text/image
       var actRow = css(document.createElement('div'), { display: 'flex', gap: '6px' });
-      var capBtn = mkBtn('⤓ Capture view', captureView, PRIMARY); capBtn.style.flex = '1';
+      var capBtn = mkBtn('Capture view', captureView, PRIMARY); capBtn.style.flex = '1';
       var textBtn = mkBtn('+ Add text', addLabel); textBtn.style.flex = '1';
+      els.imageFile = document.createElement('input');
+      els.imageFile.type = 'file';
+      els.imageFile.accept = 'image/png,image/jpeg,image/webp';
+      els.imageFile.style.display = 'none';
+      els.imageFile.addEventListener('change', function () {
+        var file = els.imageFile.files && els.imageFile.files[0];
+        els.imageFile.value = '';
+        if (file) addImage(file);
+      });
+      var imageBtn = mkBtn('+ Add image', function () { els.imageFile.click(); }); imageBtn.style.flex = '1';
       actRow.appendChild(capBtn);
       actRow.appendChild(textBtn);
+      actRow.appendChild(imageBtn);
       c.appendChild(actRow);
+      c.appendChild(els.imageFile);
 
       els.viewHint = css(document.createElement('div'), { fontSize: '11px', color: 'rgba(255,255,255,0.5)', lineHeight: '1.4' });
-      els.viewHint.textContent = 'Pan/zoom the map, then Capture view to save this step’s camera.';
+      els.viewHint.textContent = 'Pan/zoom the map, then Capture view to save this part’s camera.';
       c.appendChild(els.viewHint);
     }
     function labeledRow(text, row) {
@@ -738,7 +865,7 @@
           background: i === state.stepIndex ? 'rgba(47,143,134,0.22)' : 'rgba(255,255,255,0.05)'
         });
         var num = css(document.createElement('span'), { opacity: '0.6', fontSize: '11px', flex: '0 0 auto' });
-        num.textContent = (i + 1) + '.';
+        num.textContent = 'P' + (i + 1);
         var nm = css(document.createElement('span'), { flex: '1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: '600' });
         nm.textContent = stepName(step, i);
         var envTag = css(document.createElement('span'), { fontSize: '10px', opacity: '0.7', flex: '0 0 auto' });
@@ -809,14 +936,40 @@
       scheduleSave();
     }
     function deleteWorkshop() {
-      if (!curWorkshop()) return;
-      if (!window.confirm('Delete this workshop?')) return;
-      state.workshops.splice(state.wsIndex, 1);
-      if (!state.workshops.length) state.workshops.push({ id: uid(), name: 'Workshop 1', steps: [makeStep(1)] });
-      state.wsIndex = Math.max(0, state.wsIndex - 1);
-      state.stepIndex = 0;
-      selectWorkshop(state.wsIndex);
-      scheduleSave();
+      var target = curWorkshop();
+      if (!target) return;
+      var targetId = String(target.id || '');
+      var targetName = String(target.name || 'this workshop');
+
+      function removeTarget() {
+        var targetIndex = state.workshops.indexOf(target);
+        if (targetIndex < 0 && targetId) {
+          targetIndex = state.workshops.findIndex(function (workshop) {
+            return String((workshop && workshop.id) || '') === targetId;
+          });
+        }
+        if (targetIndex < 0) return;
+        state.workshops.splice(targetIndex, 1);
+        if (!state.workshops.length) state.workshops.push({ id: uid(), name: 'Workshop 1', steps: [makeStep(1)] });
+        state.wsIndex = Math.max(0, Math.min(targetIndex - 1, state.workshops.length - 1));
+        state.stepIndex = 0;
+        selectWorkshop(state.wsIndex);
+        scheduleSave();
+      }
+
+      var pf = window.CompactPageFlow;
+      if (pf && typeof pf.confirmDialog === 'function') {
+        pf.confirmDialog({
+          title: 'Delete workshop?',
+          message: '"' + targetName + '" and all of its parts will be permanently deleted.',
+          confirmText: 'Delete',
+          cancelText: 'Cancel',
+          danger: true,
+          onConfirm: removeTarget
+        });
+        return;
+      }
+      if (window.confirm('Delete "' + targetName + '" and all of its parts?')) removeTarget();
     }
     function addStep() {
       var w = curWorkshop(); if (!w) return;
@@ -828,7 +981,7 @@
       var w = curWorkshop(); if (!w || w.steps.length <= 1) return;
       w.steps.splice(idx, 1);
       // Renumber ids sequentially.
-      w.steps.forEach(function (s, i) { s.id = i + 1; });
+      w.steps.forEach(function (s, i) { s.id = i + 1; syncStepLabel(s, i); });
       if (state.stepIndex >= w.steps.length) state.stepIndex = w.steps.length - 1;
       selectStep(state.stepIndex);
       scheduleSave();

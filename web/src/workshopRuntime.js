@@ -27,10 +27,15 @@
     var pickerEl = null;            // workshop chooser shown from the map button
     var pickerListEl = null;
     var indicatorEl = null;
+    var barHandleEl = null;
+    var barHideTimer = 0;
+    var lastPointerX = -1;
+    var lastPointerY = -1;
     var workshop = null;            // active workshop definition
     var stepIndex = 0;
     var active = false;
     var applySeq = 0;
+    var pickerRequestSeq = 0;
     var togglesEl = null;           // row of per-step show/hide buttons in the bar
     // Step numbers whose inputs (drawings/stickers/annotations) are currently
     // shown. Facilitator-controlled via the bar toggles; remembered across
@@ -40,6 +45,37 @@
     function getApp() {
       if (!app) app = window.CompactMapApp || null;
       return app;
+    }
+
+    function pointerNearBottomCenter(x, y) {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+      var barWidth = (barEl && barEl.offsetWidth) || 520;
+      var halfWidth = Math.max(260, Math.min(window.innerWidth * 0.45, barWidth * 0.5 + 48));
+      return y >= window.innerHeight - 110
+        && Math.abs(x - window.innerWidth * 0.5) <= halfWidth;
+    }
+
+    function setBarVisible(visible) {
+      if (!barEl) return;
+      barEl.style.transform = visible
+        ? 'translate(-50%, 0)'
+        : 'translate(-50%, calc(100% + 24px))';
+      barEl.style.opacity = visible ? '1' : '0';
+      barEl.style.pointerEvents = visible ? 'auto' : 'none';
+      if (barHandleEl) {
+        barHandleEl.style.display = active ? 'block' : 'none';
+        barHandleEl.style.opacity = visible ? '0' : '0.72';
+      }
+    }
+
+    function scheduleBarAutoHide() {
+      if (barHideTimer) window.clearTimeout(barHideTimer);
+      barHideTimer = window.setTimeout(function () {
+        barHideTimer = 0;
+        if (active && !pointerNearBottomCenter(lastPointerX, lastPointerY)) {
+          setBarVisible(false);
+        }
+      }, 1800);
     }
 
     function ensureDom() {
@@ -57,23 +93,24 @@
       barEl = document.createElement('div');
       barEl.id = 'workshopBar';
       Object.assign(barEl.style, {
-        position: 'fixed', left: '50%', bottom: '18px', transform: 'translateX(-50%)',
+        position: 'fixed', left: '50%', bottom: '18px', transform: 'translate(-50%, 0)',
         zIndex: '10001', display: 'none', alignItems: 'center', gap: '10px',
         padding: '8px 12px', borderRadius: '10px',
         background: 'rgba(20,20,20,0.82)', border: '1px solid rgba(255,255,255,0.25)',
-        color: '#fff', font: '600 14px system-ui, sans-serif'
+        color: '#fff', font: '600 14px system-ui, sans-serif',
+        transition: 'transform 0.2s ease, opacity 0.2s ease'
       });
 
-      var prev = mkBtn('< Prev', function () { go(stepIndex - 1); });
+      var prev = mkBtn('← Previous part', function () { go(stepIndex - 1); });
       indicatorEl = document.createElement('span');
       indicatorEl.style.minWidth = '70px';
       indicatorEl.style.textAlign = 'center';
-      var next = mkBtn('Next >', function () { go(stepIndex + 1); });
+      var next = mkBtn('Next part →', function () { go(stepIndex + 1); });
       var exit = mkBtn('Exit', function () { exitWorkshop(); });
       exit.style.marginLeft = '6px';
       exit.style.background = 'rgba(180,40,40,0.85)';
 
-      // Per-step show/hide toggles (S1, S2, …). A thin divider separates them
+      // Per-part show/hide toggles (P1, P2, …). A thin divider separates them
       // from the navigation controls.
       var sep = document.createElement('span');
       Object.assign(sep.style, {
@@ -81,7 +118,7 @@
         background: 'rgba(255,255,255,0.22)'
       });
       var togglesLabel = document.createElement('span');
-      togglesLabel.textContent = 'Inputs:';
+      togglesLabel.textContent = 'Showing inputs:';
       togglesLabel.style.opacity = '0.78';
       togglesLabel.style.fontSize = '12px';
       togglesEl = document.createElement('span');
@@ -95,6 +132,27 @@
       barEl.appendChild(togglesEl);
       barEl.appendChild(exit);
       document.body.appendChild(barEl);
+
+      barHandleEl = document.createElement('div');
+      barHandleEl.id = 'workshopBarHandle';
+      barHandleEl.setAttribute('aria-hidden', 'true');
+      Object.assign(barHandleEl.style, {
+        position: 'fixed', left: '50%', bottom: '0', transform: 'translateX(-50%)',
+        zIndex: '10000', width: '84px', height: '6px', display: 'none',
+        borderRadius: '6px 6px 0 0', background: 'rgba(20,20,20,0.78)',
+        border: '1px solid rgba(255,255,255,0.42)', borderBottom: 'none',
+        boxSizing: 'border-box', opacity: '0', pointerEvents: 'none',
+        transition: 'opacity 0.2s ease'
+      });
+      document.body.appendChild(barHandleEl);
+
+      barEl.addEventListener('mouseenter', function () { setBarVisible(true); });
+      window.addEventListener('mousemove', function (e) {
+        lastPointerX = e.clientX;
+        lastPointerY = e.clientY;
+        if (!active || !barEl || barEl.style.display === 'none') return;
+        setBarVisible(pointerNearBottomCenter(lastPointerX, lastPointerY));
+      });
 
       pickerEl = document.createElement('div');
       pickerEl.id = 'workshopPicker';
@@ -211,8 +269,8 @@
           var on = visibleStepNumbers.has(num);
           var b = document.createElement('button');
           b.type = 'button';
-          b.textContent = 'S' + (idx + 1);
-          b.title = (on ? 'Hide' : 'Show') + ' Step ' + (idx + 1) + ' inputs';
+          b.textContent = 'P' + (idx + 1);
+          b.title = (on ? 'Hide' : 'Show') + ' Part ' + (idx + 1) + ' inputs';
           Object.assign(b.style, {
             padding: '5px 9px', font: '600 13px system-ui, sans-serif',
             color: '#fff', borderRadius: '6px', cursor: 'pointer',
@@ -258,6 +316,23 @@
           textShadow: '0 1px 2px rgba(0,0,0,0.6)'
         });
         labelsEl.appendChild(el);
+      }
+      var images = (step && Array.isArray(step.images)) ? step.images : [];
+      for (var j = 0; j < images.length; j++) {
+        var image = images[j] || {};
+        if (!image.src) continue;
+        var imageEl = document.createElement('img');
+        imageEl.src = String(image.src);
+        imageEl.alt = String(image.name || 'Workshop image');
+        Object.assign(imageEl.style, {
+          position: 'absolute',
+          left: (clamp01(image.xPct) * 100) + '%',
+          top: (clamp01(image.yPct) * 100) + '%',
+          width: (Math.max(0.05, Math.min(0.8, Number(image.widthPct) || 0.2)) * 100) + '%',
+          height: 'auto', transform: 'translate(-50%, -50%)',
+          pointerEvents: 'none', userSelect: 'none'
+        });
+        labelsEl.appendChild(imageEl);
       }
     }
 
@@ -306,7 +381,7 @@
       }
       renderLabels(step);
       if (indicatorEl) {
-        indicatorEl.textContent = 'S' + (stepIndex + 1) + ' (' + (stepIndex + 1) + '/' + steps.length + ')';
+        indicatorEl.textContent = 'P' + (stepIndex + 1) + ' (' + (stepIndex + 1) + '/' + steps.length + ')';
       }
     }
 
@@ -340,6 +415,7 @@
     }
 
     function hidePicker() {
+      pickerRequestSeq++;
       if (pickerEl) pickerEl.style.display = 'none';
     }
 
@@ -354,21 +430,28 @@
       pickerEl.style.bottom = 'auto';
     }
 
-    function showPicker(list) {
+    function showPicker(list, workshopCounts) {
       ensureDom();
       pickerListEl.innerHTML = '';
+      workshopCounts = workshopCounts || {};
       for (var i = 0; i < list.length; i++) {
         (function (w, idx) {
           var steps = Array.isArray(w.steps) ? w.steps.length : 0;
+          var savedCount = Number(workshopCounts[String(w.id || '')]) || 0;
+          var row = document.createElement('div');
+          Object.assign(row.style, {
+            width: '100%', display: 'flex', alignItems: 'stretch', gap: '6px',
+            margin: '0 0 6px'
+          });
           var item = document.createElement('button');
           item.type = 'button';
           Object.assign(item.style, {
-            width: '100%',
+            minWidth: '0',
+            flex: '1 1 auto',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: '10px',
-            margin: '0 0 6px',
             padding: '10px 11px',
             borderRadius: '6px',
             border: '1px solid rgba(255,255,255,0.14)',
@@ -386,7 +469,7 @@
           name.style.textOverflow = 'ellipsis';
           name.style.whiteSpace = 'nowrap';
           var count = document.createElement('span');
-          count.textContent = steps + (steps === 1 ? ' step' : ' steps');
+          count.textContent = steps + (steps === 1 ? ' part' : ' parts');
           count.style.flex = '0 0 auto';
           count.style.opacity = '0.78';
           count.style.fontSize = '12px';
@@ -394,13 +477,62 @@
           item.appendChild(count);
           item.addEventListener('click', function () {
             hidePicker();
-            startWorkshop(w);
+            requestWorkshopStart(w);
           });
-          pickerListEl.appendChild(item);
+          var results = mkBtn('Results (' + savedCount + ')', function () {
+            var params = new URLSearchParams();
+            params.set('workshop', String(w.id || ''));
+            params.set('name', String(w.name || ('Workshop ' + (idx + 1))));
+            window.location.href = '/results?' + params.toString();
+          });
+          results.title = savedCount + (savedCount === 1 ? ' saved workshop session' : ' saved workshop sessions');
+          Object.assign(results.style, {
+            flex: '0 0 auto', padding: '7px 9px', fontSize: '11px',
+            color: '#78dfd4', borderColor: 'rgba(83,190,178,0.55)',
+            background: 'rgba(47,143,134,0.18)'
+          });
+          row.appendChild(item);
+          row.appendChild(results);
+          pickerListEl.appendChild(row);
         })(list[i], i);
       }
       anchorPicker();
       pickerEl.style.display = 'flex';
+    }
+
+    function setRecordingEnabled(enabled) {
+      var a = getApp();
+      if (!a || typeof a.isRecording !== 'function' || typeof a.toggleRecording !== 'function') return;
+      var recording = !!a.isRecording();
+      if (recording !== !!enabled) a.toggleRecording();
+    }
+
+    function requestWorkshopStart(def) {
+      var a = getApp();
+      var pf = window.CompactPageFlow;
+      var recording = !!(a && typeof a.isRecording === 'function' && a.isRecording());
+      if (!pf || typeof pf.confirmDialog !== 'function') {
+        startWorkshop(def);
+        return;
+      }
+      pf.confirmDialog({
+        title: 'Record this workshop?',
+        message: recording
+          ? 'Recording is already active. Choose whether to keep it running for this workshop.'
+          : 'Choose whether to record the workshop while it is running.',
+        confirmText: recording ? 'Keep recording & start' : 'Record & start',
+        confirmColor: 'green',
+        thirdText: recording ? 'Stop recording & start' : 'Start without recording',
+        cancelText: 'Cancel',
+        onConfirm: function () {
+          setRecordingEnabled(true);
+          startWorkshop(def);
+        },
+        onThird: function () {
+          setRecordingEnabled(false);
+          startWorkshop(def);
+        }
+      });
     }
 
     function toast(msg) {
@@ -417,6 +549,11 @@
 
     function enter() {
       ensureDom();
+      if (isPickerVisible()) {
+        hidePicker();
+        return;
+      }
+      var requestSeq = ++pickerRequestSeq;
       pickerListEl.innerHTML = '';
       var loading = document.createElement('div');
       loading.textContent = 'Loading workshops...';
@@ -424,9 +561,16 @@
       pickerListEl.appendChild(loading);
       anchorPicker();
       pickerEl.style.display = 'flex';
-      fetch('/api/workshops', { cache: 'no-store' })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
+      Promise.all([
+        fetch('/api/workshops', { cache: 'no-store' }).then(function (r) { return r.json(); }),
+        fetch('/api/sessions?workshopCounts=1', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .catch(function () { return { workshopCounts: {} }; })
+      ])
+        .then(function (responses) {
+          if (requestSeq !== pickerRequestSeq) return;
+          var data = responses[0];
+          var sessionData = responses[1];
           var list = (data && Array.isArray(data.workshops)) ? data.workshops : [];
           list = list.filter(function (w) { return w && Array.isArray(w.steps) && w.steps.length; });
           if (!list.length) {
@@ -434,9 +578,10 @@
             toast('No workshops defined. Create one in Settings > Workshop.');
             return;
           }
-          showPicker(list);
+          showPicker(list, sessionData && sessionData.workshopCounts);
         })
         .catch(function () {
+          if (requestSeq !== pickerRequestSeq) return;
           hidePicker();
           toast('Failed to load workshops.');
         });
@@ -444,6 +589,11 @@
 
     function startWorkshop(def) {
       ensureDom();
+      var editor = window.CompactWorkshopEditor;
+      if (editor && typeof editor.isOpen === 'function' && editor.isOpen()
+          && typeof editor.close === 'function') {
+        editor.close();
+      }
       workshop = def;
       active = true;
       notifyActiveChange();
@@ -452,6 +602,9 @@
       visibleStepNumbers = new Set();
       labelsEl.style.display = 'block';
       barEl.style.display = 'flex';
+      if (barHandleEl) barHandleEl.style.display = 'block';
+      setBarVisible(true);
+      scheduleBarAutoHide();
       var a = getApp();
       if (a && a.setWorkshopContext) a.setWorkshopContext(def.id || '');
       if (a && a.setWorkshopMeta) {
@@ -493,6 +646,7 @@
 
     function doExitWorkshop() {
       if (!active) return;
+      setRecordingEnabled(false);
       active = false;
       workshop = null;
       applySeq++;
@@ -500,6 +654,8 @@
       hidePicker();
       if (labelsEl) { labelsEl.style.display = 'none'; labelsEl.innerHTML = ''; }
       if (barEl) barEl.style.display = 'none';
+      if (barHandleEl) barHandleEl.style.display = 'none';
+      if (barHideTimer) { window.clearTimeout(barHideTimer); barHideTimer = 0; }
       var a = getApp();
       if (a) {
         if (a.setVisibleWorkshopStep) a.setVisibleWorkshopStep(null, '');
@@ -522,10 +678,11 @@
       }
       if (!active) return;
       if (isTextInputTarget(e.target)) return;
-      if (e.key === 'ArrowRight') { e.preventDefault(); go(stepIndex + 1); }
-      else if (e.key === 'ArrowLeft') { e.preventDefault(); go(stepIndex - 1); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); setBarVisible(true); scheduleBarAutoHide(); go(stepIndex + 1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); setBarVisible(true); scheduleBarAutoHide(); go(stepIndex - 1); }
       else if (e.key === 'Escape') { e.preventDefault(); exitWorkshop(); }
     });
+    window.addEventListener('compact-workshop-toggle-request', enter);
 
     return {
       enter: enter,

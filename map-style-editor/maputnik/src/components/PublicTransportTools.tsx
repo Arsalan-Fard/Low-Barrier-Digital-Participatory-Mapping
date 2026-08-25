@@ -155,7 +155,7 @@ function createBusLayer(source: string): SymbolLayerSpecification {
     layout: {
       "icon-allow-overlap": true,
       "icon-image": "bus",
-      "icon-ignore-placement": true,
+      "icon-ignore-placement": false,
       "icon-padding": 4,
       "icon-size": 0.62,
       "symbol-sort-key": ["coalesce", ["get", "rank"], 999],

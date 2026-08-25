@@ -753,13 +753,7 @@
       function goMap() { window.location.href = '/map'; }
       function goResults() { window.location.href = '/results'; }
       function doExit() {
-        if (!window.confirm('Exit the application?')) return;
-        fetch('/api/shutdown', { method: 'POST' }).catch(function () {});
-        setTimeout(function () { try { window.close(); } catch (_e) {} }, 250);
-        document.body.innerHTML =
-          '<div style="display:flex;align-items:center;justify-content:center;height:100%;'
-          + 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:18px;color:#3a3a3a;">'
-          + 'Shutting down… you can close this window.</div>';
+        window.location.href = '/';
       }
       $('goMap').addEventListener('click', goMap);
       $('goResults').addEventListener('click', goResults);

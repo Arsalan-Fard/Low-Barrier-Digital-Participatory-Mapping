@@ -22,6 +22,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -99,6 +100,7 @@ BACKEND_RECORDINGS_DIR = ROOT / "backend_recordings"
 camera_recorder = None   # CameraVoiceRecorder instance (created in main); shared by the Ctrl+Shift+R hotkey and /api/record
 OSMNX_NETWORK_FILE = ROOT / "data" / "osmnx_network.geojson"
 CUSTOM_LAYERS_DIR = ROOT / "data" / "custom_layers"
+WORKSHOP_ASSETS_DIR = ROOT / "data" / "workshop_assets"
 MAP_SHEETS_DIR = ROOT / "data" / "map_sheets"
 OSMNX_GRAPH_CACHE = {"graph": None, "bbox": None, "loadedAt": 0.0}
 # Recently built graphs, keyed by "<network_type>|<bbox>", oldest first. OSMnx's
@@ -590,10 +592,10 @@ def save_mapbox_token(token):
 
 DEFAULT_DRAW_OFFSET_CM = 3.0
 MARKER_SLOT_DEFAULTS = [
-    {"key": "draw-1", "group": "Drawing", "tool": "draw", "label": "Pointer", "tagId": 11, "tagId2": None, "selectorTagId": 20, "selectorTagId2": 19, "color": "#ff5b5b", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
-    {"key": "draw-2", "group": "Drawing", "tool": "draw", "label": "Drawing 2", "tagId": 12, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#3b82f6", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
-    {"key": "draw-3", "group": "Drawing", "tool": "draw", "label": "Drawing 3", "tagId": 13, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#22cc66", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
-    {"key": "draw-4", "group": "Drawing", "tool": "draw", "label": "Drawing 4", "tagId": 14, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#111111", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
+    {"key": "draw-1", "group": "Drawing", "tool": "draw", "label": "Pointer 1", "tagId": 11, "tagId2": None, "selectorTagId": 20, "selectorTagId2": 19, "color": "#ff5b5b", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
+    {"key": "draw-2", "group": "Drawing", "tool": "draw", "label": "Pointer 2", "tagId": 12, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#3b82f6", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
+    {"key": "draw-3", "group": "Drawing", "tool": "draw", "label": "Pointer 3", "tagId": 13, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#22cc66", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
+    {"key": "draw-4", "group": "Drawing", "tool": "draw", "label": "Pointer 4", "tagId": 14, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#111111", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
     {"key": "route-origin", "group": "Shortest-path", "tool": "route-origin", "label": "Route start", "tagId": 9, "color": ""},
     {"key": "route-dest", "group": "Shortest-path", "tool": "route-dest", "label": "Route end", "tagId": 10, "color": ""},
     {"key": "isochrone-5", "group": "Analysis", "tool": "isochrone", "label": "Isochrone 5 min", "tagId": 38, "color": "", "minutes": 5},
@@ -800,7 +802,7 @@ def sanitize_marker_settings(payload):
         if tool not in MARKER_EXTRA_TOOLS:
             continue
         group = "Drawing" if tool == "draw" else "Comment"
-        default_label = "Drawing" if tool == "draw" else "Post-it"
+        default_label = "Pointer" if tool == "draw" else "Post-it"
         tag_id = sanitize_marker_tag_id(src.get("tagId"), allowed_ids)
         color = sanitize_marker_color(src.get("color"), "#ff5b5b") if tool in MARKER_COLOR_TOOLS else ""
         label = str(src.get("label") or default_label).strip()[:80]
@@ -820,6 +822,12 @@ def sanitize_marker_settings(payload):
         if tool in MARKER_OFFSET_TOOLS:
             extra["offsetCm"] = sanitize_marker_offset_cm(src.get("offsetCm"), DEFAULT_DRAW_OFFSET_CM)
         slots.append(extra)
+
+    pointer_number = 0
+    for slot in slots:
+        if slot.get("tool") == "draw":
+            pointer_number += 1
+            slot["label"] = f"Pointer {pointer_number}"
 
     return {"family": family, "tagSizeCm": tag_size, "slots": slots}
 
@@ -873,6 +881,353 @@ def generated_apriltag_svg(family, tag_id):
         + "".join(rects) +
         '\n</g>\n</svg>\n'
     )
+
+
+def _marker_sheet_entries(raw_entries, family):
+    """Sanitize the marker IDs and use labels supplied by the settings page."""
+    if isinstance(raw_entries, str):
+        if len(raw_entries) > 16000:
+            raise ValueError("marker_sheet_payload_too_large")
+        try:
+            raw_entries = json.loads(raw_entries)
+        except (TypeError, ValueError):
+            raise ValueError("invalid_marker_sheet_entries")
+    if not isinstance(raw_entries, list):
+        raise ValueError("invalid_marker_sheet_entries")
+
+    allowed_ids = marker_family_ids(family)
+    entries = []
+    seen = set()
+    for raw in raw_entries[:64]:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            tag_id = int(raw.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if tag_id not in allowed_ids or tag_id in seen:
+            continue
+        use = re.sub(r"\s+", " ", str(raw.get("use") or "")).strip()[:80]
+        if not use:
+            use = "Marker"
+        entries.append({"id": tag_id, "use": use})
+        seen.add(tag_id)
+    if not entries:
+        raise ValueError("no_marker_ids_selected")
+    return entries
+
+
+def _svg_path_for_reportlab(pdf, d):
+    """Convert the M/L/H/V/Z subset used by Pointer1.svg to a ReportLab path."""
+    token_re = re.compile(
+        r"[MmLlHhVvZz]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?"
+    )
+    tokens = token_re.findall(str(d or ""))
+    path = pdf.beginPath()
+    index = 0
+    command = None
+    x = y = start_x = start_y = 0.0
+
+    def is_command(token):
+        return len(token) == 1 and token.isalpha()
+
+    while index < len(tokens):
+        if is_command(tokens[index]):
+            command = tokens[index]
+            index += 1
+        if command is None:
+            raise ValueError("pointer_template_invalid")
+        lower = command.lower()
+        relative = command.islower()
+        if lower == "z":
+            path.close()
+            x, y = start_x, start_y
+            command = None
+            continue
+        if lower in ("m", "l"):
+            if index + 1 >= len(tokens) or is_command(tokens[index]):
+                raise ValueError("pointer_template_invalid")
+            next_x = float(tokens[index])
+            next_y = float(tokens[index + 1])
+            index += 2
+            if relative:
+                next_x += x
+                next_y += y
+            x, y = next_x, next_y
+            if lower == "m":
+                path.moveTo(x, y)
+                start_x, start_y = x, y
+                command = "l" if relative else "L"
+            else:
+                path.lineTo(x, y)
+            continue
+        if lower == "h":
+            if index >= len(tokens) or is_command(tokens[index]):
+                raise ValueError("pointer_template_invalid")
+            value = float(tokens[index])
+            index += 1
+            x = x + value if relative else value
+            path.lineTo(x, y)
+            continue
+        if lower == "v":
+            if index >= len(tokens) or is_command(tokens[index]):
+                raise ValueError("pointer_template_invalid")
+            value = float(tokens[index])
+            index += 1
+            y = y + value if relative else value
+            path.lineTo(x, y)
+            continue
+        raise ValueError("pointer_template_invalid")
+    return path
+
+
+def _draw_pointer_svg(pdf, svg_path, x, y, size):
+    """Render the checked-in Pointer1.svg directly into the PDF as vector paths."""
+    import xml.etree.ElementTree as ET
+    from reportlab.lib.colors import HexColor
+
+    root = ET.parse(svg_path).getroot()
+    view_box = [
+        float(value)
+        for value in str(root.attrib.get("viewBox") or "0 0 100 100").replace(",", " ").split()
+    ]
+    if len(view_box) != 4 or view_box[2] <= 0 or view_box[3] <= 0:
+        raise ValueError("pointer_template_invalid")
+    view_x, view_y, view_w, view_h = view_box
+
+    def local_name(node):
+        return node.tag.rsplit("}", 1)[-1]
+
+    def style_values(node):
+        values = {}
+        for item in str(node.attrib.get("style") or "").split(";"):
+            if ":" in item:
+                key, value = item.split(":", 1)
+                values[key.strip()] = value.strip()
+        for key in ("fill", "stroke", "stroke-width"):
+            if key in node.attrib:
+                values[key] = node.attrib[key]
+        return values
+
+    def apply_transform(node):
+        text = str(node.attrib.get("transform") or "").strip()
+        match = re.fullmatch(r"matrix\(([^)]+)\)", text)
+        if not text:
+            return
+        if not match:
+            raise ValueError("pointer_template_invalid")
+        values = [
+            float(value)
+            for value in re.split(r"[\s,]+", match.group(1).strip())
+            if value
+        ]
+        if len(values) != 6:
+            raise ValueError("pointer_template_invalid")
+        pdf.transform(*values)
+
+    def render_node(node):
+        pdf.saveState()
+        apply_transform(node)
+        name = local_name(node)
+        if name == "path":
+            values = style_values(node)
+            fill_value = values.get("fill", "#000000")
+            stroke_value = values.get("stroke", "none")
+            fill = fill_value.lower() != "none"
+            stroke = stroke_value.lower() != "none"
+            if fill:
+                pdf.setFillColor(HexColor(fill_value))
+            if stroke:
+                pdf.setStrokeColor(HexColor(stroke_value))
+                try:
+                    pdf.setLineWidth(float(values.get("stroke-width", 0.25)))
+                except (TypeError, ValueError):
+                    pdf.setLineWidth(0.25)
+                pdf.setLineJoin(2)
+            path = _svg_path_for_reportlab(pdf, node.attrib.get("d"))
+            pdf.drawPath(path, fill=int(fill), stroke=int(stroke))
+        else:
+            for child in node:
+                render_node(child)
+        pdf.restoreState()
+
+    pdf.saveState()
+    pdf.translate(x, y + size)
+    pdf.scale(size / view_w, -size / view_h)
+    pdf.translate(-view_x, -view_y)
+    render_node(root)
+    pdf.restoreState()
+
+
+def _draw_marker_sheet_pdf(family, tag_size_cm, entries):
+    """Create a printable marker sheet and a dimensioned Pointer1 guide."""
+    try:
+        from reportlab.lib.pagesizes import A3, A4
+        from reportlab.lib.units import cm, mm
+        from reportlab.pdfgen import canvas
+    except ImportError as exc:
+        raise RuntimeError("reportlab_not_installed") from exc
+
+    tag_size = float(tag_size_cm) * cm
+    a4_content_width = A4[0] - 24 * mm
+    page_size = A4 if tag_size + 8 * mm <= a4_content_width else A3
+    page_w, page_h = page_size
+    margin = 12 * mm
+    content_w = page_w - margin * 2
+    card_w = max(36 * mm, tag_size + 6 * mm)
+    card_h = tag_size + 14 * mm
+    if card_w > content_w:
+        raise ValueError("marker_size_does_not_fit_page")
+    columns = max(1, int(content_w // card_w))
+    guide_zone_h = 118 * mm
+    guide_rows = max(0, int((page_h - margin - guide_zone_h) // card_h))
+    full_rows = max(1, int((page_h - margin * 2) // card_h))
+    guide_capacity = columns * guide_rows
+    full_capacity = columns * full_rows
+
+    dictionary = cv2.aruco.getPredefinedDictionary(
+        APRILTAG_GENERATOR_FAMILY_MAP[family]
+    )
+    marker_cells = int(getattr(dictionary, "markerSize", 6)) + 2
+    viewbox_cells = marker_cells + 2
+
+    out = io.BytesIO()
+    pdf = canvas.Canvas(out, pagesize=page_size, pageCompression=1)
+    pdf.setTitle("Marker sheet")
+    pdf.setAuthor("Low-Barrier Digital Participatory Mapping")
+
+    def draw_marker(entry, card_x, top_y):
+        tag_x = card_x + (card_w - tag_size) * 0.5
+        tag_y = top_y - tag_size
+        cell = tag_size / viewbox_cells
+        marker = cv2.aruco.generateImageMarker(
+            dictionary, int(entry["id"]), marker_cells
+        )
+        pdf.setFillColorRGB(1, 1, 1)
+        pdf.rect(tag_x, tag_y, tag_size, tag_size, fill=1, stroke=0)
+        pdf.setFillColorRGB(0, 0, 0)
+        for row in range(marker_cells):
+            for column in range(marker_cells):
+                if int(marker[row, column]) < 128:
+                    pdf.rect(
+                        tag_x + (column + 1) * cell,
+                        tag_y + tag_size - (row + 2) * cell,
+                        cell,
+                        cell,
+                        fill=1,
+                        stroke=0,
+                    )
+        center_x = card_x + card_w * 0.5
+        pdf.setFillColorRGB(0, 0, 0)
+        pdf.setFont("Helvetica-Bold", 9)
+        pdf.drawCentredString(center_x, tag_y - 4.2 * mm, f"ID {entry['id']}")
+        label = entry["use"]
+        font_size = 8.0
+        while (
+            font_size > 5.5
+            and pdf.stringWidth(label, "Helvetica", font_size) > card_w - 2 * mm
+        ):
+            font_size -= 0.5
+        if pdf.stringWidth(label, "Helvetica", font_size) > card_w - 2 * mm:
+            while (
+                label
+                and pdf.stringWidth(label + "...", "Helvetica", font_size)
+                > card_w - 2 * mm
+            ):
+                label = label[:-1]
+            label += "..."
+        pdf.setFont("Helvetica", font_size)
+        pdf.drawCentredString(center_x, tag_y - 8 * mm, label)
+
+    def draw_entries(page_entries, rows):
+        for row in range(rows):
+            start = row * columns
+            row_entries = page_entries[start:start + columns]
+            if not row_entries:
+                break
+            row_x = (page_w - len(row_entries) * card_w) * 0.5
+            top_y = page_h - margin - row * card_h
+            for column, entry in enumerate(row_entries):
+                draw_marker(entry, row_x + column * card_w, top_y)
+
+    def horizontal_dimension(x1, x2, y, label):
+        arrow = 2.2 * mm
+        pdf.setStrokeColorRGB(0.18, 0.18, 0.18)
+        pdf.setFillColorRGB(0.08, 0.08, 0.08)
+        pdf.setLineWidth(0.45)
+        pdf.line(x1, y, x2, y)
+        pdf.line(x1, y, x1 + arrow, y + arrow * 0.55)
+        pdf.line(x1, y, x1 + arrow, y - arrow * 0.55)
+        pdf.line(x2, y, x2 - arrow, y + arrow * 0.55)
+        pdf.line(x2, y, x2 - arrow, y - arrow * 0.55)
+        pdf.setFont("Helvetica", 7)
+        pdf.drawCentredString((x1 + x2) * 0.5, y + 1.6 * mm, label)
+
+    def vertical_dimension(x, y1, y2, label, label_side=1):
+        arrow = 2.2 * mm
+        pdf.setStrokeColorRGB(0.18, 0.18, 0.18)
+        pdf.setFillColorRGB(0.08, 0.08, 0.08)
+        pdf.setLineWidth(0.45)
+        pdf.line(x, y1, x, y2)
+        pdf.line(x, y1, x - arrow * 0.55, y1 + arrow)
+        pdf.line(x, y1, x + arrow * 0.55, y1 + arrow)
+        pdf.line(x, y2, x - arrow * 0.55, y2 - arrow)
+        pdf.line(x, y2, x + arrow * 0.55, y2 - arrow)
+        pdf.saveState()
+        pdf.translate(x + label_side * 2.5 * mm, (y1 + y2) * 0.5)
+        pdf.rotate(90)
+        pdf.setFont("Helvetica", 7)
+        pdf.drawCentredString(0, 0, label)
+        pdf.restoreState()
+
+    def draw_pointer_guide():
+        guide_size = 100 * mm
+        guide_x = (page_w - guide_size) * 0.5
+        guide_y = 14 * mm
+        pointer_path = WEB_DIR / "images" / "Pointer1.svg"
+        _draw_pointer_svg(pdf, pointer_path, guide_x, guide_y, guide_size)
+
+        # Pointer1.svg uses one viewBox unit per millimeter.
+        unit = guide_size / 100.0
+        sx = lambda value: guide_x + value * unit
+        sy = lambda value: guide_y + (100.0 - value) * unit
+        horizontal_dimension(sx(10.1809), sx(90.1809), sy(5.0), "80 mm")
+        vertical_dimension(
+            sx(96.0), sy(83.733683), sy(13.73369), "70 mm", label_side=-1
+        )
+        vertical_dimension(
+            sx(4.0), sy(53.73369), sy(13.73369), "40 mm", label_side=1
+        )
+        pdf.setFillColorRGB(0.08, 0.08, 0.08)
+        pdf.setFont("Helvetica", 6.5)
+        pdf.drawCentredString(sx(29.854147), sy(11.0), "35 x 35 mm")
+        pdf.drawCentredString(sx(70.14585), sy(11.0), "35 x 35 mm")
+        pdf.drawCentredString(sx(50.1809), sy(91.5), "30 mm legs")
+        pdf.setFont("Helvetica", 9)
+        pdf.drawCentredString(
+            page_w * 0.5,
+            6.5 * mm,
+            "This guide shows how to cut and fold the cardboard pointer.",
+        )
+
+    if len(entries) <= guide_capacity:
+        leading_entries = []
+        final_entries = entries
+    else:
+        split_at = len(entries) - guide_capacity if guide_capacity else len(entries)
+        leading_entries = entries[:split_at]
+        final_entries = entries[split_at:]
+
+    for start in range(0, len(leading_entries), full_capacity):
+        page_entries = leading_entries[start:start + full_capacity]
+        draw_entries(page_entries, full_rows)
+        pdf.showPage()
+
+    draw_entries(final_entries, guide_rows)
+    draw_pointer_guide()
+    pdf.showPage()
+    pdf.save()
+    return out.getvalue(), ("A4" if page_size == A4 else "A3")
 
 
 def load_google_maps_key():
@@ -2335,11 +2690,447 @@ def map_page():
     return send_from_directory(WEB_DIR, "index.html")
 
 
-@app.route("/paper-test")
-def paper_test_page():
+@app.route("/digitize-map")
+def digitize_map_page():
     # Printable-map experiment: a numeric sheet ID retrieves geographic bounds
     # and printed AprilTags recover the photographed paper homography.
     return send_from_directory(WEB_DIR, "paper-test.html")
+
+
+@app.route("/paper-test")
+def legacy_paper_test_page():
+    return redirect("/digitize-map", code=302)
+
+
+# Saved IMOBYL sessions. Plain JSON on disk rather than browser storage, so a
+# session survives a different machine, a cleared cache or a kiosk reset — the
+# expo is run from more than one browser.
+IMOBYL_SESSIONS_DIR = ROOT / "data" / "imobyl_sessions"
+IMOBYL_MAX_BYTES = 24 * 1024 * 1024
+
+
+def _imobyl_session_path(session_id):
+    clean = re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(session_id or ""))
+    if not clean:
+        return None
+    return IMOBYL_SESSIONS_DIR / f"{session_id}.json"
+
+
+def _imobyl_summary(path):
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    references = record.get("references") or []
+    stickers = 0
+    paths = 0
+    for reference in references:
+        for photo in reference.get("photos") or []:
+            stickers += len(photo.get("markers") or [])
+            paths += len(photo.get("paths") or [])
+        manual = reference.get("manual") or {}
+        stickers += len(manual.get("markers") or [])
+        paths += len(manual.get("strokes") or [])
+    return {
+        "id": path.stem,
+        "name": record.get("name") or path.stem,
+        "savedAt": record.get("savedAt"),
+        "sheets": [str(item.get("id")) for item in references],
+        "references": len(references),
+        "stickers": stickers,
+        "paths": paths,
+        "bytes": path.stat().st_size,
+    }
+
+
+@app.route("/api/imobyl/sessions", methods=["GET", "POST"])
+def api_imobyl_sessions():
+    if request.method == "GET":
+        IMOBYL_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        sessions = [
+            summary for summary in (
+                _imobyl_summary(path)
+                for path in sorted(IMOBYL_SESSIONS_DIR.glob("*.json"))
+            ) if summary
+        ]
+        sessions.sort(key=lambda item: item.get("savedAt") or "", reverse=True)
+        return jsonify({"ok": True, "sessions": sessions})
+
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name") or "").strip()[:80]
+    state = payload.get("state")
+    if not isinstance(state, dict):
+        return jsonify({"ok": False, "error": "invalid_state"}), 400
+    record = {
+        "name": name or time.strftime("%Y-%m-%d %H:%M"),
+        "savedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "version": 1,
+    }
+    record.update({key: value for key, value in state.items() if key != "name"})
+    body = json.dumps(record, separators=(",", ":"))
+    if len(body.encode("utf-8")) > IMOBYL_MAX_BYTES:
+        return jsonify({"ok": False, "error": "session_too_large"}), 413
+    # An explicit id overwrites that session instead of making another one:
+    # the phone-capture flow keeps every photo of one reference map in a
+    # single file, so a workshop ends with one session per sheet, not per shot.
+    requested = str(payload.get("id") or "").strip()
+    if requested:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", requested):
+            return jsonify({"ok": False, "error": "invalid_session_id"}), 400
+        session_id = requested
+    else:
+        session_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    try:
+        IMOBYL_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        (IMOBYL_SESSIONS_DIR / f"{session_id}.json").write_text(body, encoding="utf-8")
+    except OSError:
+        return jsonify({"ok": False, "error": "session_not_saved"}), 500
+    return jsonify({"ok": True, "id": session_id, "name": record["name"]})
+
+
+@app.route("/api/imobyl/sessions/<session_id>", methods=["GET", "DELETE"])
+def api_imobyl_session(session_id):
+    path = _imobyl_session_path(session_id)
+    if path is None:
+        return jsonify({"ok": False, "error": "invalid_session_id"}), 400
+    if not path.exists():
+        return jsonify({"ok": False, "error": "session_not_found"}), 404
+    if request.method == "DELETE":
+        try:
+            path.unlink()
+        except OSError:
+            return jsonify({"ok": False, "error": "session_not_deleted"}), 500
+        return jsonify({"ok": True, "id": session_id})
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return jsonify({"ok": False, "error": "session_unreadable"}), 500
+    return jsonify({"ok": True, "id": session_id, "state": record})
+
+
+ROADS_CACHE_DIR = ROOT / "data" / "roads_cache"
+OVERPASS_ENDPOINTS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+)
+
+
+@app.route("/api/roads")
+def api_roads():
+    """Street network for a sheet bbox, proxied from Overpass and cached.
+
+    The browser fetching Overpass directly proved flaky: the public endpoints
+    intermittently return empty bodies, and a multi-megabyte cross-origin
+    download is easy to lose. Server-side we can retry across mirrors and keep
+    the result on disk, so every later request for the same sheet is instant
+    and offline-safe.
+    """
+    bbox = str(request.args.get("bbox") or "")
+    match = re.fullmatch(
+        r"(-?\d{1,3}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?),"
+        r"(-?\d{1,3}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)", bbox)
+    if not match:
+        return jsonify({"ok": False, "error": "invalid_bbox"}), 400
+    south, west, north, east = (float(g) for g in match.groups())
+    if not (-90 <= south < north <= 90 and -180 <= west < east <= 180):
+        return jsonify({"ok": False, "error": "invalid_bbox"}), 400
+    # A sheet is a neighbourhood; refuse anything past ~20 x 20 km.
+    if (north - south) > 0.2 or (east - west) > 0.3:
+        return jsonify({"ok": False, "error": "bbox_too_large"}), 400
+
+    import hashlib
+    cache_path = ROADS_CACHE_DIR / (
+        hashlib.sha1(bbox.encode("utf-8")).hexdigest()[:16] + ".json")
+    if cache_path.exists():
+        try:
+            return Response(cache_path.read_bytes(), mimetype="application/json")
+        except OSError:
+            pass
+
+    query = (
+        "[out:json][timeout:25];"
+        'way["highway"]["highway"!~"construction|proposed|razed"]'
+        '["footway"!~"sidewalk|crossing"]'
+        f"({south},{west},{north},{east});out skel geom;"
+    )
+    payload = urllib.parse.urlencode({"data": query}).encode("utf-8")
+    lines = None
+    for endpoint in OVERPASS_ENDPOINTS:
+        for _attempt in range(2):
+            try:
+                req = urllib.request.Request(
+                    endpoint, data=payload,
+                    headers={"User-Agent": "LowBarrierMapping/1.0"})
+                with urllib.request.urlopen(req, timeout=45) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                lines = [
+                    [[node["lon"], node["lat"]] for node in element["geometry"]]
+                    for element in data.get("elements", [])
+                    if element.get("type") == "way"
+                    and len(element.get("geometry") or []) > 1
+                ]
+            except (OSError, ValueError, KeyError):
+                continue
+            if lines:
+                break
+        if lines:
+            break
+    if not lines:
+        return jsonify({"ok": False, "error": "overpass_unreachable"}), 502
+
+    body = json.dumps({"ok": True, "lines": lines}, separators=(",", ":"))
+    try:
+        ROADS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(body, encoding="utf-8")
+    except OSError:
+        pass  # caching is best-effort; the response still goes out
+    return Response(body, mimetype="application/json")
+
+
+BOUNDARIES_CACHE_DIR = ROOT / "data" / "boundaries_cache"
+
+
+@app.route("/api/boundaries")
+def api_boundaries():
+    """Administrative outlines for a bbox, proxied from Overpass and cached.
+
+    Only the member ways' geometry is returned, not assembled polygons: an
+    outline is all the caller draws, and stitching relation members into rings
+    is a pile of edge cases (reversed ways, multiple outers, enclaves) for no
+    gain here. admin_level 9 is the arrondissement level in France; other
+    levels are allowed so the same endpoint serves another city's districts.
+    """
+    bbox = str(request.args.get("bbox") or "")
+    match = re.fullmatch(
+        r"(-?\d{1,3}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?),"
+        r"(-?\d{1,3}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)", bbox)
+    if not match:
+        return jsonify({"ok": False, "error": "invalid_bbox"}), 400
+    south, west, north, east = (float(g) for g in match.groups())
+    if not (-90 <= south < north <= 90 and -180 <= west < east <= 180):
+        return jsonify({"ok": False, "error": "invalid_bbox"}), 400
+    if (north - south) > 0.6 or (east - west) > 0.9:
+        return jsonify({"ok": False, "error": "bbox_too_large"}), 400
+    level = str(request.args.get("level") or "9")
+    if not re.fullmatch(r"[0-9]{1,2}", level):
+        return jsonify({"ok": False, "error": "invalid_level"}), 400
+
+    import hashlib
+    cache_path = BOUNDARIES_CACHE_DIR / (
+        hashlib.sha1((bbox + "|" + level).encode("utf-8")).hexdigest()[:16] + ".json")
+    if cache_path.exists():
+        try:
+            return Response(cache_path.read_bytes(), mimetype="application/json")
+        except OSError:
+            pass
+
+    query = (
+        "[out:json][timeout:25];"
+        f'relation["boundary"="administrative"]["admin_level"="{level}"]'
+        f"({south},{west},{north},{east});out geom;"
+    )
+    payload = urllib.parse.urlencode({"data": query}).encode("utf-8")
+    areas = None
+    for endpoint in OVERPASS_ENDPOINTS:
+        for _attempt in range(2):
+            try:
+                req = urllib.request.Request(
+                    endpoint, data=payload,
+                    headers={"User-Agent": "LowBarrierMapping/1.0"})
+                with urllib.request.urlopen(req, timeout=45) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                areas = []
+                for element in data.get("elements", []):
+                    if element.get("type") != "relation":
+                        continue
+                    tags = element.get("tags") or {}
+                    lines = [
+                        [[node["lon"], node["lat"]] for node in member["geometry"]]
+                        for member in element.get("members") or []
+                        if member.get("type") == "way"
+                        and len(member.get("geometry") or []) > 1
+                    ]
+                    if not lines:
+                        continue
+                    name = tags.get("name") or ""
+                    label = tags.get("ref") or ""
+                    if not label:
+                        # "Paris 20e Arrondissement" -> "20"
+                        found = re.search(r"(\d{1,2})\s*(?:er|re|eme|e)(?![a-z])", name)
+                        label = found.group(1) if found else name
+                    points = [point for line in lines for point in line]
+                    centre = [
+                        sum(p[0] for p in points) / len(points),
+                        sum(p[1] for p in points) / len(points),
+                    ]
+                    areas.append({"name": name, "label": label,
+                                  "centre": centre, "lines": lines})
+            except (OSError, ValueError, KeyError):
+                areas = None
+                continue
+            if areas:
+                break
+        if areas:
+            break
+    if not areas:
+        return jsonify({"ok": False, "error": "overpass_unreachable"}), 502
+
+    body = json.dumps({"ok": True, "areas": areas}, separators=(",", ":"))
+    try:
+        BOUNDARIES_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(body, encoding="utf-8")
+    except OSError:
+        pass
+    return Response(body, mimetype="application/json")
+
+
+CAPTURES_DIR = ROOT / "data" / "captures"
+CAPTURE_MAX_BYTES = 24 * 1024 * 1024
+captures_lock = threading.Lock()
+
+
+def _captures_index_path():
+    return CAPTURES_DIR / "index.json"
+
+
+def _load_captures():
+    try:
+        data = json.loads(_captures_index_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"seq": 0, "items": []}
+    if not isinstance(data, dict):
+        return {"seq": 0, "items": []}
+    data.setdefault("seq", 0)
+    data.setdefault("items", [])
+    return data
+
+
+def _save_captures(state):
+    CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+    _captures_index_path().write_text(
+        json.dumps(state, separators=(",", ":")), encoding="utf-8")
+
+
+@app.route("/phone-capture")
+def phone_capture_page():
+    """Camera page for a phone on the same network (or the quick tunnel).
+
+    Kept deliberately dumb: pick a sheet, take a photo, send. All alignment and
+    detection happens on the laptop that is already holding the reference maps
+    and the session, so the phone needs no state beyond the sheet id it is
+    currently shooting.
+    """
+    return send_from_directory(WEB_DIR, "phone_capture.html")
+
+
+@app.route("/api/capture-target", methods=["GET"])
+def api_capture_target():
+    """Where a phone should point its browser.
+
+    The tunnel is preferred when one is up -- it works off the local network
+    and over mobile data -- otherwise the LAN addresses this machine answers
+    on. localhost is useless to a phone, so it is never offered.
+    """
+    tunnel = snapshot_quick_tunnel_state()
+    port = request.host.split(":")[-1] if ":" in request.host else "80"
+    lan = [f"http://{ip}:{port}" for ip in get_ipv4_candidates()]
+    return jsonify({
+        "ok": True,
+        "tunnel": tunnel.get("url") or "",
+        "tunnelStatus": tunnel.get("status") or "",
+        "lan": lan,
+    })
+
+
+@app.route("/api/captures", methods=["GET", "POST"])
+def api_captures():
+    if request.method == "GET":
+        # The desktop polls with the highest sequence it has already taken, so
+        # a reload never re-digitises work and two viewers cannot both claim
+        # the same photo (whoever marks it done first wins).
+        try:
+            since = int(request.args.get("since") or 0)
+        except ValueError:
+            since = 0
+        with captures_lock:
+            state = _load_captures()
+        pending = [
+            {k: item[k] for k in ("seq", "id", "sheetId", "receivedAt", "bytes")}
+            for item in state["items"]
+            if item.get("seq", 0) > since and not item.get("consumed")
+        ]
+        return jsonify({"ok": True, "seq": state["seq"], "captures": pending})
+
+    sheet_id = _clean_map_sheet_id(request.form.get("sheetId"))
+    if not sheet_id:
+        return jsonify({"ok": False, "error": "invalid_sheet_id"}), 400
+    photo = request.files.get("photo")
+    if photo is None:
+        return jsonify({"ok": False, "error": "no_photo"}), 400
+    blob = photo.read()
+    if not blob:
+        return jsonify({"ok": False, "error": "empty_photo"}), 400
+    if len(blob) > CAPTURE_MAX_BYTES:
+        return jsonify({"ok": False, "error": "photo_too_large"}), 413
+
+    capture_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    try:
+        CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+        (CAPTURES_DIR / f"{capture_id}.jpg").write_bytes(blob)
+    except OSError:
+        return jsonify({"ok": False, "error": "capture_not_saved"}), 500
+
+    with captures_lock:
+        state = _load_captures()
+        state["seq"] += 1
+        entry = {
+            "seq": state["seq"],
+            "id": capture_id,
+            "sheetId": sheet_id,
+            "receivedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "bytes": len(blob),
+            "consumed": False,
+        }
+        state["items"].append(entry)
+        # The index is a work queue, not an archive; the photos stay on disk.
+        state["items"] = state["items"][-500:]
+        _save_captures(state)
+    return jsonify({"ok": True, "id": capture_id, "seq": entry["seq"],
+                    "sheetId": sheet_id})
+
+
+@app.route("/api/captures/<capture_id>/image", methods=["GET"])
+def api_capture_image(capture_id):
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{6}", str(capture_id or "")):
+        return ("", 404)
+    path = CAPTURES_DIR / f"{capture_id}.jpg"
+    if not path.exists():
+        return ("", 404)
+    return send_from_directory(CAPTURES_DIR, f"{capture_id}.jpg")
+
+
+@app.route("/api/captures/<capture_id>/done", methods=["POST"])
+def api_capture_done(capture_id):
+    with captures_lock:
+        state = _load_captures()
+        found = False
+        for item in state["items"]:
+            if item.get("id") == capture_id:
+                item["consumed"] = True
+                found = True
+        if found:
+            _save_captures(state)
+    return jsonify({"ok": True, "id": capture_id, "found": found})
+
+
+@app.route("/imobyl")
+def imobyl_page():
+    """Standalone exhibition page, forked from the digitiser.
+
+    Kept as its own file rather than a mode of /digitize-map so the expo can be
+    changed freely mid-event without any risk to the working tool.
+    """
+    return send_from_directory(WEB_DIR, "imobyl.html")
 
 
 @app.route("/maputnik/")
@@ -2353,6 +3144,34 @@ def maputnik_page():
 
 @app.route("/maputnik/<path:filename>")
 def maputnik_asset(filename):
+    # MapLibre resolves sprite URLs with `new URL(url)` and NO base, so a
+    # relative one throws -- and because it loads every sprite through one
+    # Promise.all, that failure silently kills the basemap's sprite too and the
+    # map renders with no icons at all. The style file therefore stores the
+    # local sprite as a root-relative path and we make it absolute here, using
+    # the host actually being served so a tunnel or a different port still work.
+    if filename.endswith(".json") and "styles/" in filename.replace("\\", "/"):
+        path = (MAPUTNIK_DIST_DIR / filename).resolve()
+        try:
+            path.relative_to(MAPUTNIK_DIST_DIR.resolve())
+        except ValueError:
+            return ("", 404)
+        if path.exists():
+            try:
+                style = json.loads(path.read_text(encoding="utf-8-sig"))
+                sprite = style.get("sprite")
+                if isinstance(sprite, list):
+                    base = request.host_url.rstrip("/")
+                    for entry in sprite:
+                        url = str(entry.get("url") or "")
+                        if url.startswith("/"):
+                            entry["url"] = base + url
+                    response = jsonify(style)
+                    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+                    return response
+            except (OSError, ValueError):
+                pass    # not JSON we understand; fall through to the raw file
+
     response = send_from_directory(MAPUTNIK_DIST_DIR, filename)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -2396,6 +3215,7 @@ def _map_sheet_summary(record):
         "corners": record.get("corners"),
         "camera": record.get("camera"),
         "theme": record.get("theme") or "",
+        "imageUrl": f"/api/map-sheets/{record.get('id')}/image",
         "pdfUrl": f"/api/map-sheets/{record.get('id')}/pdf",
     }
 
@@ -2408,7 +3228,39 @@ def _clean_sheet_page_size(raw):
     return value if value in SHEET_PAGE_SIZES else "A4"
 
 
-def map_sheet_layout(page_size="A4"):
+def _clean_map_sheet_text_block(raw):
+    source = raw if isinstance(raw, dict) else {}
+    text = str(source.get("text") or "").replace("\x00", "").strip()
+    return {
+        "enabled": bool(source.get("enabled")),
+        "text": text[:1200],
+    }
+
+
+def _clean_map_sheet_frame(raw, page_w, page_h, patch_size):
+    margin = 12.0
+    default = [margin, margin, page_w - margin * 2.0, page_h - margin * 2.0]
+    if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+        return default
+    try:
+        frame = [float(value) for value in raw]
+    except (TypeError, ValueError):
+        return default
+    if not all(math.isfinite(value) for value in frame):
+        return default
+
+    min_w = max(patch_size * 4.25, page_w * 0.28)
+    min_h = max(patch_size * 3.25, page_h * 0.28)
+    max_w = page_w - margin * 2.0
+    max_h = page_h - margin * 2.0
+    width = min(max_w, max(min_w, frame[2]))
+    height = min(max_h, max(min_h, frame[3]))
+    left = min(max(margin, frame[0]), page_w - margin - width)
+    top = min(max(margin, frame[1]), page_h - margin - height)
+    return [left, top, width, height]
+
+
+def map_sheet_layout(page_size="A4", customization=None):
     """Geometry of a printable sheet, in PDF points, origin at the page's
     TOP-LEFT (image convention — the browser preview and OpenCV both use it).
 
@@ -2419,38 +3271,50 @@ def map_sheet_layout(page_size="A4"):
     """
     # A4/A3 landscape in points (1 pt = 1/72 in), matching reportlab.
     page_w, page_h = (1190.55, 841.89) if _clean_sheet_page_size(page_size) == "A3" else (841.89, 595.28)
-    map_x = map_y = 12.0
-    map_w, map_h = page_w - 24.0, page_h - 24.0
     tag_size = 20.0 if _clean_sheet_page_size(page_size) == "A4" else 28.0
     quiet = 3.0
     patch = tag_size + 2.0 * quiet
+    custom = customization if isinstance(customization, dict) else {}
+    map_x, map_y, map_w, map_h = _clean_map_sheet_frame(
+        custom.get("mapFrame"), page_w, page_h, patch
+    )
     # Eight tags: three across the top, one mid-left, one mid-right, three
-    # across the bottom — expressed top-left-origin.
+    # across the bottom. All positions follow the adjustable map frame.
     patches = [
         (map_x, map_y),
-        ((page_w - patch) * 0.5, map_y),
-        (page_w - map_x - patch, map_y),
-        (map_x, (page_h - patch) * 0.5),
-        (page_w - map_x - patch, (page_h - patch) * 0.5),
-        (map_x, page_h - map_y - patch),
-        ((page_w - patch) * 0.5, page_h - map_y - patch),
-        (page_w - map_x - patch, page_h - map_y - patch),
+        (map_x + (map_w - patch) * 0.5, map_y),
+        (map_x + map_w - patch, map_y),
+        (map_x, map_y + (map_h - patch) * 0.5),
+        (map_x + map_w - patch, map_y + (map_h - patch) * 0.5),
+        (map_x, map_y + map_h - patch),
+        (map_x + (map_w - patch) * 0.5, map_y + map_h - patch),
+        (map_x + map_w - patch, map_y + map_h - patch),
     ]
     badge_w, badge_h = 70.0, 14.0
+    badge_x = min(
+        map_x + map_w - badge_w - 2.0,
+        map_x + map_w * 0.5 + patch * 0.7,
+    )
+    badge_top = map_y + map_h - badge_h - 2.0
     return {
         "pageSize": _clean_sheet_page_size(page_size),
         "page": [page_w, page_h],
-        "mapFrame": [map_x, map_y, map_w, map_h],
+        "mapFrame": [
+            round(map_x, 3), round(map_y, 3),
+            round(map_w, 3), round(map_h, 3),
+        ],
         "tagIds": list(range(21, 29)),
         "tagSize": tag_size,
         "quiet": quiet,
         "patchSize": patch,
         "patches": [[round(x, 3), round(y, 3)] for x, y in patches],
         "badge": [
-            round(page_w * 0.5 + patch * 0.7, 3),
-            round(page_h - (map_y + 2.0) - badge_h, 3),
+            round(badge_x, 3),
+            round(badge_top, 3),
             badge_w, badge_h,
         ],
+        "header": _clean_map_sheet_text_block(custom.get("header")),
+        "footer": _clean_map_sheet_text_block(custom.get("footer")),
     }
 
 
@@ -2463,17 +3327,20 @@ def api_map_sheet_layout():
     })
 
 
-def _draw_map_sheet_pdf(png_bytes, record, page_size="A4"):
-    """Build an almost edge-to-edge A4/A3 map with eight registration tags."""
+def _draw_map_sheet_pdf(
+    png_bytes, record, page_size="A4", customization=None
+):
+    """Build an adjustable A4/A3 map with registration tags and text areas."""
     try:
         from reportlab.lib.utils import ImageReader
         from reportlab.pdfgen import canvas
     except ImportError as exc:
         raise RuntimeError("reportlab_not_installed") from exc
 
-    layout = map_sheet_layout(page_size)
+    layout = map_sheet_layout(page_size, customization)
     page_w, page_h = layout["page"]
     map_x, map_y, map_w, map_h = layout["mapFrame"]
+    map_pdf_y = page_h - map_y - map_h
 
     # Dedicated high-numbered IDs avoid the low AprilTag IDs used elsewhere by
     # the project's tangible drawing tools. These tags register the paper only.
@@ -2538,6 +3405,8 @@ def _draw_map_sheet_pdf(png_bytes, record, page_size="A4"):
         "fiducialFamily": tag_family,
         "fiducials": fiducials,
         "maskRectsNormalized": mask_rects,
+        "header": layout["header"],
+        "footer": layout["footer"],
     }
 
     out = io.BytesIO()
@@ -2548,11 +3417,11 @@ def _draw_map_sheet_pdf(png_bytes, record, page_size="A4"):
 
     pdf.setFillColorRGB(1, 1, 1)
     pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
-    pdf.drawImage(ImageReader(io.BytesIO(png_bytes)), map_x, map_y, map_w, map_h,
+    pdf.drawImage(ImageReader(io.BytesIO(png_bytes)), map_x, map_pdf_y, map_w, map_h,
                   preserveAspectRatio=False, mask="auto")
     pdf.setStrokeColorRGB(0, 0, 0)
     pdf.setLineWidth(0.8)
-    pdf.rect(map_x, map_y, map_w, map_h, fill=0, stroke=1)
+    pdf.rect(map_x, map_pdf_y, map_w, map_h, fill=0, stroke=1)
 
     dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_16h5)
     for tag_id, (patch_x, patch_y) in zip(tag_ids, tag_positions):
@@ -2574,8 +3443,97 @@ def _draw_map_sheet_pdf(png_bytes, record, page_size="A4"):
     pdf.setFillColorRGB(1, 1, 1)
     pdf.rect(badge_x, badge_y, badge_w, badge_h, fill=1, stroke=0)
     pdf.setFillColorRGB(0, 0, 0)
-    pdf.setFont("Helvetica-Bold", 9)
-    pdf.drawCentredString(badge_x + badge_w * 0.5, badge_y + 3.5, f"MAP ID: {record['id']}")
+    badge_text = f"MAP ID: {record['id']}"
+    badge_font_size = 9.0
+    while (
+        badge_font_size > 5.0
+        and pdf.stringWidth(badge_text, "Helvetica-Bold", badge_font_size) > badge_w - 4.0
+    ):
+        badge_font_size -= 0.5
+    pdf.setFont("Helvetica-Bold", badge_font_size)
+    pdf.drawCentredString(
+        badge_x + badge_w * 0.5,
+        badge_y + max(2.0, (badge_h - badge_font_size) * 0.45),
+        badge_text,
+    )
+
+    def wrapped_lines(text, font_name, font_size, max_width):
+        lines = []
+        for paragraph in str(text or "").splitlines() or [""]:
+            words = paragraph.split()
+            if not words:
+                lines.append("")
+                continue
+            current = ""
+            for word in words:
+                candidate = word if not current else f"{current} {word}"
+                if pdf.stringWidth(candidate, font_name, font_size) <= max_width:
+                    current = candidate
+                    continue
+                if current:
+                    lines.append(current)
+                    current = ""
+                # Split a single unusually long token so it cannot escape the
+                # printable text area.
+                fragment = ""
+                for character in word:
+                    candidate = fragment + character
+                    if fragment and pdf.stringWidth(candidate, font_name, font_size) > max_width:
+                        lines.append(fragment)
+                        fragment = character
+                    else:
+                        fragment = candidate
+                current = fragment
+            lines.append(current)
+        return lines
+
+    def draw_text_area(block, top, bottom):
+        if not block.get("enabled") or not block.get("text"):
+            return
+        area_h = bottom - top
+        # Tracks the 9pt floor below: a band thinner than this cannot hold a
+        # line at the smallest size we are willing to print, and drawing anyway
+        # would spill the text over the map frame.
+        if area_h < 13.0:
+            return
+        font_name = "Helvetica"
+        # A header is read at arm's length across a table, not held up close, so
+        # it wants to be a few points larger than body copy would be.
+        preferred_font_size = 15.0 if layout["pageSize"] == "A4" else 19.0
+        font_size = min(preferred_font_size, max(9.0, (area_h - 2.0) / 1.45))
+        leading = font_size * 1.2
+        vertical_padding = max(
+            1.0,
+            min(font_size * 0.25, (area_h - font_size) * 0.5),
+        )
+        horizontal_padding = max(4.0, font_size * 0.55)
+        max_width = max(1.0, map_w - horizontal_padding * 2.0)
+        available_height = max(0.0, area_h - vertical_padding * 2.0)
+        max_lines = max(
+            1,
+            int(max(0.0, available_height - font_size) // leading) + 1,
+        )
+        lines = wrapped_lines(block["text"], font_name, font_size, max_width)
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            if lines:
+                last = lines[-1]
+                while last and pdf.stringWidth(last + "...", font_name, font_size) > max_width:
+                    last = last[:-1]
+                lines[-1] = last + "..."
+        pdf.setFillColorRGB(0, 0, 0)
+        pdf.setFont(font_name, font_size)
+        baseline = page_h - top - vertical_padding - font_size
+        minimum = page_h - bottom + vertical_padding
+        for line in lines:
+            if baseline < minimum:
+                break
+            pdf.drawString(map_x + horizontal_padding, baseline, line)
+            baseline -= leading
+
+    page_margin = 12.0
+    draw_text_area(layout["header"], page_margin, map_y)
+    draw_text_area(layout["footer"], map_y + map_h, page_h - page_margin)
     pdf.showPage()
     pdf.save()
     return out.getvalue()
@@ -2648,7 +3606,12 @@ def api_map_sheets():
         "imageSize": {"width": int(decoded.shape[1]), "height": int(decoded.shape[0])},
     }
     try:
-        pdf_bytes = _draw_map_sheet_pdf(png_bytes, record, payload.get("pageSize"))
+        pdf_bytes = _draw_map_sheet_pdf(
+            png_bytes,
+            record,
+            payload.get("pageSize"),
+            payload.get("layout"),
+        )
         MAP_SHEETS_DIR.mkdir(parents=True, exist_ok=True)
         targets = {
             "png": MAP_SHEETS_DIR / f"{sheet_id}.png",
@@ -2713,6 +3676,18 @@ def api_map_sheet_pdf(sheet_id):
     )
 
 
+@app.route("/api/map-sheets/<sheet_id>/image", methods=["GET"])
+def api_map_sheet_image(sheet_id):
+    clean_id = _clean_map_sheet_id(sheet_id)
+    if not clean_id or not (MAP_SHEETS_DIR / f"{clean_id}.png").exists():
+        return jsonify({"ok": False, "error": "map_sheet_not_found"}), 404
+    response = send_from_directory(
+        MAP_SHEETS_DIR, f"{clean_id}.png", mimetype="image/png"
+    )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return response
+
+
 def _decode_map_sheet_camera_image(image_uri):
     match = re.fullmatch(r"data:image/(?:png|jpeg);base64,([A-Za-z0-9+/=\r\n]+)", str(image_uri or ""))
     if not match:
@@ -2773,7 +3748,11 @@ def _fit_reference_colors(reference, observed, valid):
     ref_sample = reference[::5, ::5][sample].astype(np.float32)
     obs_sample = observed[::5, ::5][sample].astype(np.float32)
     if len(ref_sample) < 100:
-        return reference.astype(np.float32)
+        identity = np.vstack([
+            np.eye(3, dtype=np.float32),
+            np.zeros((1, 3), dtype=np.float32),
+        ])
+        return reference.astype(np.float32), identity
     design = np.column_stack([ref_sample, np.ones(len(ref_sample), dtype=np.float32)])
     keep = np.ones(len(ref_sample), dtype=bool)
     coefficients = None
@@ -2786,12 +3765,468 @@ def _fit_reference_colors(reference, observed, valid):
         reference.astype(np.float32),
         np.ones((*reference.shape[:2], 1), dtype=np.float32),
     ], axis=2)
-    return np.clip(full_design @ coefficients, 0, 255)
+    return np.clip(full_design @ coefficients, 0, 255), coefficients
 
 
-def _extract_map_sheet_drawing(frame, reference, paper_corners, normalized_rects, threshold):
+# Calibrated against the sticker stock actually used in the workshops, by
+# clustering the ink of a photographed sheet. The printed stickers are much
+# lighter than ink-pen equivalents: the yellow measured L=242 against this
+# table's former mustard at L=183, which put it 60 Lab units away and let it
+# drift to white. Cyan had no entry at all and matched "white" from 58 away.
+DRAWING_COLOR_PALETTE = (
+    # Calibrated to the red marker, not to a saturated printer's red. Measured
+    # against the old #d3302f the marker sat 45 Lab units away but only 22 from
+    # pink, so the red path was filed as pink ink — and any pink sticker it ran
+    # under merged into it and was lost.
+    {"id": "red", "label": "Red", "color": "#eb6f73"},
+    {"id": "orange", "label": "Orange", "color": "#f59a4a"},
+    {"id": "yellow", "label": "Yellow", "color": "#f7ea55"},
+    {"id": "green", "label": "Green", "color": "#5ba24f"},
+    {"id": "cyan", "label": "Cyan", "color": "#4acfff"},
+    {"id": "blue", "label": "Blue", "color": "#3478d4"},
+    {"id": "purple", "label": "Purple", "color": "#8b58bd"},
+    {"id": "pink", "label": "Pink", "color": "#f05c8c"},
+    {"id": "black", "label": "Black", "color": "#252525"},
+    # White only ever reaches classification through the opaque-disc detector
+    # below, since white ink on white paper has no colour difference to find.
+    {"id": "white", "label": "White", "color": "#f0f0f0"},
+)
+
+
+def _drawing_hex_to_bgr(value):
+    value = str(value or "").lstrip("#")
+    return np.asarray([
+        int(value[4:6], 16),
+        int(value[2:4], 16),
+        int(value[0:2], 16),
+    ], dtype=np.uint8)
+
+
+def _drawing_bgr_to_hex(value):
+    blue, green, red = [int(round(float(channel))) for channel in value]
+    return f"#{red:02x}{green:02x}{blue:02x}"
+
+
+def _drawing_bgr_to_lab(value):
+    pixel = np.asarray(value, dtype=np.uint8).reshape(1, 1, 3)
+    return cv2.cvtColor(pixel, cv2.COLOR_BGR2LAB).reshape(3).astype(np.float32)
+
+
+def _fit_channel_response(reference, observed, valid):
+    """Per-channel gain and offset between the printed map and the photograph.
+
+    The full 3x3 fit above models the camera well *inside* the printed map's own
+    colour gamut, which is all it is asked to do. Inverting it to recover marker
+    ink extrapolates far outside that gamut: a saturated red stroke on a map of
+    greys and pale yellows came back as near-black, and every red mark was then
+    classified as black ink.
+
+    A per-channel gain through the origin predicts the reference less well but
+    extrapolates safely, because a printed map samples only the pale end of each
+    channel. Allowing the fit an intercept as well puts the line's slope at the
+    mercy of that narrow range, and applying it to ink four times darker
+    overshoots — enough to push half a blue circle into the purple class.
+    """
+    sample = valid[::5, ::5] > 0
+    reference_sample = reference[::5, ::5][sample].astype(np.float32)
+    observed_sample = observed[::5, ::5][sample].astype(np.float32)
+    gains = np.ones(3, dtype=np.float32)
+    if len(reference_sample) < 100:
+        return gains
+    for channel in range(3):
+        source = reference_sample[:, channel]
+        target = observed_sample[:, channel]
+        keep = source > 8.0
+        for _ in range(4):
+            if int(np.count_nonzero(keep)) < 50:
+                break
+            gain = float(
+                np.dot(source[keep], target[keep]) / max(1e-6, np.dot(source[keep], source[keep]))
+            )
+            residual = np.abs(source * gain - target)
+            cutoff = float(np.quantile(residual[keep], 0.82))
+            keep = (source > 8.0) & (residual <= max(3.0, cutoff))
+            gains[channel] = gain
+    return np.clip(gains, 0.35, 2.8)
+
+
+def _correct_photographed_colors(observed, gains):
+    """Map photographed BGR values back into the clean digital colour space."""
+    return np.clip(observed.astype(np.float32) / gains, 0, 255).astype(np.uint8)
+
+
+def _segment_map_sheet_drawing_colors(alpha, corrected_bgr):
+    """Classify detected ink while retaining colours outside the known palette.
+
+    Components made from one colour receive one stable class. If two recognised
+    pen colours touch, confident core pixels split the component before it is
+    vectorised. Colours too far from the named palette are grouped by perceptual
+    Lab distance and retained as an ``Other`` colour instead of being forced
+    into a wrong class.
+    """
+    palette = []
+    for item in DRAWING_COLOR_PALETTE:
+        bgr = _drawing_hex_to_bgr(item["color"])
+        palette.append({
+            **item,
+            "bgr": bgr,
+            "lab": _drawing_bgr_to_lab(bgr),
+            "named": True,
+        })
+
+    binary = np.where(alpha >= 24, 255, 0).astype(np.uint8)
+    component_count, component_labels, component_stats, _ = (
+        cv2.connectedComponentsWithStats(binary, 8)
+    )
+    label_map = np.full(alpha.shape, -1, dtype=np.int16)
+    classes = list(palette)
+    named_labs = np.asarray([item["lab"] for item in palette], dtype=np.float32)
+    corrected_lab = cv2.cvtColor(corrected_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+    named_limit = 58.0
+    other_merge_limit = 28.0
+
+    def add_or_find_other(representative_bgr, representative_lab):
+        for index in range(len(palette), len(classes)):
+            distance = float(np.linalg.norm(classes[index]["lab"] - representative_lab))
+            if distance <= other_merge_limit:
+                return index
+        color = _drawing_bgr_to_hex(representative_bgr)
+        other_number = len(classes) - len(palette) + 1
+        classes.append({
+            "id": f"other-{other_number}",
+            "label": f"Other {color.upper()}",
+            "color": color,
+            "bgr": np.asarray(representative_bgr, dtype=np.uint8),
+            "lab": np.asarray(representative_lab, dtype=np.float32),
+            "named": False,
+        })
+        return len(classes) - 1
+
+    for component in range(1, component_count):
+        if int(component_stats[component, cv2.CC_STAT_AREA]) < 14:
+            continue
+        component_mask = component_labels == component
+        component_alpha = alpha[component_mask]
+        if not component_alpha.size:
+            continue
+        core_cutoff = max(48.0, float(np.quantile(component_alpha, 0.58)))
+        core_mask = component_mask & (alpha >= core_cutoff)
+        if int(np.count_nonzero(core_mask)) < 6:
+            core_mask = component_mask
+
+        core_labs = corrected_lab[core_mask]
+        core_bgrs = corrected_bgr[core_mask]
+        distances = np.linalg.norm(
+            core_labs[:, None, :] - named_labs[None, :, :], axis=2
+        )
+        nearest = np.argmin(distances, axis=1)
+        nearest_distance = distances[np.arange(len(nearest)), nearest]
+        confident = nearest_distance <= named_limit
+
+        # Dark, nearly neutral ink is reliably black even when its Lab distance
+        # is enlarged by paper glare or JPEG compression.
+        black_index = next(
+            index for index, item in enumerate(palette) if item["id"] == "black"
+        )
+        dark = (core_labs[:, 0] <= 108) & (
+            np.linalg.norm(core_labs[:, 1:] - 128.0, axis=1) <= 38
+        )
+        nearest[dark] = black_index
+        confident[dark] = True
+
+        counts = np.bincount(nearest[confident], minlength=len(palette))
+        # Split readily. Stickers are placed in overlapping clusters and each one
+        # is a flat colour, so the seam between two of them is a colour change
+        # and this split is the only thing that tells them apart. Paths used to
+        # need the opposite — a warm marker scatters across red, orange and pink,
+        # and splitting shattered it — but paths are now grouped without
+        # reference to colour at all, so there is nothing left to protect.
+        significant_minimum = max(10, int(round(len(core_labs) * 0.10)))
+        significant = np.flatnonzero(counts >= significant_minimum)
+
+        if len(significant) >= 2:
+            # Two distinct colours meet here. Split every component
+            # pixel by the recognised centres instead of collapsing the
+            # crossing into one colour.
+            component_labs = corrected_lab[component_mask]
+            split_distances = np.linalg.norm(
+                component_labs[:, None, :] - named_labs[significant][None, :, :],
+                axis=2,
+            )
+            split_labels = significant[np.argmin(split_distances, axis=1)]
+            label_map[component_mask] = split_labels.astype(np.int16)
+            continue
+
+        if np.any(confident):
+            dominant = int(np.argmax(counts))
+            confidence_ratio = float(counts[dominant]) / max(1.0, float(len(core_labs)))
+            if confidence_ratio >= 0.34:
+                label_map[component_mask] = dominant
+                continue
+
+        representative_bgr = np.median(core_bgrs, axis=0).astype(np.uint8)
+        representative_lab = _drawing_bgr_to_lab(representative_bgr)
+        other_index = add_or_find_other(representative_bgr, representative_lab)
+        label_map[component_mask] = other_index
+
+    coloured_mask = np.zeros((*alpha.shape, 4), dtype=np.uint8)
+    public_classes = []
+    for index, item in enumerate(classes):
+        pixels = (label_map == index) & (alpha > 0)
+        pixel_count = int(np.count_nonzero(pixels))
+        if not pixel_count:
+            continue
+        coloured_mask[pixels, :3] = item["bgr"]
+        coloured_mask[pixels, 3] = alpha[pixels]
+        public_classes.append({
+            "id": item["id"],
+            "label": item["label"],
+            "color": item["color"],
+            "pixels": pixel_count,
+            "named": bool(item["named"]),
+            # Published so the page can decode the per-pixel class mask, which
+            # carries this index rather than the colour itself.
+            "index": index,
+            "_index": index,
+        })
+
+    # Paths are only ever red or black, and are snapped to one of the two later.
+    # Both entries have to exist for that snap to have somewhere to land, even
+    # when no pixel was classified into them — a red path whose ink drifted into
+    # the pink bin still has to come out labelled red.
+    present = {item["id"] for item in public_classes}
+    for index, item in enumerate(palette):
+        if item["id"] in ("red", "black") and item["id"] not in present:
+            public_classes.append({
+                "id": item["id"],
+                "label": item["label"],
+                "color": item["color"],
+                "pixels": 0,
+                "named": True,
+                "index": index,
+                "_index": index,
+            })
+
+    return {
+        "mask": coloured_mask,
+        "labelMap": label_map,
+        "classes": public_classes,
+    }
+
+
+# The rectified working image used to be a fixed 1000x707. That threw away half
+# of the saved reference's own resolution and left a fine pen line only one or
+# two pixels wide, which is why thin strokes kept dropping out. Working at the
+# reference's native size keeps the printed detail the subtraction compares
+# against and avoids resampling the reference at all.
+MAP_SHEET_RECTIFIED_MIN_PX = 1000
+MAP_SHEET_RECTIFIED_MAX_PX = 2400
+
+# A misregistered printed label differs from the reference almost entirely in
+# luminance; marker ink differs in chroma. Weighting the Lab axes accordingly
+# suppresses registration ghosts without losing coloured strokes, and black ink
+# still passes easily because its luminance delta is enormous to begin with.
+MAP_SHEET_LUMINANCE_WEIGHT = 0.42
+MAP_SHEET_CHROMA_WEIGHT = 1.25
+
+# Printed sticker diameter as a fraction of the sheet width. Used as a size
+# prior when telling a filled disc apart from a pen stroke.
+MAP_SHEET_STICKER_DIAMETER_FRACTION = 0.019
+
+# Kinds a blob of ink can be, and the value each one is stamped with in the
+# per-pixel class mask the page uses to filter the overlay.
+MAP_SHEET_KIND_CODES = {"sticker": 1, "line": 2, "area": 3}
+
+
+def _rectified_output_size(reference):
+    """Rectify at the reference's own resolution, clamped to a sane range."""
+    height, width = reference.shape[:2]
+    if width <= 0 or height <= 0:
+        return 1000, 707
+    output_width = int(min(
+        MAP_SHEET_RECTIFIED_MAX_PX, max(MAP_SHEET_RECTIFIED_MIN_PX, width)
+    ))
+    output_height = int(max(2, round(output_width * height / float(width))))
+    return output_width, output_height
+
+
+def _refine_rectified_alignment(observed, predicted, valid):
+    """Sub-pixel homography touch-up after the AprilTag registration.
+
+    Three or four tags recover the page pose, but on a street map dense with
+    printed text a two- to five-pixel residual is normal, and every misregistered
+    label edge then reads as fresh ink. Aligning the whole rectified image
+    against the reference render is what lets the neighbourhood search below
+    shrink from 5x5 to 3x3 and keeps the difference threshold low enough for
+    thin strokes to survive.
+    """
+    height, width = observed.shape[:2]
+    scale = min(1.0, 900.0 / float(max(width, height)))
+    small = (max(32, int(round(width * scale))), max(32, int(round(height * scale))))
+
+    def prepare(image):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, small, interpolation=cv2.INTER_AREA)
+        return cv2.GaussianBlur(gray.astype(np.float32), (0, 0), 1.2)
+
+    template = prepare(np.clip(predicted, 0, 255).astype(np.uint8))
+    moving = prepare(observed)
+    mask_small = cv2.resize(valid, small, interpolation=cv2.INTER_NEAREST)
+
+    warp = np.eye(3, dtype=np.float32)
+    try:
+        cv2.findTransformECC(
+            template, moving, warp, cv2.MOTION_HOMOGRAPHY,
+            (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 60, 1e-6),
+            mask_small, 5,
+        )
+    except cv2.error:
+        return observed, False
+    if not np.isfinite(warp).all():
+        return observed, False
+
+    # Undo the downscale: with S the scale matrix, the full-size warp is S^-1.W.S
+    to_small = np.asarray([
+        [small[0] / float(width), 0.0, 0.0],
+        [0.0, small[1] / float(height), 0.0],
+        [0.0, 0.0, 1.0],
+    ], dtype=np.float32)
+    try:
+        full_warp = np.linalg.inv(to_small) @ warp @ to_small
+    except np.linalg.LinAlgError:
+        return observed, False
+
+    # A refinement is a nudge. Anything that moves a corner by more than a small
+    # fraction of the page means ECC locked onto the wrong minimum, and warping
+    # by it would be far worse than leaving the tag registration alone.
+    probe = np.asarray([
+        [[0, 0]], [[width - 1, 0]], [[width - 1, height - 1]], [[0, height - 1]],
+    ], dtype=np.float32)
+    moved = cv2.perspectiveTransform(probe, full_warp).reshape(-1, 2)
+    shift = float(np.max(np.linalg.norm(moved - probe.reshape(-1, 2), axis=1)))
+    if not math.isfinite(shift) or shift > max(6.0, width * 0.02):
+        return observed, False
+
+    aligned = cv2.warpPerspective(
+        observed, full_warp, (width, height),
+        flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+    return aligned, True
+
+
+def _local_stddev(gray, ksize):
+    mean = cv2.blur(gray, (ksize, ksize))
+    mean_square = cv2.blur(gray * gray, (ksize, ksize))
+    return np.sqrt(np.clip(mean_square - mean * mean, 0.0, None))
+
+
+def _opaque_disc_mask(observed, predicted, valid, sticker_radius):
+    """Find opaque round stickers that colour subtraction cannot see.
+
+    A white sticker on white paper produces almost no Lab difference, yet it
+    still hides whatever the reference printed underneath. Detecting that loss
+    of printed detail — high local contrast in the reference, flat in the photo
+    — finds it whatever its colour. The result is deliberately restricted to
+    disc-shaped blobs of roughly the printed sticker size, so a blurry or badly
+    shadowed photo cannot turn this into a second, noisy ink channel.
+    """
+    empty = np.zeros(observed.shape[:2], dtype=np.uint8)
+    if sticker_radius < 3.0:
+        return empty
+    observed_gray = cv2.cvtColor(observed, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    predicted_gray = cv2.cvtColor(
+        np.clip(predicted, 0, 255).astype(np.uint8), cv2.COLOR_BGR2GRAY
+    ).astype(np.float32)
+
+    window = max(5, (int(round(sticker_radius * 0.75)) | 1))
+    predicted_std = _local_stddev(predicted_gray, window)
+    observed_std = _local_stddev(observed_gray, window)
+
+    detail = predicted_std >= 14.0                  # the reference printed something here
+    flattened = observed_std <= predicted_std * 0.42
+    candidate = ((detail & flattened) & (valid > 0)).astype(np.uint8) * 255
+    if not np.count_nonzero(candidate):
+        return empty
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (window, window))
+    candidate = cv2.morphologyEx(candidate, cv2.MORPH_CLOSE, kernel)
+    candidate = cv2.morphologyEx(candidate, cv2.MORPH_OPEN, kernel)
+
+    keep = np.zeros_like(candidate)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(candidate, 8)
+    minimum_area = math.pi * (sticker_radius * 0.45) ** 2
+    maximum_area = math.pi * (sticker_radius * 2.2) ** 2
+    for label in range(1, count):
+        area = float(stats[label, cv2.CC_STAT_AREA])
+        if not minimum_area <= area <= maximum_area:
+            continue
+        blob = (labels == label).astype(np.uint8)
+        contours, _ = cv2.findContours(blob, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+        contour = max(contours, key=cv2.contourArea)
+        perimeter = float(cv2.arcLength(contour, True))
+        if perimeter <= 0:
+            continue
+        circularity = 4.0 * math.pi * area / (perimeter * perimeter)
+        hull_area = abs(float(cv2.contourArea(cv2.convexHull(contour))))
+        fill = area / hull_area if hull_area > 0 else 0.0
+        if circularity >= 0.68 and fill >= 0.82:
+            keep[labels == label] = 255
+    return keep
+
+
+# Paths are accepted at this fraction of the sticker threshold, because the two
+# are not equally visible against the printed map.
+MAP_SHEET_PATH_THRESHOLD_RATIO = 0.62
+
+
+def _path_ink_masks(corrected_bgr, score, valid, threshold, speckle_area):
+    """One mask per pen colour: the black paths, and the red paths.
+
+    Kept apart rather than merged. Where a red route and a black route run
+    alongside each other — which participants do constantly — a single combined
+    mask joins them into one blob, and whichever colour has fewer pixels loses
+    its identity to a majority vote. Traced separately, each is simply itself,
+    and no vote is needed at all.
+
+    Splitting also lets the threshold drop below the sticker-grade one: a path
+    is only ever black or red, so the extra sensitivity cannot pull in ink of
+    any other hue.
+    """
+    lab = cv2.cvtColor(corrected_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    lightness = lab[:, :, 0]
+    green_red = lab[:, :, 1] - 128.0
+    blue_yellow = lab[:, :, 2] - 128.0
+    chroma = np.sqrt(green_red * green_red + blue_yellow * blue_yellow)
+    hue = (np.degrees(np.arctan2(blue_yellow, green_red)) + 360.0) % 360.0
+
+    path_threshold = max(6.0, float(threshold) * MAP_SHEET_PATH_THRESHOLD_RATIO)
+    strong = (score.astype(np.float32) >= path_threshold) & (valid > 0)
+
+    def cleaned(mask):
+        alpha = np.where(mask & strong, 255, 0).astype(np.uint8)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(alpha, 8)
+        if count <= 1:
+            return np.zeros_like(alpha)
+        keep = np.flatnonzero(stats[1:, cv2.CC_STAT_AREA] >= speckle_area) + 1
+        alpha[~np.isin(labels, keep)] = 0
+        return alpha
+
+    return {
+        "black": cleaned((chroma < 26.0) & (lightness < 170.0)),
+        "red": cleaned((chroma >= 26.0) & ((hue >= 340.0) | (hue <= 45.0))),
+    }
+
+
+def _extract_map_sheet_drawing(
+    frame, reference, paper_corners, normalized_rects, threshold,
+    sticker_fraction=None,
+):
     """Return an alpha mask for ink that is absent from the saved clean map."""
-    output_width, output_height = 1000, 707
+    output_width, output_height = _rectified_output_size(reference)
     destination = np.asarray([
         [0, 0], [output_width - 1, 0],
         [output_width - 1, output_height - 1], [0, output_height - 1],
@@ -2801,13 +4236,27 @@ def _extract_map_sheet_drawing(frame, reference, paper_corners, normalized_rects
         frame, camera_to_map, (output_width, output_height),
         flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE,
     )
-    clean = cv2.resize(reference, (output_width, output_height), interpolation=cv2.INTER_AREA)
+    if reference.shape[:2] == (output_height, output_width):
+        clean = reference
+    else:
+        clean = cv2.resize(
+            reference, (output_width, output_height), interpolation=cv2.INTER_AREA
+        )
     valid = _map_sheet_exclusion_mask(output_width, output_height, normalized_rects)
 
-    predicted = _fit_reference_colors(clean, observed, valid)
+    predicted, _ = _fit_reference_colors(clean, observed, valid)
+    observed, refined = _refine_rectified_alignment(observed, predicted, valid)
+    if refined:
+        # Re-fit the colours on the corrected geometry; the first fit only
+        # existed to give ECC a photometrically comparable template.
+        predicted, _ = _fit_reference_colors(clean, observed, valid)
+
+    resolution_scale = output_width / 1000.0
     observed_float = observed.astype(np.float32)
     # Remove slow lighting/shadow changes while retaining narrow pen strokes.
-    illumination = cv2.GaussianBlur(observed_float - predicted, (0, 0), 28.0)
+    illumination = cv2.GaussianBlur(
+        observed_float - predicted, (0, 0), 28.0 * resolution_scale
+    )
     normalized_observed = np.clip(observed_float - illumination, 0, 255).astype(np.uint8)
     predicted_u8 = np.clip(predicted, 0, 255).astype(np.uint8)
 
@@ -2818,33 +4267,96 @@ def _extract_map_sheet_drawing(frame, reference, paper_corners, normalized_rects
         cv2.GaussianBlur(predicted_u8, (3, 3), 0), cv2.COLOR_BGR2LAB
     ).astype(np.float32)
 
-    # A 5x5 neighbourhood minimum prevents a one- or two-pixel registration
-    # error around printed roads/text from becoming a false drawing contour.
-    padded = cv2.copyMakeBorder(predicted_lab, 2, 2, 2, 2, cv2.BORDER_REPLICATE)
-    best_distance = np.full((output_height, output_width), np.inf, dtype=np.float32)
-    for offset_y in range(5):
-        for offset_x in range(5):
-            shifted = padded[offset_y:offset_y + output_height, offset_x:offset_x + output_width]
-            difference = observed_lab - shifted
-            distance = np.sqrt(np.sum(difference * difference, axis=2))
-            best_distance = np.minimum(best_distance, distance)
+    # Score each pixel by how far it falls outside the range of colours the
+    # reference has nearby, rather than against the single colour underneath it.
+    # Printed edges soften differently in a photograph than in the reference
+    # render, and the resulting halo is always a blend of colours already
+    # present around it — so it lands inside the local range and scores zero,
+    # while ink introduces a colour that simply is not there. Erode/dilate give
+    # that range in constant time, which is what makes a generous radius
+    # affordable; the previous shift search cost forty times as much and found
+    # more false edges. A wider radius covers the leftover registration error
+    # when ECC could not refine the alignment.
+    radius = int(min(8, max(2, round((2.0 if refined else 3.5) * resolution_scale))))
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1)
+    )
+    lowest = cv2.erode(predicted_lab, kernel)
+    highest = cv2.dilate(predicted_lab, kernel)
+    outside = (
+        np.maximum(observed_lab - highest, 0.0) + np.maximum(lowest - observed_lab, 0.0)
+    ) * np.asarray([
+        MAP_SHEET_LUMINANCE_WEIGHT, MAP_SHEET_CHROMA_WEIGHT, MAP_SHEET_CHROMA_WEIGHT,
+    ], dtype=np.float32)
+    best_distance = np.sqrt(np.einsum("ijk,ijk->ij", outside, outside))
 
     best_distance[valid == 0] = 0
     score = np.clip(best_distance, 0, 255).astype(np.uint8)
-    score = cv2.medianBlur(score, 3)
+    score = cv2.medianBlur(score, 3 if output_width <= 1200 else 5)
     threshold = max(5.0, min(100.0, float(threshold)))
     alpha = np.clip((score.astype(np.float32) - threshold) * (255.0 / 18.0), 0, 255).astype(np.uint8)
 
     # Eliminate isolated JPEG/halftone speckles but retain connected pen lines.
+    # The area floor tracks resolution so it stays the same physical size.
+    speckle_area = max(14, int(round(14.0 * resolution_scale * resolution_scale)))
     binary = np.where(alpha >= 24, 255, 0).astype(np.uint8)
     count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
-    keep_mask = np.zeros_like(binary)
-    for label in range(1, count):
-        if int(stats[label, cv2.CC_STAT_AREA]) >= 14:
-            keep_mask[labels == label] = 255
-    alpha[keep_mask == 0] = 0
+    if count > 1:
+        areas = stats[1:, cv2.CC_STAT_AREA].astype(np.float32)
+        # A misregistered printed label leaves a weak echo just over the
+        # threshold; real ink clears it by a wide margin. Requiring a small blob
+        # to contain a confident core removes those ghosts without touching a
+        # faint-but-large stroke, which a higher global threshold would erase.
+        confident = np.bincount(
+            labels[alpha >= 250].ravel(), minlength=count
+        )[1:].astype(np.float32)
+        strong_enough = confident >= np.maximum(6.0, areas * 0.18)
+        obviously_real = areas >= speckle_area * 24.0
+        keep_labels = np.flatnonzero(
+            (areas >= speckle_area) & (strong_enough | obviously_real)
+        ) + 1
+        alpha[~np.isin(labels, keep_labels)] = 0
+    else:
+        alpha[:] = 0
+
+    sticker_diameter = max(6.0, float(
+        sticker_fraction if sticker_fraction else MAP_SHEET_STICKER_DIAMETER_FRACTION
+    ) * output_width)
+    occluded = _opaque_disc_mask(
+        normalized_observed, predicted, valid, sticker_diameter / 2.0
+    )
+    if np.count_nonzero(occluded):
+        alpha = np.maximum(alpha, occluded)
+
     alpha[valid == 0] = 0
-    return alpha
+    corrected_bgr = _correct_photographed_colors(
+        normalized_observed, _fit_channel_response(clean, normalized_observed, valid)
+    )
+
+    # A sticker is opaque and saturated; a path is a marker stroke that can be
+    # thin, or drawn lightly enough to let the map show through. Measured on a
+    # real sheet the two sit well apart — stickers score a median of 58 against
+    # the reference, paths 42, blank paper 1 — so one threshold serves them
+    # badly: set for stickers it clips the faint end of every stroke.
+    #
+    # Paths get their own, lower threshold, made safe by the fact that only two
+    # pen colours exist. Requiring a pixel to be near-neutral dark or in the red
+    # band keeps the extra sensitivity from turning into map noise.
+    path_masks = _path_ink_masks(
+        corrected_bgr, score, valid, threshold, speckle_area
+    )
+
+    info = {
+        "width": output_width,
+        "height": output_height,
+        "eccRefined": bool(refined),
+        "searchRadius": radius,
+        "stickerDiameterPx": round(sticker_diameter, 2),
+        "occludedPixels": int(np.count_nonzero(occluded)),
+        "pathThreshold": round(max(6.0, threshold * MAP_SHEET_PATH_THRESHOLD_RATIO), 1),
+        "pathPixels": {k: int(np.count_nonzero(v)) for k, v in path_masks.items()},
+    }
+    return alpha, corrected_bgr, path_masks, info
 
 
 @app.route("/api/map-sheet-registration", methods=["POST"])
@@ -2958,27 +4470,54 @@ def api_map_sheet_drawing():
         frame = _decode_map_sheet_camera_image(payload.get("image"))
         paper_corners = _clean_camera_quad(payload.get("paperCorners"), frame.shape)
         threshold = float(payload.get("threshold", 28))
+        sticker_fraction = _clean_sticker_fraction(payload.get("stickerFraction"))
         if not math.isfinite(threshold):
             raise ValueError("invalid_threshold")
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
+    want_semantics = bool(payload.get("semantics", True))
     try:
         record = json.loads(record_path.read_text(encoding="utf-8"))
         normalized_rects = (record.get("print") or {}).get("maskRectsNormalized") or []
+        corners = _clean_lnglat_corners(record.get("corners"))
         reference = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     except (OSError, ValueError, TypeError):
         return jsonify({"ok": False, "error": "map_sheet_reference_unreadable"}), 500
     if reference is None:
         return jsonify({"ok": False, "error": "map_sheet_reference_unreadable"}), 500
+    semantics = None
     try:
-        alpha = _extract_map_sheet_drawing(
-            frame, reference, paper_corners, normalized_rects, threshold
+        alpha, corrected_bgr, path_masks, info = _extract_map_sheet_drawing(
+            frame, reference, paper_corners, normalized_rects, threshold,
+            sticker_fraction=sticker_fraction,
         )
+        segmentation = _segment_map_sheet_drawing_colors(alpha, corrected_bgr)
+        if want_semantics:
+            semantics = _vectorise_drawing(
+                alpha, corners, 0.002, segmentation=segmentation,
+                corrected_bgr=corrected_bgr,
+                sticker_diameter=info["stickerDiameterPx"],
+                path_masks=path_masks,
+            )
         mask = np.full((*alpha.shape, 4), 255, dtype=np.uint8)
         mask[:, :, 3] = alpha
         encoded_ok, encoded = cv2.imencode(".png", mask)
         if not encoded_ok:
             raise RuntimeError("drawing_mask_encode_failed")
+        colour_encoded_ok, colour_encoded = cv2.imencode(
+            ".png", segmentation["mask"]
+        )
+        if not colour_encoded_ok:
+            raise RuntimeError("drawing_colour_mask_encode_failed")
+        class_mask_uri = None
+        if semantics is not None:
+            class_ok, class_encoded = cv2.imencode(".png", semantics["classMask"])
+            if not class_ok:
+                raise RuntimeError("drawing_class_mask_encode_failed")
+            class_mask_uri = (
+                "data:image/png;base64,"
+                + base64.b64encode(class_encoded.tobytes()).decode("ascii")
+            )
     except (cv2.error, np.linalg.LinAlgError, RuntimeError, ValueError):
         logging.exception("Could not subtract the printable map reference")
         return jsonify({"ok": False, "error": "drawing_detection_failed"}), 500
@@ -2989,7 +4528,22 @@ def api_map_sheet_drawing():
         "height": int(alpha.shape[0]),
         "inkPixels": int(np.count_nonzero(alpha)),
         "mask": "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode("ascii"),
-        "method": "registered-reference-subtraction",
+        "colorMask": (
+            "data:image/png;base64,"
+            + base64.b64encode(colour_encoded.tobytes()).decode("ascii")
+        ),
+        "colors": [
+            {key: value for key, value in item.items() if not key.startswith("_")}
+            for item in segmentation["classes"]
+        ],
+        "alignment": info,
+        "counts": semantics["counts"] if semantics else None,
+        "stickerColors": semantics["stickerColors"] if semantics else [],
+        "markers": semantics["markers"] if semantics else [],
+        "paths": semantics["paths"] if semantics else [],
+        "classMask": class_mask_uri,
+        "kindCodes": MAP_SHEET_KIND_CODES,
+        "method": "ecc-refined-reference-subtraction+shape-typed-segmentation",
     })
 
 
@@ -3019,42 +4573,934 @@ def _rectified_pixel_to_lnglat(corners, width, height):
     return to_lnglat
 
 
-def _drawing_alpha_to_geojson(alpha, corners, simplify):
-    """Trace the ink mask into simplified geographic polygons.
+# ---------------------------------------------------------------------------
+# Drawing semantics: deciding what each blob of ink actually is
+# ---------------------------------------------------------------------------
+#
+# Two things are looked for: the drawn path, and the stickers placed on it.
+# Colour cannot make that call — the path is drawn in whatever dark marker came
+# to hand and its ink drifts between grey, brown and black along a single
+# stroke, so grouping by colour only ever tore one path into pieces. Shape makes
+# it instead. Three descriptors carry almost all the signal: how much of its own
+# convex hull a blob fills (a sticker is solid, a stroke and a ring are not),
+# how thin it is, and how long its skeleton is relative to that width. Colour is
+# then read off each finished sticker, which is where it genuinely means
+# something. It stays deterministic throughout — no model is involved.
+#
+# Pen annotations are deliberately not detected. They are thin enough that
+# separating them from the printed map is unreliable, and guessing produced
+# worse results than leaving them out.
 
-    Douglas-Peucker (approxPolyDP) is applied in pixel space before projecting,
-    so the tolerance stays a predictable fraction of each shape's own perimeter
-    rather than varying with the sheet's geographic extent.
+def _skeleton_crossing_number(skeleton):
+    """Count how many separate strands meet at each skeleton pixel.
+
+    Simply counting the eight neighbours does not work: where a one-pixel-wide
+    line steps diagonally it touches three of them, and a plain circle was
+    arriving with thirty-two "junctions" that were only staircase steps. Walking
+    the ring of neighbours and counting 0->1 transitions gives 1 at a loose end,
+    2 along a line — staircase or not — and 3 or more only where strands really
+    branch.
     """
-    binary = np.where(alpha >= 24, 255, 0).astype(np.uint8)
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    padded = np.pad(skeleton.astype(np.uint8), 1)
+    height, width = skeleton.shape
+
+    def shifted(offset_y, offset_x):
+        return padded[1 + offset_y:1 + offset_y + height,
+                      1 + offset_x:1 + offset_x + width]
+
+    ring = [
+        shifted(-1, 0), shifted(-1, 1), shifted(0, 1), shifted(1, 1),
+        shifted(1, 0), shifted(1, -1), shifted(0, -1), shifted(-1, -1),
+    ]
+    crossings = np.zeros((height, width), dtype=np.uint8)
+    for index in range(8):
+        crossings += (
+            (ring[index] == 0) & (ring[(index + 1) % 8] == 1)
+        ).astype(np.uint8)
+    return crossings * skeleton
+
+
+def _skeletonize(binary):
+    """Thin a 0/255 mask down to a single-pixel-wide skeleton."""
+    if hasattr(cv2, "ximgproc"):
+        try:
+            thinned = cv2.ximgproc.thinning(
+                binary, thinningType=cv2.ximgproc.THINNING_ZHANGSUEN
+            )
+            return thinned > 0
+        except (cv2.error, AttributeError):
+            pass
+    try:
+        from skimage.morphology import skeletonize as _skimage_skeletonize
+    except ImportError:
+        return binary > 0
+    return np.asarray(_skimage_skeletonize(binary > 0), dtype=bool)
+
+
+
+
+def _path_length(path):
+    if len(path) < 2:
+        return 0.0
+    points = np.asarray(path, dtype=np.float32)
+    return float(np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1)))
+
+
+def _trace_skeleton_edges(skeleton):
+    """Split a skeleton into ordered pixel runs between endpoints/junctions.
+
+    Points are kept in (row, column) order throughout and only flipped to (x, y)
+    at emission time.
+    """
+    crossings = _skeleton_crossing_number(skeleton)
+    points = {(int(y), int(x)) for y, x in zip(*np.nonzero(skeleton))}
+    if not points:
+        return []
+
+    def neighbours(point):
+        y, x = point
+        found = []
+        for offset_y in (-1, 0, 1):
+            for offset_x in (-1, 0, 1):
+                if offset_y == 0 and offset_x == 0:
+                    continue
+                candidate = (y + offset_y, x + offset_x)
+                if candidate in points:
+                    found.append(candidate)
+        return found
+
+    nodes = {point for point in points if int(crossings[point]) != 2}
+    edges = []
+    walked = set()
+    # A pixel along a strand belongs to exactly one edge. Consuming it as the
+    # walk passes stops a diagonal step, whose two pixels are neighbours of each
+    # other, from sending the walk back down the strand it just came along.
+    consumed = set()
+
+    def follow(first, second):
+        path = [first]
+        previous, current = first, second
+        while True:
+            path.append(current)
+            if current in nodes:
+                break
+            consumed.add(current)
+            onward = [
+                point for point in neighbours(current)
+                if point != previous and (point in nodes or point not in consumed)
+            ]
+            if not onward:
+                break
+            previous, current = current, onward[0]
+        return path
+
+    for node in nodes:
+        for start in neighbours(node):
+            if (node, start) in walked or (start not in nodes and start in consumed):
+                continue
+            walked.add((node, start))
+            path = follow(node, start)
+            if len(path) >= 2:
+                walked.add((path[-1], path[-2]))
+                edges.append(path)
+
+    # A closed loop has no loose end or branch at all, so the walk above never
+    # starts on one. Pick any pixel it did not reach and go round.
+    for point in points:
+        if point in consumed or point in nodes:
+            continue
+        neighbourhood = neighbours(point)
+        if not neighbourhood:
+            continue
+        consumed.add(point)
+        path = follow(point, neighbourhood[0])
+        if len(path) >= 3:
+            if math.dist(path[-1], point) <= 1.5:
+                path.append(point)      # it came back round: close the ring
+            edges.append(path)
+
+    return edges
+
+
+def _edge_direction(path, at_end):
+    """Unit vector pointing outwards from the requested end of a path."""
+    points = np.asarray(path, dtype=np.float32)
+    sample = min(len(points) - 1, 8)
+    if sample < 1:
+        return np.zeros(2, dtype=np.float32)
+    vector = points[-1] - points[-1 - sample] if at_end else points[0] - points[sample]
+    norm = float(np.linalg.norm(vector))
+    return vector / norm if norm > 1e-6 else np.zeros(2, dtype=np.float32)
+
+
+def _resample_path(points, spacing):
+    """Even out a traced centre-line to one point every `spacing` pixels.
+
+    A raw skeleton walk is a staircase of single-pixel steps, and its bridges
+    are long straight jumps, so the exported line has wildly uneven vertex
+    density. Sampling at a fixed interval gives a polyline that reads the same
+    everywhere and is far smaller.
+    """
+    if len(points) < 2:
+        return list(points)
+    walk = np.asarray(points, dtype=np.float64)
+    steps = np.linalg.norm(np.diff(walk, axis=0), axis=1)
+    total = float(steps.sum())
+    if total <= spacing:
+        return [points[0], points[-1]]
+    milestones = np.concatenate([[0.0], np.cumsum(steps)])
+    wanted = np.arange(0.0, total, spacing)
+    wanted = np.append(wanted, total)
+    segment = np.clip(np.searchsorted(milestones, wanted, side="right") - 1,
+                      0, len(steps) - 1)
+    along = (wanted - milestones[segment]) / np.maximum(steps[segment], 1e-9)
+    sampled = walk[segment] + (walk[segment + 1] - walk[segment]) * along[:, None]
+    return [(float(p[0]), float(p[1])) for p in sampled]
+
+
+def _bridge_over_occlusion(chains, blocked, sticker_diameter, straightness=0.45):
+    """Rejoin path chains whose gap is explained by something lying on top.
+
+    Stickers are masked out before paths are traced, and participants put them
+    straight onto their routes, so each one punches a hole roughly its own
+    diameter wide. Measured on a real sheet, 47% of all path endpoints sat
+    against a removed sticker — they were not ends of anything, just holes.
+
+    Two loose ends are joined when the straight run between them is mostly
+    covered by whatever was removed and the two strokes are heading the same
+    way. Both conditions matter: distance alone would staple together lines
+    that merely stop near each other.
+    """
+    if blocked is None or len(chains) < 2:
+        return chains
+    # Two allowances, because breaks have two causes. A stroke that simply went
+    # faint leaves a short gap over blank map, so that one is kept tight. A gap
+    # explained by something lying on the route may be long — participants place
+    # stickers in overlapping clusters, and the measured gaps on a real sheet
+    # ran 75 to 110px against a single sticker's 33px.
+    near_reach = sticker_diameter * 1.3
+    far_reach = sticker_diameter * 4.5
+    height, width = blocked.shape[:2]
+
+    def covered(a, b):
+        span = math.dist(a, b)
+        if span <= 1e-6:
+            return 1.0
+        steps = max(2, int(span))
+        hits = 0
+        for index in range(steps + 1):
+            t = index / steps
+            y = int(round(a[0] + (b[0] - a[0]) * t))
+            x = int(round(a[1] + (b[1] - a[1]) * t))
+            if 0 <= y < height and 0 <= x < width and blocked[y, x]:
+                hits += 1
+        return hits / (steps + 1)
+
+    working = [list(chain) for chain in chains]
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(working)):
+            if merged:
+                break
+            for j in range(len(working)):
+                if i == j:
+                    continue
+                for i_end in (True, False):
+                    for j_end in (True, False):
+                        a = working[i][-1] if i_end else working[i][0]
+                        b = working[j][-1] if j_end else working[j][0]
+                        span = math.dist(a, b)
+                        if span > far_reach:
+                            continue
+                        blocking = covered(a, b)
+                        if span > near_reach and blocking < 0.35:
+                            continue
+                        # A long bridge has to be better justified than a short
+                        # one, since it is asserting more about ink nobody can
+                        # see. Direction is what carries that justification:
+                        # the two strokes must genuinely continue each other.
+                        needed = straightness if span <= near_reach else 0.60
+                        heading = _edge_direction(working[i], i_end)
+                        entering = -_edge_direction(working[j], j_end)
+                        if float(np.dot(heading, entering)) < needed:
+                            continue
+                        first = working[i] if i_end else working[i][::-1]
+                        second = working[j] if not j_end else working[j][::-1]
+                        working[i] = first + second
+                        working.pop(j)
+                        merged = True
+                        break
+                    if merged:
+                        break
+                if merged:
+                    break
+    return working
+
+
+def _chain_skeleton_edges(edges, min_branch_px, straightness=0.55, bridge_px=None):
+    """Drop thinning spurs, then reconnect edges through junctions.
+
+    A route that crosses itself is cut into four stubs by the junction; joining
+    the pair that continues straight through puts it back together as one line.
+    Where a junction has only two edges the join is unconditional, so a sharp
+    corner in a route survives instead of being split at the bend.
+
+    Ends that merely land near each other are treated as meeting, because a
+    detected stroke is rarely unbroken: a two-pixel break at the top of a drawn
+    circle otherwise leaves two arcs that never rejoin, and the shape is read as
+    a line instead of the region the participant meant to enclose.
+    """
+    if not edges:
+        return []
+    if bridge_px is None:
+        bridge_px = min_branch_px
+    lengths = [_path_length(path) for path in edges]
+
+    terminal_cluster = {}
+    centres = []
+    for index, path in enumerate(edges):
+        for at_end, point in ((False, path[0]), (True, path[-1])):
+            assigned = None
+            for cluster, centre in enumerate(centres):
+                if math.dist(point, centre) <= bridge_px:
+                    assigned = cluster
+                    break
+            if assigned is None:
+                centres.append(point)
+                assigned = len(centres) - 1
+            terminal_cluster[(index, at_end)] = assigned
+
+    def build_incident(excluded):
+        incident = {}
+        for index in range(len(edges)):
+            if index in excluded:
+                continue
+            for at_end in (False, True):
+                incident.setdefault(
+                    terminal_cluster[(index, at_end)], []
+                ).append((index, at_end))
+        return incident
+
+    incident = build_incident(set())
+    dropped = {
+        index for index in range(len(edges))
+        if lengths[index] < min_branch_px and any(
+            len(incident.get(terminal_cluster[(index, at_end)], [])) <= 1
+            for at_end in (False, True)
+        )
+    }
+    incident = build_incident(dropped)
+
+    used = set()
+    chains = []
+    for index in range(len(edges)):
+        if index in dropped or index in used:
+            continue
+        used.add(index)
+        chain = list(edges[index])
+        tail = (index, True)
+        for pass_number in (0, 1):
+            if pass_number:
+                chain.reverse()
+                tail = (index, False)
+            while True:
+                attached = incident.get(terminal_cluster[tail], [])
+                options = [item for item in attached if item[0] not in used]
+                if not options:
+                    break
+                heading = _edge_direction(chain, True)
+                best, best_score = None, -2.0
+                for other, other_end in options:
+                    entering = -_edge_direction(edges[other], other_end)
+                    score = float(np.dot(heading, entering))
+                    if score > best_score:
+                        best, best_score = (other, other_end), score
+                if best is None:
+                    break
+                # Only a real junction has to justify the join by staying
+                # straight; a plain two-edge meeting is the same line either way.
+                if len(attached) > 2 and best_score < straightness:
+                    break
+                other, other_end = best
+                used.add(other)
+                extension = list(edges[other])
+                if other_end:
+                    extension.reverse()
+                if extension and extension[0] == chain[-1]:
+                    extension = extension[1:]
+                chain.extend(extension)
+                tail = (other, not other_end)
+        chains.append(chain)
+    return chains
+
+
+def _component_metrics(component, sticker_diameter, minimum_branch=None):
+    """Measure one connected blob of ink."""
+    if minimum_branch is None:
+        minimum_branch = max(4.0, sticker_diameter * 0.45)
+    if not np.count_nonzero(component):
+        return None
+
+    # Detection leaves ragged, pitted edges. Every pit becomes a skeleton spur
+    # and a false junction — a plain circle was arriving with thirty-two of them
+    # — and small gaps break a closed shape into an open arc. Closing the blob
+    # by roughly a pen-width fixes both before anything is measured.
+    bridge = max(3, int(round(sticker_diameter * 0.12)) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bridge, bridge))
+    smooth = cv2.morphologyEx(component, cv2.MORPH_CLOSE, kernel)
+    smooth = cv2.medianBlur(smooth, 3)
+    if not np.count_nonzero(smooth):
+        smooth = component
+
+    area = float(np.count_nonzero(smooth))
+    contours, _ = cv2.findContours(smooth, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours or area <= 0:
+        return None
+    contour = max(contours, key=cv2.contourArea)
+    perimeter = float(cv2.arcLength(contour, True))
+    hull_area = abs(float(cv2.contourArea(cv2.convexHull(contour))))
+    circularity = (
+        4.0 * math.pi * area / (perimeter * perimeter) if perimeter > 0 else 0.0
+    )
+    fill = area / hull_area if hull_area > 0 else 0.0
+
+    # Enclosed background, found by flooding inwards from outside the blob.
+    # Filling the outer contour instead reports nothing at all for a ring whose
+    # trace doubles back along the stroke.
+    bordered = cv2.copyMakeBorder(smooth, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    flooded = bordered.copy()
+    cv2.floodFill(
+        flooded,
+        np.zeros((bordered.shape[0] + 2, bordered.shape[1] + 2), dtype=np.uint8),
+        (0, 0), 255,
+    )
+    hole_area = float(np.count_nonzero(flooded == 0))
+    filled_area = area + hole_area
+
+    distance = cv2.distanceTransform(smooth, cv2.DIST_L2, 5)
+    skeleton = _skeletonize(smooth)
+    ridge = distance[skeleton]
+    # The distance transform on the skeleton is half the local stroke width.
+    stroke_width = 2.0 * float(np.median(ridge)) if ridge.size else 1.0
+    stroke_width = max(1.0, stroke_width)
+    inscribed_radius = float(distance.max()) if distance.size else 0.0
+    # How disc-like the blob is, without involving its perimeter: a digital
+    # circle's staircased outline inflates the perimeter enough to drag the
+    # usual 4*pi*A/P^2 circularity of a clean sticker down to 0.39.
+    equivalent_radius = math.sqrt(area / math.pi)
+    roundness = inscribed_radius / equivalent_radius if equivalent_radius > 0 else 0.0
+
+    crossings = _skeleton_crossing_number(skeleton)
+    endpoints = int(np.count_nonzero(crossings == 1))
+    junction_mask = (crossings >= 3).astype(np.uint8)
+    junction_clusters = 0
+    if np.count_nonzero(junction_mask):
+        junction_clusters = int(cv2.connectedComponents(junction_mask, 8)[0]) - 1
+    skeleton_length = float(np.count_nonzero(skeleton))
+
+    # Chains are needed for classification, not just for emission: a hand-drawn
+    # circle almost always sprouts a thinning spur, and counting raw skeleton
+    # endpoints would then report loose ends on a shape that is plainly closed.
+    chains = _chain_skeleton_edges(
+        _trace_skeleton_edges(skeleton), minimum_branch,
+        bridge_px=max(3.0, stroke_width * 2.0),
+    )
+    longest = max(chains, key=_path_length) if chains else None
+    longest_length = _path_length(longest) if longest else 0.0
+    # A hand-drawn ring rarely meets itself exactly, and detection can drop a
+    # stretch of it. A gap of a few percent of the way round still reads as
+    # closed to whoever drew it, so the tolerance scales with the loop.
+    closed_loop = bool(
+        longest is not None
+        and len(longest) > 2
+        and longest_length >= skeleton_length * 0.7
+        and math.dist(longest[0], longest[-1])
+        <= max(4.0, stroke_width * 2.0, longest_length * 0.06)
+    )
+    if closed_loop:
+        # Flood filling finds nothing enclosed while that gap is open, so take
+        # the enclosed area from the ring the pen actually traced.
+        ring = np.asarray(longest, dtype=np.int32).reshape(-1, 1, 2)
+        hole_area = max(hole_area, abs(float(cv2.contourArea(ring))) - area)
+        filled_area = area + hole_area
+
+    height, width = component.shape[:2]
+    diagonal = math.hypot(width, height)
+
+    return {
+        "area": area,
+        "perimeter": perimeter,
+        "circularity": circularity,
+        "roundness": roundness,
+        "fill": fill,
+        "filledArea": filled_area,
+        "holeArea": hole_area,
+        "strokeWidth": stroke_width,
+        "inscribedRadius": inscribed_radius,
+        "skeletonLength": skeleton_length,
+        "elongation": skeleton_length / stroke_width,
+        "endpoints": endpoints,
+        "junctions": junction_clusters,
+        "bboxDiagonal": diagonal,
+        "bboxMax": float(max(width, height)),
+        "contour": contour,
+        "stickerShape": _sticker_shape(contour, area),
+        "skeleton": skeleton,
+        "chains": chains,
+        "longestChain": longest,
+        "closedLoop": closed_loop,
+    }
+
+
+def _sticker_shape(contour, area):
+    """Name a solid blob's shape, or return None if it is not a sticker shape.
+
+    The stickers are printed circles and triangles, so shape alone decides what
+    counts — colour cannot, because a path and a sticker may well be the same
+    colour. Comparing the blob's area against its minimum-area rectangle
+    separates the three cases without reference to anything else: a triangle
+    covers about half of that rectangle, a disc covers pi/4 of it, and a
+    rectangle covers nearly all of it.
+
+    The bands are measured, not derived. Smoothing the blob rounds a triangle's
+    corners and lifts it from a theoretical 0.50 to about 0.63, so the windows
+    sit where the real values fall: triangles 0.63, round stickers 0.82-0.86,
+    and ruled highlighter blocks 0.90-1.02, which no longer pass as stickers
+    however neatly they fill their own hull.
+    """
+    # Measure the convex hull rather than the blob. Stickers are placed in
+    # overlapping clusters, so many are only partly visible; what a neighbour
+    # hides is a bite out of one side, and the hull fills that bite back in with
+    # a chord, leaving the original outline to measure. Counting corners was
+    # tried as a second opinion and dropped — a rounded-off or torn triangle
+    # reports six or more, which sent every solid triangle in a cluster to None.
+    hull = cv2.convexHull(contour)
+    hull_area = abs(float(cv2.contourArea(hull)))
+    if hull_area <= 0:
+        return None
+    centre, radius = cv2.minEnclosingCircle(hull)
+    radius = float(radius)
+    enclosing = math.pi * radius ** 2
+    if enclosing <= 0 or radius <= 0:
+        return None
+
+    # Does the outline actually lie on a circle? A whole disc puts all of its
+    # boundary on one, and a disc with a neighbour sitting on top still puts the
+    # visible arc there, while a polygon only touches at its corners. This is
+    # what tells a partly-hidden disc from a triangle or a ruled block — the
+    # area ratios below cannot, once a bite has been taken out of the shape.
+    #
+    # The boundary has to be walked at even steps rather than measured at the
+    # hull's own vertices: those are precisely the corners, which sit on the
+    # enclosing circle for every convex shape, so sampling them called a
+    # triangle and a square circles too.
+    polygon = hull.reshape(-1, 2).astype(np.float32)
+    if len(polygon) < 3:
+        return None
+    closed = np.concatenate([polygon, polygon[:1]], axis=0)
+    edges = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+    span = float(edges.sum())
+    if span <= 0:
+        return None
+    steps = int(min(1500, max(96, span)))
+    walk = np.linspace(0.0, span, steps, endpoint=False)
+    milestones = np.concatenate([[0.0], np.cumsum(edges)])
+    segment = np.clip(np.searchsorted(milestones, walk, side="right") - 1, 0, len(edges) - 1)
+    along = (walk - milestones[segment]) / np.maximum(edges[segment], 1e-6)
+    sampled = closed[segment] + (closed[segment + 1] - closed[segment]) * along[:, None]
+    offsets = np.linalg.norm(sampled - np.asarray(centre, dtype=np.float32), axis=1)
+    on_circle = float(np.mean(np.abs(offsets - radius) <= radius * 0.16))
+    if on_circle >= 0.55:
+        return "circle"
+
+    # Otherwise fall back on how much of that enclosing circle the outline
+    # fills. The values are fixed by geometry — a square covers 2/pi = 0.64, an
+    # equilateral triangle 0.41 — so a block lands above the triangle band and
+    # is rejected rather than being read as a sticker.
+    filled = hull_area / enclosing
+    if 0.30 <= filled <= 0.56:
+        return "triangle"
+    return None
+
+
+def _classify_component(metrics, sticker_diameter):
+    """Decide which kind of map feature a measured blob represents.
+
+    Only two things are looked for: the drawn path, and the stickers placed on
+    it. Pen annotations are deliberately not classified — they are too thin to
+    separate from the printed map with any confidence, so anything that is not a
+    solid sticker-sized blob is treated as drawing.
+    """
+    sticker_radius = sticker_diameter / 2.0
+
+    # A sticker is a solid blob of about the printed size whose outline is a
+    # circle or a triangle. Both conditions are needed: convexity alone lets a
+    # ruled-in block through, and the printed stickers only come in those two
+    # shapes, so anything else solid is part of the drawing.
+    if (
+        # How much of its own hull the blob fills. A whole sticker is near 1.0;
+        # one with a neighbour sitting on it measured 0.63, so the old 0.80 gate
+        # threw away exactly the crowded ones this is meant to recover. A stroke
+        # stays far below — the traced paths on these sheets sit around 0.15.
+        metrics["fill"] >= 0.58
+        and metrics["stickerShape"] is not None
+        and metrics["inscribedRadius"] >= sticker_radius * 0.55
+        and metrics["elongation"] <= 8.0
+    ):
+        return "sticker"
+
+    # Anything that is not a sticker has to hold a deliberate amount of pen
+    # travel. A printed map icon that survives subtraction — a metro roundel, a
+    # pin — is a stubby ring a few pixels across, and used to fall through to
+    # "line" and land in the exported paths, where averaging many sheets would
+    # quietly turn printed furniture into drawn routes.
+    if metrics["skeletonLength"] < sticker_diameter * 2.0:
+        return None
+
+    # A closed loop with empty paper inside is an area the participant ringed;
+    # everything else drawn is path.
+    if (
+        metrics["closedLoop"]
+        and metrics["holeArea"] >= metrics["filledArea"] * 0.45
+        and metrics["holeArea"] >= math.pi * sticker_radius * sticker_radius
+    ):
+        return "area"
+
+    if metrics["elongation"] >= 5.0:
+        return "line"
+
+    return "area"
+
+
+def _vectorise_drawing(
+    alpha, corners, simplify, segmentation=None, allowed_sticker_colors=None,
+    corrected_bgr=None, sticker_diameter=None, path_masks=None,
+):
+    """Turn the ink mask into typed geographic features.
+
+    Every connected blob is measured and classified first, so a sticker leaves a
+    Point carrying its colour and shape, a traced path leaves a LineString along
+    the pen's centre line, and a ringed region leaves a Polygon. Douglas-Peucker
+    runs in pixel space before projecting, so the tolerance stays a predictable
+    fraction of each shape's own size rather than varying with the sheet's
+    geographic extent.
+    """
     height, width = alpha.shape[:2]
     to_lnglat = _rectified_pixel_to_lnglat(corners, width, height)
+    if not sticker_diameter:
+        sticker_diameter = MAP_SHEET_STICKER_DIAMETER_FRACTION * width
+
+    resolution_scale = width / 1000.0
+    # The floor is a physical size, not a pixel count: a quarter of a sticker's
+    # area is a mark about 4mm across, and nobody draws smaller than that on
+    # purpose. A fixed pixel floor let every misregistered printed metro icon
+    # through as its own "area" feature.
+    sticker_area = math.pi * (sticker_diameter / 2.0) ** 2
+    minimum_area = max(24.0 * resolution_scale * resolution_scale, sticker_area * 0.25)
+    minimum_branch = max(4.0, sticker_diameter * 0.45)
+
+    # Stickers and paths want opposite treatment, so they get a pass each.
+    #
+    # Stickers are found first, one colour class at a time. Participants place
+    # them in clusters and they overlap constantly; grouped by shape alone a row
+    # of five touching circles is one blob that is not a circle at all, and the
+    # whole cluster is lost. Each sticker is a single flat colour, though, so the
+    # boundary between two overlapping ones is a colour change, and splitting by
+    # colour recovers them individually.
+    #
+    # Paths are then traced over whatever ink the sticker pass did not claim,
+    # with colour ignored, because a dark marker drifts between grey, brown and
+    # black along one stroke and grouping by colour tore single paths apart.
+    label_map = segmentation["labelMap"] if segmentation else None
+    class_by_index = (
+        {item["_index"]: item for item in segmentation["classes"]}
+        if segmentation else {}
+    )
+    ink = (label_map >= 0) & (alpha >= 24) if label_map is not None else alpha >= 24
 
     features = []
-    for contour in contours:
-        area_px = abs(float(cv2.contourArea(contour)))
-        if area_px < 24.0:            # drop speckles the mask stage left behind
-            continue
-        perimeter = float(cv2.arcLength(contour, True))
-        epsilon = max(0.75, simplify * perimeter)
-        reduced = cv2.approxPolyDP(contour, epsilon, True).reshape(-1, 2)
-        if reduced.shape[0] < 3:
-            continue
-        ring = [to_lnglat(point[0], point[1]) for point in reduced]
-        if ring[0] != ring[-1]:
-            ring.append(list(ring[0]))
-        features.append({
-            "type": "Feature",
-            "properties": {
-                "areaPx": int(round(area_px)),
-                "vertices": int(reduced.shape[0]),
-            },
-            "geometry": {"type": "Polygon", "coordinates": [ring]},
-        })
+    counts = {"sticker": 0, "line": 0, "area": 0}
+    sticker_colors = {}
+    markers = []
+    path_chains = []
+    path_lines = []
 
-    features.sort(key=lambda feature: feature["properties"]["areaPx"], reverse=True)
-    return features
+    # A per-pixel record of what each blob was decided to be, so the page can
+    # show only routes, or only the green stickers, without re-running
+    # detection. Encoded as a PNG the browser reads directly: red carries the
+    # kind, green the colour class, alpha the original ink strength.
+    class_mask = np.zeros((height, width, 4), dtype=np.uint8)
+
+    def stamp(kind, color_class, selected, x0, y0, y1, x1):
+        region = class_mask[y0:y1, x0:x1]
+        region[..., 2][selected] = MAP_SHEET_KIND_CODES[kind]
+        region[..., 1][selected] = (
+            min(255, int(color_class["index"]) + 1) if color_class else 0
+        )
+        region[..., 3][selected] = alpha[y0:y1, x0:x1][selected]
+
+    def base_properties(color_class, kind, metrics):
+        properties = {
+            "kind": kind,
+            "areaPx": int(round(metrics["area"])),
+            "strokeWidthPx": round(metrics["strokeWidth"], 2),
+        }
+        if color_class:
+            properties.update({
+                "color": color_class["color"],
+                "colorClass": color_class["id"],
+                "colorLabel": color_class["label"],
+                "namedColor": bool(color_class["named"]),
+            })
+        return properties
+
+    def components_of(mask):
+        """Yield (crop bounds, boolean selection) for each blob worth measuring."""
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+        for label in range(1, count):
+            if float(stats[label, cv2.CC_STAT_AREA]) < minimum_area:
+                continue
+            left = int(stats[label, cv2.CC_STAT_LEFT])
+            top = int(stats[label, cv2.CC_STAT_TOP])
+            pad = 3
+            x0 = max(0, left - pad)
+            y0 = max(0, top - pad)
+            x1 = min(width, left + int(stats[label, cv2.CC_STAT_WIDTH]) + pad)
+            y1 = min(height, top + int(stats[label, cv2.CC_STAT_HEIGHT]) + pad)
+            yield x0, y0, x1, y1, labels[y0:y1, x0:x1] == label
+
+    def majority_colour(selected, x0, y0, x1, y1):
+        if label_map is None:
+            return None
+        votes = label_map[y0:y1, x0:x1][selected]
+        votes = votes[votes >= 0]
+        if not votes.size:
+            return None
+        return class_by_index.get(int(np.bincount(votes).argmax()))
+
+    # ---- pass one: stickers, split by colour so overlaps come apart ----------
+    claimed = np.zeros((height, width), dtype=bool)
+    sticker_jobs = []
+    if label_map is not None:
+        for item in segmentation["classes"]:
+            colour_mask = np.where(
+                (label_map == item["_index"]) & ink, 255, 0
+            ).astype(np.uint8)
+            if not np.count_nonzero(colour_mask):
+                continue
+            for x0, y0, x1, y1, selected in components_of(colour_mask):
+                component = np.where(selected, 255, 0).astype(np.uint8)
+                metrics = _component_metrics(
+                    component, sticker_diameter, minimum_branch
+                )
+                if metrics is None or metrics["area"] < minimum_area:
+                    continue
+                if _classify_component(metrics, sticker_diameter) != "sticker":
+                    continue
+                claimed[y0:y1, x0:x1] |= selected
+                sticker_jobs.append((x0, y0, x1, y1, selected, component, metrics, item))
+
+    # ---- pass two: paths over the ink no sticker claimed ---------------------
+    # The path channel is detected at its own, lower threshold, so a thin or
+    # lightly drawn stroke survives that the sticker-grade threshold clips.
+    # One pass per pen colour, over ink no sticker claimed. Each channel already
+    # knows its own colour, so nothing has to be inferred afterwards.
+    channels = path_masks or {}
+    if not channels:
+        channels = {None: np.where(ink, 255, 0).astype(np.uint8)}
+    path_jobs = []
+    for pen, pen_mask in channels.items():
+        pen_class = next(
+            (item for item in class_by_index.values() if item["id"] == pen), None
+        )
+        residual = np.where((pen_mask >= 24) & ~claimed, 255, 0).astype(np.uint8)
+        for x0, y0, x1, y1, selected in components_of(residual):
+            component = np.where(selected, 255, 0).astype(np.uint8)
+            metrics = _component_metrics(component, sticker_diameter, minimum_branch)
+            # Smoothing dissolves ragged detection noise, so re-check the floor
+            # against what actually survived rather than the raw blob.
+            if metrics is None or metrics["area"] < minimum_area:
+                continue
+            kind = _classify_component(metrics, sticker_diameter)
+            if kind is None:        # not a deliberate mark; leave it off the map
+                continue
+            path_jobs.append(
+                (kind, x0, y0, x1, y1, selected, component, metrics, pen_class)
+            )
+
+    jobs = [
+        ("sticker", x0, y0, x1, y1, selected, component, metrics, item)
+        for x0, y0, x1, y1, selected, component, metrics, item in sticker_jobs
+    ] + path_jobs
+
+    for job_index, (
+        kind, x0, y0, x1, y1, selected, component, metrics, forced_colour
+    ) in enumerate(jobs, start=1):
+        color_class = forced_colour or majority_colour(selected, x0, y0, x1, y1)
+        stamp(kind, color_class, selected, x0, y0, y1, x1)
+
+        if kind == "sticker":
+            shape = metrics["stickerShape"]
+            # Every sticker colour is tallied even when it is filtered out, so
+            # the page can offer it as something to switch back on.
+            colour_id = color_class["id"] if color_class else "unknown"
+            tally = sticker_colors.setdefault(colour_id, {
+                "id": colour_id,
+                "label": color_class["label"] if color_class else "Unknown",
+                "color": color_class["color"] if color_class else "#8f8f8f",
+                "count": 0,
+            })
+            tally["count"] += 1
+            tally[shape] = tally.get(shape, 0) + 1
+            if (
+                allowed_sticker_colors is not None
+                and colour_id not in allowed_sticker_colors
+            ):
+                continue
+            moments = cv2.moments(component, binaryImage=True)
+            centre_x = x0 + moments["m10"] / moments["m00"]
+            centre_y = y0 + moments["m01"] / moments["m00"]
+            properties = base_properties(color_class, kind, metrics)
+            properties["shape"] = shape
+            properties["radiusPx"] = round(metrics["inscribedRadius"], 2)
+            properties["roundness"] = round(metrics["roundness"], 3)
+            properties["circularity"] = round(metrics["circularity"], 3)
+            features.append({
+                "type": "Feature",
+                "properties": properties,
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": to_lnglat(centre_x, centre_y),
+                },
+            })
+            # The same point in rectified pixels, so the page can draw a mark at
+            # it rather than painting the sticker's own pixels. A cluster of
+            # overlapping discs is unreadable as ink but perfectly legible as a
+            # handful of small symbols.
+            markers.append({
+                "x": round(float(centre_x), 1),
+                "y": round(float(centre_y), 1),
+                "shape": shape,
+                "color": color_class["color"] if color_class else "#8f8f8f",
+                "colorClass": colour_id,
+                "colorLabel": color_class["label"] if color_class else "Unknown",
+            })
+            counts["sticker"] += 1
+            continue
+
+        chains = metrics["chains"]
+
+        if kind == "area":
+            # The loop the classifier accepted, not merely a chain that
+            # happens to end on the pixel it started from — a stray
+            # three-pixel ring would otherwise be preferred over the shape.
+            ring_source = metrics["longestChain"] if metrics["closedLoop"] else None
+            if ring_source is not None:
+                # The pen's centre line is the boundary the participant meant,
+                # not the outer edge of the stroke they drew it with.
+                pixels = np.asarray(
+                    [[point[1] + x0, point[0] + y0] for point in ring_source],
+                    dtype=np.int32,
+                ).reshape(-1, 1, 2)
+            else:
+                pixels = metrics["contour"] + np.asarray([x0, y0], dtype=np.int32)
+            perimeter = float(cv2.arcLength(pixels, True))
+            epsilon = max(0.75, simplify * perimeter)
+            reduced = cv2.approxPolyDP(pixels, epsilon, True).reshape(-1, 2)
+            if reduced.shape[0] < 3:
+                continue
+            ring = [to_lnglat(point[0], point[1]) for point in reduced]
+            if ring[0] != ring[-1]:
+                ring.append(list(ring[0]))
+            properties = base_properties(color_class, kind, metrics)
+            properties["enclosedAreaPx"] = int(round(metrics["holeArea"]))
+            properties["vertices"] = int(reduced.shape[0])
+            features.append({
+                "type": "Feature",
+                "properties": properties,
+                "geometry": {"type": "Polygon", "coordinates": [ring]},
+            })
+            counts["area"] += 1
+            continue
+
+        # A traced route. Emission is deferred: a sticker sitting on a route
+        # splits it into separate connected components, so the pieces that need
+        # rejoining live in different components and can only be matched up once
+        # every component has been traced.
+        for chain in chains:
+            path_chains.append({
+                "points": [(point[0] + y0, point[1] + x0) for point in chain],
+                "color": color_class,
+                "metrics": metrics,
+            })
+
+    # ---- rejoin and emit the routes -----------------------------------------
+    # Bridging happens across the whole sheet and only between chains of the
+    # same pen colour, so a red route is never stapled onto a black one.
+    by_colour = {}
+    for entry in path_chains:
+        key = (entry["color"] or {}).get("id", "ink")
+        by_colour.setdefault(key, []).append(entry)
+    for key, entries in by_colour.items():
+        joined = _bridge_over_occlusion(
+            [entry["points"] for entry in entries], claimed, sticker_diameter
+        )
+        colour = entries[0]["color"]
+        metrics = entries[0]["metrics"]
+        for index, chain in enumerate(joined, start=1):
+            length_px = _path_length(chain)
+            if length_px < minimum_branch * 2.0:
+                continue
+            even = _resample_path(chain, max(3.0, sticker_diameter * 0.25))
+            pixels = np.asarray(
+                [[point[1], point[0]] for point in even], dtype=np.int32
+            ).reshape(-1, 1, 2)
+            epsilon = max(0.75, simplify * length_px)
+            reduced = cv2.approxPolyDP(pixels, epsilon, False).reshape(-1, 2)
+            if reduced.shape[0] < 2:
+                continue
+            properties = base_properties(colour, "line", metrics)
+            properties.update({
+                "componentId": f"{key}-{index}",
+                "lengthPx": int(round(length_px)),
+                "vertices": int(reduced.shape[0]),
+            })
+            # The same simplified line in mask pixels, so the page can draw the
+            # vector it is about to export instead of the raw ink behind it.
+            path_lines.append({
+                "color": (colour or {}).get("color", "#252525"),
+                "colorClass": key,
+                "widthPx": round(metrics["strokeWidth"], 2),
+                "lengthPx": int(round(length_px)),
+                "points": [[int(p[0]), int(p[1])] for p in reduced],
+            })
+            features.append({
+                "type": "Feature",
+                "properties": properties,
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [
+                        to_lnglat(point[0], point[1]) for point in reduced
+                    ],
+                },
+            })
+            counts["line"] += 1
+
+    features.sort(
+        key=lambda feature: feature["properties"].get("areaPx", 0), reverse=True
+    )
+    return {
+        "features": features,
+        "counts": counts,
+        "markers": markers,
+        "paths": path_lines,
+        "classMask": class_mask,
+        "stickerColors": sorted(
+            sticker_colors.values(),
+            key=lambda item: (-item["count"], item["label"]),
+        ),
+    }
 
 
 @app.route("/api/map-sheet-geojson", methods=["POST"])
@@ -3073,6 +5519,23 @@ def api_map_sheet_geojson():
         paper_corners = _clean_camera_quad(payload.get("paperCorners"), frame.shape)
         threshold = float(payload.get("threshold", 28))
         simplify = float(payload.get("simplify", 0.002))
+        sticker_fraction = _clean_sticker_fraction(payload.get("stickerFraction"))
+        raw_kinds = payload.get("kinds")
+        if raw_kinds is not None and not isinstance(raw_kinds, list):
+            raise ValueError("invalid_kinds")
+        allowed_kinds = (
+            {str(value) for value in raw_kinds} & set(MAP_SHEET_KIND_CODES)
+            if raw_kinds is not None
+            else None
+        )
+        raw_colors = payload.get("stickerColors")
+        if raw_colors is not None and not isinstance(raw_colors, list):
+            raise ValueError("invalid_sticker_colors")
+        allowed_sticker_colors = (
+            {str(value) for value in raw_colors}
+            if raw_colors is not None
+            else None
+        )
         if not math.isfinite(threshold) or not math.isfinite(simplify):
             raise ValueError("invalid_threshold")
         simplify = max(0.0, min(0.05, simplify))
@@ -3088,27 +5551,72 @@ def api_map_sheet_geojson():
     if reference is None:
         return jsonify({"ok": False, "error": "map_sheet_reference_unreadable"}), 500
     try:
-        alpha = _extract_map_sheet_drawing(
-            frame, reference, paper_corners, normalized_rects, threshold
+        alpha, corrected_bgr, path_masks, info = _extract_map_sheet_drawing(
+            frame, reference, paper_corners, normalized_rects, threshold,
+            sticker_fraction=sticker_fraction,
         )
-        features = _drawing_alpha_to_geojson(alpha, corners, simplify)
+        segmentation = _segment_map_sheet_drawing_colors(alpha, corrected_bgr)
+        vectorised = _vectorise_drawing(
+            alpha,
+            corners,
+            simplify,
+            segmentation=segmentation,
+            allowed_sticker_colors=allowed_sticker_colors,
+            corrected_bgr=corrected_bgr,
+            sticker_diameter=info["stickerDiameterPx"],
+            path_masks=path_masks,
+        )
+        if allowed_kinds is not None:
+            vectorised["features"] = [
+                feature for feature in vectorised["features"]
+                if feature["properties"].get("kind") in allowed_kinds
+            ]
+            vectorised["counts"] = {
+                kind: (total if allowed_kinds and kind in allowed_kinds else 0)
+                for kind, total in vectorised["counts"].items()
+            }
     except (cv2.error, np.linalg.LinAlgError, RuntimeError, ValueError):
         logging.exception("Could not vectorise the detected drawing")
         return jsonify({"ok": False, "error": "drawing_vectorisation_failed"}), 500
     return jsonify({
         "ok": True,
         "sheetId": sheet_id,
+        "counts": vectorised["counts"],
         "geojson": {
             "type": "FeatureCollection",
             "properties": {
                 "sheetId": sheet_id,
                 "threshold": threshold,
                 "simplify": simplify,
+                "alignment": info,
+                "counts": vectorised["counts"],
+                "stickerColors": vectorised["stickerColors"],
+                "colors": [
+                    {
+                        key: value
+                        for key, value in item.items()
+                        if not key.startswith("_")
+                    }
+                    for item in segmentation["classes"]
+                ],
                 "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             },
-            "features": features,
+            "features": vectorised["features"],
         },
     })
+
+
+def _clean_sticker_fraction(raw):
+    """Printed sticker diameter as a fraction of the sheet width."""
+    if raw in (None, ""):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError("invalid_sticker_fraction") from None
+    if not math.isfinite(value) or not 0.002 <= value <= 0.12:
+        raise ValueError("invalid_sticker_fraction")
+    return value
 
 
 @app.route("/floorplan")
@@ -5034,12 +7542,26 @@ def api_tunnel_status():
 @app.route("/api/sessions", methods=["GET"])
 def api_sessions_list():
     if not SESSIONS_DIR.exists():
-        return jsonify({"ok": True, "sessions": []})
+        return jsonify({"ok": True, "sessions": [], "workshopCounts": {}})
     files = sorted(
         [f.name for f in SESSIONS_DIR.glob("session_*.json")],
         reverse=True,
     )
-    return jsonify({"ok": True, "sessions": files})
+    payload = {"ok": True, "sessions": files}
+    if request.args.get("workshopCounts") == "1":
+        counts = {}
+        for filename in files:
+            try:
+                data = json.loads((SESSIONS_DIR / filename).read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            workshop_id = str(data.get("workshopId") or "").strip()
+            if workshop_id:
+                counts[workshop_id] = counts.get(workshop_id, 0) + 1
+        payload["workshopCounts"] = counts
+    return jsonify(payload)
 
 
 @app.route("/api/timeline-sessions", methods=["GET"])
@@ -5324,6 +7846,7 @@ def api_custom_objects_save():
 # layers; may contain points, lines and/or areas.
 
 CUSTOM_LAYER_MAX_BYTES = 60 * 1024 * 1024
+WORKSHOP_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 BUILTIN_DATA_LAYERS = (
     {"id": "roads", "name": "Roads"},
     {"id": "network", "name": "Street network (OSMnx)"},
@@ -5620,6 +8143,63 @@ def api_workshops_save():
         return jsonify({"ok": False, "error": "write_failed"}), 500
 
 
+@app.route("/api/workshop-assets", methods=["POST"])
+def api_workshop_asset_upload():
+    file_storage = request.files.get("file")
+    if file_storage is None or not (file_storage.filename or "").strip():
+        return jsonify({"ok": False, "error": "no_file"}), 400
+    original_name = os.path.basename(file_storage.filename)
+    stem, ext = os.path.splitext(original_name)
+    ext = ext.lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+        return jsonify({"ok": False, "error": "unsupported_image"}), 400
+    raw = file_storage.read(WORKSHOP_IMAGE_MAX_BYTES + 1)
+    if len(raw) > WORKSHOP_IMAGE_MAX_BYTES:
+        return jsonify({"ok": False, "error": "too_large"}), 400
+    # Decode once server-side so a renamed/non-image file cannot enter the
+    # workshop asset directory. IMREAD_UNCHANGED preserves alpha validation.
+    try:
+        decoded = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    except Exception:
+        decoded = None
+    if decoded is None or decoded.size == 0:
+        return jsonify({"ok": False, "error": "invalid_image"}), 400
+    safe_stem = re.sub(r"[^A-Za-z0-9_-]", "_", stem).strip("_") or "image"
+    if ext == ".jpeg":
+        ext = ".jpg"
+    WORKSHOP_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = str(int(time.time() * 1000))
+    filename = f"{safe_stem}_{stamp}{ext}"
+    suffix = 2
+    while (WORKSHOP_ASSETS_DIR / filename).exists():
+        filename = f"{safe_stem}_{stamp}_{suffix}{ext}"
+        suffix += 1
+    try:
+        (WORKSHOP_ASSETS_DIR / filename).write_bytes(raw)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": "save_failed", "detail": str(exc)}), 500
+    return jsonify({
+        "ok": True,
+        "name": original_name,
+        "url": "/api/workshop-assets/" + urllib.parse.quote(filename),
+    })
+
+
+@app.route("/api/workshop-assets/<path:asset_id>", methods=["GET"])
+def api_workshop_asset_get(asset_id):
+    filename = os.path.basename(str(asset_id or ""))
+    if filename != str(asset_id or ""):
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    path = (WORKSHOP_ASSETS_DIR / filename).resolve()
+    try:
+        path.relative_to(WORKSHOP_ASSETS_DIR.resolve())
+    except ValueError:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    if not path.is_file():
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    return send_from_directory(WORKSHOP_ASSETS_DIR, filename)
+
+
 @app.route("/api/marker-settings", methods=["GET"])
 def api_marker_settings_load():
     return jsonify({"ok": True, **marker_settings_payload()})
@@ -5637,6 +8217,37 @@ def api_marker_settings_save():
         import traceback
         traceback.print_exc()
         return jsonify({"ok": False, "error": "write_failed", "detail": str(_e)}), 500
+
+
+@app.route("/api/marker-sheet.pdf", methods=["GET"])
+def api_marker_sheet_pdf():
+    family = str(request.args.get("family") or "").strip()
+    if family not in APRILTAG_GENERATOR_FAMILY_MAP:
+        return jsonify({"ok": False, "error": "invalid_marker_family"}), 400
+    try:
+        size_cm = float(request.args.get("sizeCm"))
+        if not math.isfinite(size_cm) or size_cm < 1 or size_cm > 20:
+            raise ValueError("invalid_marker_size")
+        entries = _marker_sheet_entries(request.args.get("entries"), family)
+        pdf_bytes, page_name = _draw_marker_sheet_pdf(family, size_cm, entries)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    except Exception:
+        logging.exception("Failed to create the marker-sheet PDF")
+        return jsonify({"ok": False, "error": "marker_sheet_export_failed"}), 500
+
+    size_label = f"{size_cm:g}".replace(".", "_")
+    filename = f"markers_{family}_{size_label}cm_{page_name}.pdf"
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @app.route("/api/aruco-tuning", methods=["GET"])

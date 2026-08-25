@@ -253,8 +253,84 @@
     };
   }
 
+  // ---- the map-generator's own style -------------------------------------
+  // The printable sheets are designed in the Maputnik generator, so the pages
+  // that digitise and replay those sheets must show the same cartography:
+  // its POI category/rank layers, transit markers, curated workshop POIs and
+  // street-label ordering, not stock Liberty.
+  //
+  // The generator loads the bundled styles/liberty.json but keeps the working
+  // copy in localStorage, and it is same-origin with these pages -- so the
+  // saved copy is preferred when it is intact, which carries across edits the
+  // user made but never re-bundled. Anything doubtful falls back to the
+  // bundled file, which the server also rewrites sprite URLs in.
+  var GENERATOR_STYLE_URL = '/maputnik/styles/liberty.json';
+  var GENERATOR_STYLE_KEY = 'maputnik:latest_style';
+
+  // Sprites must be absolute -- MapLibre resolves sprite URLs with no base --
+  // so a root-relative one is put on this origin. An absolute one is left
+  // alone unless it was baked in while the app was served from a DIFFERENT
+  // LOCAL address (another port, localhost vs the LAN IP), in which case it
+  // now points at a host that is not serving anything.
+  //
+  // The host test matters: the basemap's own sprite is
+  // https://tiles.openfreemap.org/sprites/ofm_f384/ofm, whose path also
+  // starts with /sprites/. Re-hosting that to this origin 404s it, and
+  // because MapLibre loads every sprite in one Promise.all, that single
+  // failure takes the curated icons down with it and the map draws with no
+  // icons at all.
+  var PRIVATE_HOST = /^(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[?::1\]?|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|.*\.local)$/i;
+
+  function rehostAsset(url) {
+    if (typeof url !== 'string' || !url) return url;
+    if (url.charAt(0) === '/') return window.location.origin + url;
+    try {
+      var parsed = new URL(url, window.location.href);
+      if (parsed.origin !== window.location.origin
+        && PRIVATE_HOST.test(parsed.hostname)) {
+        return window.location.origin + parsed.pathname;
+      }
+    } catch (_error) { /* leave anything unparseable alone */ }
+    return url;
+  }
+
+  function normalizeGeneratorStyle(style) {
+    if (Array.isArray(style.sprite)) {
+      style.sprite.forEach(function (entry) {
+        if (entry && typeof entry === 'object') entry.url = rehostAsset(entry.url);
+      });
+    } else if (typeof style.sprite === 'string') {
+      style.sprite = rehostAsset(style.sprite);
+    }
+    if (typeof style.glyphs === 'string' && style.glyphs.charAt(0) === '/') {
+      style.glyphs = window.location.origin + style.glyphs;
+    }
+    return style;
+  }
+
+  function generatorStyle() {
+    var raw;
+    try {
+      raw = window.localStorage.getItem(GENERATOR_STYLE_KEY);
+    } catch (_error) {
+      raw = null;   // private browsing: the bundled file is the answer
+    }
+    if (raw) {
+      try {
+        var stored = JSON.parse(raw);
+        var usable = stored && Number(stored.version) === 8
+          && Array.isArray(stored.layers) && stored.layers.length
+          && stored.sources && typeof stored.sources === 'object';
+        if (usable) return normalizeGeneratorStyle(stored);
+      } catch (_error) { /* corrupt entry; fall through */ }
+    }
+    return GENERATOR_STYLE_URL;
+  }
+
   window.CompactMapSetup = {
     add3DBuildings: add3DBuildings,
-    initMap: initMap
+    initMap: initMap,
+    generatorStyle: generatorStyle,
+    GENERATOR_STYLE_URL: GENERATOR_STYLE_URL
   };
 })();

@@ -108,6 +108,13 @@
       text-transform: uppercase;
       color: var(--ink);
     }
+    #workshopPreselection {
+      margin: -2px 0 8px;
+      color: var(--green-dark);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.35;
+    }
     #sidebar .mode-filter {
       display: flex;
       gap: 4px;
@@ -289,6 +296,7 @@
   <div class="hd">
     <button type="button" id="resultsBackBtn" aria-label="Back to menu">&larr; Back to menu</button>
     <h2>Sessions</h2>
+    <div id="workshopPreselection" class="hidden"></div>
     <div class="sel-actions">
       <button type="button" id="selAll">Select All</button>
       <button type="button" id="selNone">Clear</button>
@@ -478,6 +486,15 @@
     availableSteps: [],     // sorted step numbers present in the selected sessions
     visibleSteps: null      // Set of enabled step numbers; null = show all
   };
+
+  var queryParams = new URLSearchParams(window.location.search);
+  var requestedWorkshopId = String(queryParams.get('workshop') || '').trim();
+  var requestedWorkshopName = String(queryParams.get('name') || '').trim();
+  var workshopPreselection = qs('workshopPreselection');
+  if (requestedWorkshopId && workshopPreselection) {
+    workshopPreselection.textContent = 'Preselected: ' + (requestedWorkshopName || requestedWorkshopId);
+    workshopPreselection.classList.remove('hidden');
+  }
 
   function sessionMode(data) {
     var raw = data && typeof data.mode === 'string' ? data.mode.toLowerCase() : '';
@@ -1003,7 +1020,8 @@
                 basemap: sessionBasemap(data),
                 data: data
               };
-              state.selectedNames[entry.key] = true;
+              state.selectedNames[entry.key] = !requestedWorkshopId
+                || String(data && data.workshopId || '') === requestedWorkshopId;
               loaded++;
               setText('sessionsLoaded', String(loaded));
             })

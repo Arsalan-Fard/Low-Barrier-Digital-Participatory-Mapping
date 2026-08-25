@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Capture sheet — IMOBYL</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 16px calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+      background: #141414; color: #e6e6e6;
+      font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    h1 { margin: 0 0 4px; font-size: 19px; }
+    .sub { margin: 0 0 18px; color: #8f8f8f; font-size: 13px; }
+    fieldset { margin: 0 0 16px; padding: 14px; border: 1px solid #3a3a3a; border-radius: 12px; }
+    legend { padding: 0 6px; color: #9a9a9a; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+    label { display: block; margin-bottom: 4px; color: #b6b6b6; font-size: 13px; }
+    input[type="number"] {
+      width: 100%; padding: 14px; font-size: 22px; font-weight: 700; text-align: center;
+      color: #fff; background: #202020; border: 1px solid #4a4a4a; border-radius: 10px;
+    }
+    input[type="number"]:focus { outline: none; border-color: #2f8f86; }
+    .pair { display: flex; gap: 10px; }
+    .pair > div { flex: 1; }
+    button {
+      width: 100%; padding: 18px; font-size: 17px; font-weight: 700;
+      color: #fff; background: #2f8f86; border: 0; border-radius: 12px; cursor: pointer;
+    }
+    button.secondary { background: #303030; color: #ddd; font-size: 15px; padding: 13px; }
+    button:disabled { opacity: 0.45; }
+    /* The file input is driven by the button above it. */
+    #shot { display: none; }
+    #preview { width: 100%; border-radius: 10px; display: none; margin-bottom: 10px; }
+    .status { margin-top: 12px; padding: 12px; border-radius: 10px; background: #1d1d1d; font-size: 14px; }
+    .status.ok { background: #143029; color: #7fe0cf; }
+    .status.err { background: #331b1b; color: #ff9c9c; }
+    .status.busy { background: #2a2616; color: #ffd98a; }
+    ul { margin: 10px 0 0; padding-left: 18px; color: #9a9a9a; font-size: 13px; }
+    li { margin-bottom: 3px; }
+    .hint { margin-top: 10px; color: #7d7d7d; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Capture a sheet</h1>
+  <p class="sub">Photos go straight to the laptop, which aligns and digitises them.</p>
+
+  <fieldset>
+    <legend>Which sheet</legend>
+    <div class="pair">
+      <div>
+        <label for="mapId">Map ID</label>
+        <input type="number" id="mapId" min="1" max="999999999" step="1" inputmode="numeric" placeholder="1" />
+      </div>
+      <div>
+        <label for="participantId">Participant</label>
+        <input type="number" id="participantId" min="1" max="999999999" step="1" inputmode="numeric" placeholder="—" />
+      </div>
+    </div>
+    <p class="hint">Leave Participant empty for a single-copy map. Both are
+      remembered, so a whole stack of one map only needs the number once.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Photo</legend>
+    <img id="preview" alt="" />
+    <!-- capture=environment asks for the rear camera; a phone that ignores it
+         still gets its normal picker, which is fine. -->
+    <input type="file" id="shot" accept="image/*" capture="environment" />
+    <button type="button" id="takeBtn">Take photo</button>
+    <button type="button" id="sendBtn" class="secondary" style="margin-top:10px" disabled>Send to laptop</button>
+    <div class="status" id="status">Pick the sheet number, then take the photo.</div>
+    <ul id="sent"></ul>
+  </fieldset>
+
+  <script>
+    (function () {
+      'use strict';
+      var $ = function (id) { return document.getElementById(id); };
+      var pending = null;          // the File waiting to be sent
+      var sentCount = 0;
+
+      function setStatus(message, kind) {
+        var el = $('status');
+        el.textContent = message;
+        el.className = 'status' + (kind ? ' ' + kind : '');
+      }
+
+      // The sheet id is the same "7" or "7_3" the laptop uses, so a capture
+      // can be filed against the reference map without any extra lookup.
+      function sheetId() {
+        var map = String($('mapId').value || '').trim();
+        var participant = String($('participantId').value || '').trim();
+        if (!/^[1-9][0-9]{0,8}$/.test(map)) return '';
+        if (participant && !/^[1-9][0-9]{0,8}$/.test(participant)) return '';
+        return participant ? map + '_' + participant : map;
+      }
+
+      ['mapId', 'participantId'].forEach(function (id) {
+        try {
+          var saved = window.localStorage.getItem('capture:' + id);
+          if (saved) $(id).value = saved;
+        } catch (_e) { /* private browsing: just do not remember */ }
+        $(id).addEventListener('input', function () {
+          try { window.localStorage.setItem('capture:' + id, this.value); } catch (_e) {}
+          refreshButtons();
+        });
+      });
+
+      function refreshButtons() {
+        $('sendBtn').disabled = !pending || !sheetId();
+      }
+
+      $('takeBtn').addEventListener('click', function () {
+        if (!sheetId()) {
+          setStatus('Enter the map ID printed on the sheet first.', 'err');
+          return;
+        }
+        $('shot').click();
+      });
+
+      $('shot').addEventListener('change', function () {
+        var file = this.files && this.files[0];
+        if (!file) return;
+        pending = file;
+        var preview = $('preview');
+        preview.src = URL.createObjectURL(file);
+        preview.style.display = 'block';
+        setStatus('Ready to send sheet ' + sheetId() + '.', '');
+        refreshButtons();
+      });
+
+      $('sendBtn').addEventListener('click', function () {
+        if (!pending) return;
+        var id = sheetId();
+        if (!id) { setStatus('Enter the map ID first.', 'err'); return; }
+        var form = new FormData();
+        form.append('sheetId', id);
+        form.append('photo', pending, 'sheet-' + id + '.jpg');
+
+        $('sendBtn').disabled = true;
+        $('takeBtn').disabled = true;
+        setStatus('Sending…', 'busy');
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/captures', true);
+        xhr.upload.onprogress = function (event) {
+          if (event.lengthComputable) {
+            setStatus('Sending… ' + Math.round(100 * event.loaded / event.total) + '%', 'busy');
+          }
+        };
+        xhr.onerror = function () {
+          $('takeBtn').disabled = false;
+          refreshButtons();
+          setStatus('Could not reach the laptop. Same network?', 'err');
+        };
+        xhr.onload = function () {
+          $('takeBtn').disabled = false;
+          var data = null;
+          try { data = JSON.parse(xhr.responseText || '{}'); } catch (_e) {}
+          if (xhr.status < 200 || xhr.status >= 300 || !data || data.ok !== true) {
+            refreshButtons();
+            setStatus('Rejected: ' + ((data && data.error) || xhr.status), 'err');
+            return;
+          }
+          sentCount += 1;
+          var item = document.createElement('li');
+          item.textContent = 'sheet ' + data.sheetId + ' · '
+            + new Date().toLocaleTimeString();
+          $('sent').insertBefore(item, $('sent').firstChild);
+          // Clear the shot but keep the sheet number: the next page of the
+          // same map is the overwhelmingly likely next action.
+          pending = null;
+          $('shot').value = '';
+          $('preview').style.display = 'none';
+          refreshButtons();
+          setStatus('Sent (' + sentCount + '). The laptop is digitising it.', 'ok');
+        };
+        xhr.send(form);
+      });
+
+      refreshButtons();
+    }());
+  </script>
+</body>
+</html>

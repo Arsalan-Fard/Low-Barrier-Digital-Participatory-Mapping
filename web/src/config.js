@@ -60,7 +60,7 @@
       // Single OSM street basemap.
       streets: {
         style: osmRasterStyle('osm-streets'),
-        useBuiltIn3D: true
+        useBuiltIn3D: false
       },
       // Esri World Imagery — aerial/satellite, no API token required.
       satellite: {
@@ -69,7 +69,7 @@
           attribution: ESRI_ATTRIBUTION,
           maxzoom: 19
         }),
-        useBuiltIn3D: true
+        useBuiltIn3D: false
       },
       // OpenTopoMap — topographic basemap (contours + hillshade), no token.
       // Caps at z17 (the service does not serve deeper tiles).
@@ -79,7 +79,7 @@
           attribution: OPENTOPO_ATTRIBUTION,
           maxzoom: 17
         }),
-        useBuiltIn3D: true
+        useBuiltIn3D: false
       },
       // Indoor "Telecom" floorplan: a plain white base. The actual plan lines
       // (and a white mask over the bounds) are added as custom layers from

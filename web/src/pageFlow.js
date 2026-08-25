@@ -59,7 +59,7 @@
     function goBackHome() {
       confirmDialog({
         title: 'Leave this page?',
-        message: 'You will return to the main menu. Any unsaved activity stays in the session.',
+        message: 'You will return to the main menu. Make sure to save your work first.',
         confirmText: 'Leave',
         cancelText: 'Cancel',
         danger: true,
@@ -70,10 +70,8 @@
       });
     }
 
-    function startWorkshop() {
-      if (window.CompactWorkshopRuntime && typeof window.CompactWorkshopRuntime.enter === 'function') {
-        window.CompactWorkshopRuntime.enter();
-      }
+    function toggleWorkshop() {
+      window.dispatchEvent(new CustomEvent('compact-workshop-toggle-request'));
     }
 
     function toggleLayers() {
@@ -83,14 +81,6 @@
     function toggleLight() {
       var app = window.CompactMapApp;
       if (app && typeof app.toggleLightSettings === 'function') app.toggleLightSettings();
-    }
-
-    function toggleIndoor() {
-      var app = window.CompactMapApp;
-      if (!app || typeof app.toggleIndoorOutdoor !== 'function') return;
-      var mode = app.toggleIndoorOutdoor();
-      var btn = document.getElementById('mapIndoorButton');
-      if (btn) btn.textContent = mode === 'indoor' ? 'Outdoor' : 'Indoor';
     }
 
     function toggleRecord() {
@@ -123,11 +113,11 @@
           goBackHome();
         } else if (key === 'w') {
           e.preventDefault();
-          startWorkshop();
+          toggleWorkshop();
         }
       });
 
-      createCornerButtons({ onBack: goBackHome, onWorkshop: startWorkshop, onLayers: toggleLayers, onLight: toggleLight, onIndoor: toggleIndoor, onRecord: toggleRecord });
+      createCornerButtons({ onBack: goBackHome, onWorkshop: toggleWorkshop, onLayers: toggleLayers, onLight: toggleLight, onRecord: toggleRecord });
       // Keep the Record button's icon in sync if recording is toggled elsewhere
       // (e.g. the 'y' key).
       setInterval(function () { if (typeof refreshRecordButton === 'function') refreshRecordButton(); }, 700);
@@ -254,11 +244,15 @@
       handle.style.opacity = next ? '0' : '1';
     }
 
-    makeButton('mapBackButton', 'Home', 'Back to setup (camera / screen)', opts.onBack);
+    const backButton = makeButton('mapBackButton', 'Back', 'Back to main menu', opts.onBack);
+    Object.assign(backButton.style, {
+      color: '#ffe8e8',
+      background: 'rgba(166, 58, 58, 0.28)',
+      borderColor: 'rgba(255, 132, 132, 0.48)'
+    });
     makeButton('mapWorkshopButton', 'Workshop', 'Workshops: play or create', opts.onWorkshop);
     makeButton('mapLayersButton', 'Layers', 'Switch basemap layer', opts.onLayers);
     makeButton('mapLightButton', 'Light', 'Light settings (brightness, saturation, contrast)', opts.onLight);
-    makeButton('mapIndoorButton', 'Indoor', 'Toggle indoor (Telecom floorplan) / outdoor map', opts.onIndoor);
     makeRecordButton();
 
     // Record button: a red disc (idle) that becomes a red square while recording.

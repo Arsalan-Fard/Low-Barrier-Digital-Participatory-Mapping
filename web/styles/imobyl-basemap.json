@@ -1,0 +1,270 @@
+{
+  "version": 8,
+  "name": "IMOBYL results basemap",
+  "metadata": {
+    "imobyl:purpose": "Ground for the drawn-path visualisation. Everything here is subordinate to the data: the red and black trips and the region bands carry all the colour and contrast, so the map underneath is near-monochrome and deliberately thin on detail. What survives is only what answers 'where am I': green anchors, water, the road skeleton, neighbourhood names in bold, the big landmarks, and the school the whole workshop radiates from.",
+    "imobyl:not-in-here": "Buildings, POI icons, transit, house numbers, minor labels. They were tried and they fight the flows for attention at exactly the zooms this view is read at."
+  },
+  "glyphs": "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+  "sources": {
+    "openmaptiles": {
+      "type": "vector",
+      "url": "https://tiles.openfreemap.org/planet"
+    },
+    "workshop-poi": {
+      "type": "geojson",
+      "data": "/api/custom-layers/poi-jean-baptiste-clement.geojson",
+      "attribution": ""
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": { "background-color": "#f5f3ef" }
+    },
+
+    {
+      "id": "green",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "park",
+      "paint": { "fill-color": "#dde6d6", "fill-opacity": 1 }
+    },
+    {
+      "id": "green-landcover",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "landcover",
+      "filter": ["match", ["get", "class"], ["wood", "grass"], true, false],
+      "paint": { "fill-color": "#dde6d6", "fill-opacity": 0.9 }
+    },
+    {
+      "id": "cemetery",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "landuse",
+      "filter": ["==", ["get", "class"], "cemetery"],
+      "paint": { "fill-color": "#d8e0d1" }
+    },
+
+    {
+      "id": "water",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "water",
+      "paint": { "fill-color": "#c6d8e4" }
+    },
+    {
+      "id": "waterway",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "waterway",
+      "paint": {
+        "line-color": "#c6d8e4",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 11, 1, 14, 3, 17, 7]
+      }
+    },
+
+    {
+      "id": "road-minor",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "transportation",
+      "minzoom": 13,
+      "filter": ["match", ["get", "class"], ["minor", "service"], true, false],
+      "layout": { "line-cap": "round", "line-join": "round" },
+      "paint": {
+        "line-color": "#e9e3da",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 13, 0.5, 15, 1.4, 17, 3.5]
+      }
+    },
+    {
+      "id": "road-tertiary",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "transportation",
+      "filter": ["==", ["get", "class"], "tertiary"],
+      "layout": { "line-cap": "round", "line-join": "round" },
+      "paint": {
+        "line-color": "#e4ddd2",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.6, 15, 2, 17, 4.5]
+      }
+    },
+    {
+      "id": "road-secondary",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "transportation",
+      "filter": ["==", ["get", "class"], "secondary"],
+      "layout": { "line-cap": "round", "line-join": "round" },
+      "paint": {
+        "line-color": "#ded6c9",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 11, 0.8, 14, 2.4, 17, 6]
+      }
+    },
+    {
+      "id": "road-major",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "transportation",
+      "filter": ["match", ["get", "class"], ["motorway", "trunk", "primary"], true, false],
+      "layout": { "line-cap": "round", "line-join": "round" },
+      "paint": {
+        "line-color": "#d6cdbd",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1, 14, 3.4, 17, 8]
+      }
+    },
+
+    {
+      "id": "buildings-3d",
+      "type": "fill-extrusion",
+      "source": "openmaptiles",
+      "source-layer": "building",
+      "minzoom": 14,
+      "layout": { "visibility": "none" },
+      "paint": {
+        "fill-extrusion-color": "#ded8cf",
+        "fill-extrusion-height": ["get", "render_height"],
+        "fill-extrusion-base": ["get", "render_min_height"],
+        "fill-extrusion-opacity": 0.78
+      }
+    },
+
+    {
+      "id": "highway-name-major",
+      "type": "symbol",
+      "source": "openmaptiles",
+      "source-layer": "transportation_name",
+      "minzoom": 13,
+      "filter": ["match", ["get", "class"], ["motorway", "trunk", "primary", "secondary"], true, false],
+      "layout": {
+        "symbol-placement": "line",
+        "text-field": ["coalesce", ["get", "name:latin"], ["get", "name"]],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 13, 9.5, 16, 12],
+        "text-letter-spacing": 0.02,
+        "symbol-spacing": 320,
+        "text-max-angle": 35
+      },
+      "paint": {
+        "text-color": "#8d867c",
+        "text-halo-color": "#f5f3ef",
+        "text-halo-width": 1.6
+      }
+    },
+
+    {
+      "id": "water_name_line_label",
+      "type": "symbol",
+      "source": "openmaptiles",
+      "source-layer": "water_name",
+      "filter": ["match", ["geometry-type"], ["LineString", "MultiLineString"], true, false],
+      "layout": {
+        "symbol-placement": "line",
+        "text-field": ["coalesce", ["get", "name:latin"], ["get", "name"]],
+        "text-font": ["Noto Sans Italic"],
+        "text-size": 11,
+        "symbol-spacing": 420
+      },
+      "paint": {
+        "text-color": "#5f87a3",
+        "text-halo-color": "#f5f3ef",
+        "text-halo-width": 1.6
+      }
+    },
+
+    {
+      "id": "landmark-label",
+      "type": "symbol",
+      "source": "openmaptiles",
+      "source-layer": "poi",
+      "filter": [
+        "all",
+        ["match", ["geometry-type"], ["Point", "MultiPoint"], true, false],
+        ["match", ["get", "class"], ["park", "cemetery", "stadium", "attraction", "museum", "university"], true, false],
+        ["has", "name"],
+        ["<=", ["get", "rank"], 10]
+      ],
+      "layout": {
+        "text-field": ["coalesce", ["get", "name:latin"], ["get", "name"]],
+        "text-font": ["Noto Sans Bold"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 12, 10.5, 15, 13, 17, 15],
+        "text-max-width": 8,
+        "text-padding": 4,
+        "text-line-height": 1.15
+      },
+      "paint": {
+        "text-color": "#4c6b46",
+        "text-halo-color": "#f5f3ef",
+        "text-halo-width": 2
+      }
+    },
+
+    {
+      "id": "label_other",
+      "type": "symbol",
+      "source": "openmaptiles",
+      "source-layer": "place",
+      "filter": ["match", ["get", "class"], ["suburb", "quarter", "neighbourhood"], true, false],
+      "layout": {
+        "text-field": ["upcase", ["coalesce", ["get", "name:latin"], ["get", "name"]]],
+        "text-font": ["Noto Sans Bold"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 12, 11, 14, 14, 16, 18],
+        "text-letter-spacing": 0.16,
+        "text-max-width": 9,
+        "text-padding": 6
+      },
+      "paint": {
+        "text-color": "#514c46",
+        "text-halo-color": "#f5f3ef",
+        "text-halo-width": 2.2
+      }
+    },
+
+    {
+      "id": "school-halo",
+      "type": "circle",
+      "source": "workshop-poi",
+      "filter": ["==", ["get", "distance_m"], 0],
+      "paint": {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 9, 14, 15, 17, 24],
+        "circle-color": "#d93025",
+        "circle-opacity": 0.16
+      }
+    },
+    {
+      "id": "school-dot",
+      "type": "circle",
+      "source": "workshop-poi",
+      "filter": ["==", ["get", "distance_m"], 0],
+      "paint": {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 4, 14, 6.5, 17, 10],
+        "circle-color": "#d93025",
+        "circle-stroke-color": "#ffffff",
+        "circle-stroke-width": 2.5
+      }
+    },
+    {
+      "id": "school-label",
+      "type": "symbol",
+      "source": "workshop-poi",
+      "filter": ["==", ["get", "distance_m"], 0],
+      "layout": {
+        "text-field": ["get", "name"],
+        "text-font": ["Noto Sans Bold"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 12, 11, 15, 14, 17, 16],
+        "text-anchor": "top",
+        "text-offset": [0, 0.9],
+        "text-max-width": 9,
+        "text-allow-overlap": false,
+        "text-padding": 4
+      },
+      "paint": {
+        "text-color": "#b3271d",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 2.4
+      }
+    }
+  ]
+}

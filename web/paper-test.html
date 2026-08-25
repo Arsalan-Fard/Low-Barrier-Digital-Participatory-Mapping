@@ -56,7 +56,36 @@
       transition: transform 0.18s ease, opacity 0.18s ease;
     }
     #panel { right: 14px; }
+    #panelEdit { right: 14px; }
     .panel.collapsed { transform: translateY(-10px); opacity: 0; pointer-events: none; }
+
+    /* Tool palette: one swatch per colour, the shape drawn inside it. */
+    .tool-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tool {
+      width: 40px; height: 34px; display: flex; align-items: center; justify-content: center;
+      padding: 0; background: #242424; border: 1px solid #4a4a4a; border-radius: 8px;
+      cursor: pointer;
+    }
+    .tool:hover { border-color: #6fe3d6; }
+    .tool.is-active { border-color: #6fe3d6; background: #17302d; box-shadow: 0 0 0 2px rgba(99,206,197,0.35); }
+    .tool svg { display: block; pointer-events: none; }
+    .tool.wide { width: auto; padding: 0 10px; gap: 6px; font: 700 11px inherit; color: #ddd; }
+    /* While a tool is armed the map is a drawing surface, not a pannable map. */
+    .map-editing { cursor: crosshair; }
+    /* The reference row being edited. */
+    #sheetList li.editing { border-color: #6fe3d6; background: #17302d; }
+
+    label.check { display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer; }
+    label.check input { margin: 0; accent-color: #2f8f86; }
+    #heatControls { display: flex; flex-direction: column; gap: 8px; }
+    /* Same colour ramp the results page uses, so the two read the same way. */
+    .heat-legend { display: flex; align-items: center; gap: 7px; font-size: 10.5px; color: #9a9a9a; }
+    .heat-legend .bar {
+      flex: 1; height: 8px; border-radius: 4px;
+      background: linear-gradient(90deg,
+        rgb(103,169,207), rgb(209,229,240), rgb(253,219,199),
+        rgb(239,138,98), rgb(178,24,43));
+    }
 
     h1 { font-size: 16px; font-weight: 700; }
     .panel-title { display: flex; align-items: center; gap: 9px; }
@@ -81,6 +110,24 @@
     .launch:hover { background: rgba(45,45,45,0.92); }
     .launch-right { right: 14px; }
     .launch[hidden] { display: none; }
+    /* Stacked under the first launcher. Must come after .launch, which sets
+       top itself at the same specificity and would otherwise win. */
+    .launch-second { top: 54px; }
+    .launch-third { top: 94px; }
+    /* An anchor, not a button, so it needs the button's own text treatment. */
+    a.launch { display: inline-block; text-decoration: none; }
+    a.launch:focus-visible { outline: 2px solid #6fe3d6; outline-offset: 2px; }
+    .menu-back {
+      position: fixed; top: 14px; left: 14px; z-index: 25;
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 12px; color: #fff; text-decoration: none;
+      font: 700 12.5px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: rgba(20,20,20,0.86); border: 1px solid rgba(255,255,255,0.28);
+      border-radius: 9px; backdrop-filter: blur(8px);
+      box-shadow: 0 6px 18px rgba(0,0,0,0.32);
+    }
+    .menu-back:hover { background: rgba(45,45,45,0.92); }
+    .menu-back:focus-visible { outline: 2px solid #6fe3d6; outline-offset: 2px; }
 
     /* Toggle switches (basemap, POI/label on-off). */
     label.sw { display: flex; align-items: center; gap: 9px; font-size: 12px; cursor: pointer; }
@@ -199,6 +246,38 @@
     .status.ok { color: #6fe3d6; }
     .status.err { color: #ff8d7e; }
     .status.warn { color: #ffd66b; }
+    .color-legend {
+      display: flex; flex-wrap: wrap; gap: 5px 7px;
+      padding-top: 2px;
+    }
+    .color-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 7px 3px 5px; cursor: pointer;
+      color: #d7d7d7; background: #252525;
+      border: 1px solid #464646; border-radius: 999px;
+      font-size: 10.5px; line-height: 1.2;
+    }
+    .color-chip input { margin: 0; accent-color: #2f8f86; }
+    .color-chip .dot {
+      width: 11px; height: 11px; flex: 0 0 auto;
+      border: 1px solid rgba(255,255,255,0.55); border-radius: 50%;
+    }
+    .color-chip .sign { font-weight: 700; font-size: 12px; line-height: 1; margin-left: -2px; }
+    .color-chip:has(input:not(:checked)) { opacity: 0.45; }
+    /* What the drawing was understood to be, not just which colours it used. */
+    .kind-legend { display: flex; flex-wrap: wrap; gap: 5px 7px; padding-top: 2px; }
+    .kind-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 8px; color: #d7d7d7; background: #252525;
+      border: 1px solid #464646; border-radius: 999px;
+      font-size: 10.5px; line-height: 1.2;
+    }
+    .kind-chip { cursor: pointer; }
+    .kind-chip input { margin: 0; accent-color: #2f8f86; }
+    .kind-chip b { color: #6fe3d6; font-weight: 700; }
+    .kind-chip .glyph { font-size: 12px; line-height: 1; }
+    .kind-chip:has(input:not(:checked)) { opacity: 0.45; }
+    .kind-chip:has(input:not(:checked)) b { color: #d7d7d7; }
     /* An ID that already exists on disk: exporting would replace it. */
     input.used { border-color: #b89200; background: #2a2410; color: #ffd66b; }
 
@@ -222,12 +301,16 @@
       display: flex; align-items: center; gap: 8px; font-size: 11.5px;
       padding: 5px 8px; border-radius: 6px; background: #1e1e1e; border: 1px solid #333;
     }
+    #sheetList .sh { flex: 0 0 auto; margin: 0; accent-color: #2f8f86; cursor: pointer; }
     #sheetList .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #sheetList .st { flex: 0 0 auto; color: #9a9a9a; font-variant-numeric: tabular-nums; }
     #sheetList li.ok { border-color: #2f8f86; }
     #sheetList li.ok .st { color: #6fe3d6; }
     #sheetList li.err { border-color: #7a3a33; }
     #sheetList li.err .st { color: #ff8d7e; }
+    /* Unticked: still listed and still detected, just not in the combined view. */
+    #sheetList li.off { opacity: 0.45; }
+    #sheetList li.off .nm { text-decoration: line-through; }
     #sheetList .x {
       flex: 0 0 auto; padding: 1px 6px; font: 700 12px inherit; line-height: 1.3;
       background: transparent; border: 1px solid #4a4a4a; border-radius: 5px; color: #bbb;
@@ -253,8 +336,59 @@
     <div id="map"></div>
     <svg id="exportPreview" hidden aria-hidden="true"></svg>
 
+    <a class="menu-back" href="/" aria-label="Back to main menu">← Menu</a>
+
     <!-- The launcher opens the digitization workflow. -->
     <button type="button" id="openH" class="launch launch-right" title="Digitize map (H)">Digitize Map</button>
+    <button type="button" id="openEdit" class="launch launch-right launch-second"
+            title="Fix by hand (J)">Fix by Hand</button>
+    <!-- Where a digitized session is taken to be shown: the aggregate view of
+         every sheet, for the exhibition table. -->
+    <a id="openImobyl" class="launch launch-right launch-third" href="/imobyl"
+       title="Open the IMOBYL aggregate view">IMOBYL</a>
+
+    <!-- Manual correction. Whatever is drawn here is attached to the reference
+         sheet selected in the Digitize panel's list, alongside what detection
+         found, so a missed sticker or a broken path can be put right by hand. -->
+    <aside id="panelEdit" class="panel collapsed">
+      <h1 class="panel-title">
+        <button type="button" class="back" data-close="panelEdit" title="Close (J)" aria-label="Close">‹</button>
+        <span>Fix by Hand</span>
+      </h1>
+
+      <section>
+        <h2>Editing</h2>
+        <div class="status" id="editTargetStatus">Load a reference map first.</div>
+      </section>
+
+      <section>
+        <h2>Stickers</h2>
+        <p class="hint">A plus places a round sticker, a minus a triangular one.</p>
+        <div class="tool-grid" id="toolStickerCircle" aria-label="Add round sticker"></div>
+        <div class="tool-grid" id="toolStickerTriangle" aria-label="Add triangular sticker"></div>
+      </section>
+
+      <section>
+        <h2>Paths</h2>
+        <div class="tool-grid" id="toolPaths"></div>
+        <label class="slider">Pen width
+          <input type="range" id="penWidth" min="2" max="24" step="1" value="8" />
+          <span class="val" id="penWidthVal">8</span>
+        </label>
+      </section>
+
+      <section>
+        <h2>Eraser</h2>
+        <div class="tool-grid" id="toolEraser"></div>
+        <p class="hint">
+          Removes hand-drawn marks and rubs out detected ink under the cursor.
+        </p>
+        <div class="row">
+          <button type="button" id="clearManualBtn">Clear my edits on this sheet</button>
+        </div>
+        <div class="status" id="editStatus"></div>
+      </section>
+    </aside>
 
     <aside id="panel" class="panel collapsed">
       <h1 class="panel-title">
@@ -269,8 +403,22 @@
         </label>
       </section>
 
+      <section id="stepReferenceMap">
+        <h2>Reference map</h2>
+        <div class="row">
+          <input type="number" id="digitizeMapId" min="1" max="999999999" step="1"
+                 placeholder="Map ID" aria-label="Map ID" />
+          <input type="number" id="digitizeParticipantId" min="1" max="999999999" step="1"
+                 placeholder="Participant ID" aria-label="Participant ID" />
+        </div>
+        <button type="button" class="primary" id="loadReferenceBtn">Load reference</button>
+        <div class="status" id="sheetIdStatus">
+          Leave Participant ID empty for a single-copy map.
+        </div>
+      </section>
+
       <!-- Scan: camera or dropped photos. Loading runs detection automatically. -->
-      <section id="stepCam">
+      <section id="stepCam" class="off">
         <h2>Scan marked map</h2>
         <div id="dropZone" tabindex="0" role="button"
              aria-label="Drop photos of the marked map here, or click to choose files">
@@ -282,6 +430,10 @@
           <button type="button" id="camSourceBtn">Use camera</button>
           <button type="button" id="camResetBtn">Reset</button>
         </div>
+        <p class="hint" id="sheetListHint" hidden>
+          Load a reference for each sheet, then drop its photos. Untick one to
+          drop it from the combined result.
+        </p>
         <ul id="sheetList"></ul>
         <div class="status" id="camStatus"></div>
       </section>
@@ -296,6 +448,35 @@
         <div class="row">
           <button type="button" id="exportGeojsonBtn" disabled>Export GeoJSON</button>
         </div>
+        <div id="kindLegend" class="kind-legend" hidden
+             aria-label="What the drawing was understood to be"></div>
+        <label class="check">
+          <input type="checkbox" id="showMarks" checked />
+          <span>Show sticker marks (+ / –)</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="heatEnabled" />
+          <span>Sticker heatmap</span>
+        </label>
+        <div id="heatControls" hidden>
+          <p class="hint">
+            Built from the stickers ticked below, across every ticked photo.
+          </p>
+          <label class="slider">Density radius
+            <input type="range" id="heatRadius" min="4" max="400" step="2" value="60" />
+            <span class="val" id="heatRadiusVal">60</span>
+          </label>
+          <label class="slider">Density intensity
+            <input type="range" id="heatIntensity" min="0.1" max="4" step="0.1" value="1" />
+            <span class="val" id="heatIntensityVal">1.0</span>
+          </label>
+          <div class="heat-legend">
+            <span>low</span><div class="bar"></div><span>high</span>
+          </div>
+          <div class="status" id="heatStatus"></div>
+        </div>
+        <div id="colorLegend" class="color-legend" hidden
+             aria-label="Detected drawing colours"></div>
         <div class="status" id="inkStatus"></div>
       </section>
     </aside>
@@ -418,7 +599,8 @@
         <div class="row">
           <span class="sub-label">Buildings</span>
           <select id="buildingMode" aria-label="Building display">
-            <option value="normal" selected>Normal</option>
+            <option value="style" selected>As styled</option>
+            <option value="normal">Normal</option>
             <option value="fade">Faded</option>
             <option value="outline">Outline</option>
             <option value="hide">Hidden</option>
@@ -504,7 +686,13 @@
       // keeps streets and labels crisp at z16+. Style, tiles, glyphs and
       // sprites are all served with Access-Control-Allow-Origin:*, so the POI
       // icons load and the PDF canvas export stays untainted.
-      var PAPER_MAPLIBRE_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+      // The vector basemap is the map generator's own style, so a sheet is
+      // digitised and replayed on exactly the cartography it was printed
+      // with -- POI category/rank layers, transit markers, curated workshop
+      // POIs, street-label ordering. Falls back to the bundled file when the
+      // generator has no working copy saved. (Stock Liberty lived here
+      // before: https://tiles.openfreemap.org/styles/liberty)
+      var PAPER_MAPLIBRE_STYLE = window.CompactMapSetup.generatorStyle();
       var PAPER_OSM_STYLE = {
         version: 8,
         sources: {
@@ -553,7 +741,10 @@
           streets: { style: PAPER_OSM_STYLE, useBuiltIn3D: true },
           maplibre: { style: PAPER_MAPLIBRE_STYLE, useBuiltIn3D: true }
         },
-        initialTheme: 'streets',
+        // Open on the map generator's own style: this page digitises and
+        // replays sheets printed from it, so the plain OSM raster is the
+        // deliberate alternative (Basemap toggle), not the starting point.
+        initialTheme: 'maplibre',
         // Fullscreen changes the CSS viewport. Keep the WebGL backing canvas at
         // the same physical size instead of stretching its previous pixels.
         trackResize: true,
@@ -562,6 +753,7 @@
           if (event && event.theme === 'maplibre') applyMapLibreAppearance();
           reAddTempSketchMapRasterResult();
           reAddTempSketchMapResult();
+          reAddReferenceMap();
           reAddInkLayer();
           reAddPinLayer();
           // A style swap tears down custom sources; rebuild the reach overlay.
@@ -859,6 +1051,10 @@
             maxzoom: Number.isFinite(layer.maxzoom) ? layer.maxzoom : 24,
             filter: layer.filter ? JSON.parse(JSON.stringify(layer.filter)) : null,
             isPoi: layer['source-layer'] === 'poi',
+            // The style's own visibility. The generator publishes its POI
+            // buckets with the detailed/everything ranks switched off; forcing
+            // every bucket on here showed POIs the printed sheet never had.
+            styleHidden: (layer.layout || {}).visibility === 'none',
             // Stock placement values, so "Normal" restores them exactly rather
             // than guessing at the spec defaults.
             placement: layout['symbol-placement'],
@@ -988,6 +1184,7 @@
             // classFilter === false means every type is switched off.
             if (!poiEnabled || poiClasses === false) { setLayerVisible(id, false); return; }
             applyPoiOverlap(map, id, base);
+            if (base.styleHidden) { setLayerVisible(id, false); return; }
             setLayerVisible(id, true);
             poiShown++;
             var next = withoutRankTests(base.filter);
@@ -1240,6 +1437,14 @@
         Object.keys(COLOR_TARGETS).forEach(function (group) {
           var control = $('c' + group.charAt(0).toUpperCase() + group.slice(1));
           if (!control) return;
+          // An untouched picker means "whatever the style says". Recolouring
+          // even to the style's own colour is NOT a no-op: every layer in a
+          // group is re-hued to the group's reference layer, keeping only its
+          // own lightness. That harmonises a deliberate recolour, but applied
+          // by default it quietly rewrites the map generator's palette --
+          // residential roads take the trunk-road hue, woods take the park
+          // hue -- so the page no longer matched the style it was handed.
+          if (!control.dataset.touched) return;
           var picked = control.value;
           var entries = COLOR_TARGETS[group];
           // The group's first layer is its reference shade; every other layer
@@ -1295,11 +1500,14 @@
         function vis(on) {
           try { target.setLayoutProperty('building', 'visibility', on ? 'visible' : 'none'); } catch (_e) {}
         }
-        // Liberty caps the FLAT building layer at maxzoom 14 and hands over to
-        // the 3D extrusion layer above that. Because this page hides the
-        // extrusions (flat printable sheet), buildings would simply vanish from
-        // z14 upwards — which is the whole working range here. Extending the
-        // flat layer to z24 is what keeps footprints on screen at all.
+        // "As styled" leaves the building layers exactly as the loaded style
+        // has them, which is what makes this page match the map generator:
+        // Liberty caps the FLAT building layer at z14 and hands over to a 3D
+        // extrusion layer that the generator keeps switched off, so above z14
+        // there are simply no buildings. The other modes want footprints as
+        // drawing cues, so they extend the flat layer across the working
+        // range -- without that they would have nothing to fade or outline.
+        if (mode === 'style') return;
         try { target.setLayerZoomRange('building', 13, 24); } catch (_e) {}
         if (mode === 'hide') { vis(false); return; }
         vis(true);
@@ -1391,6 +1599,10 @@
           var maxzoom = Number.isFinite(layer.maxzoom) ? layer.maxzoom : 24;
           if (layer['source-layer'] === 'poi') {
             if (!poiEnabled || poiClasses === false) { vis(false); return; }
+            // Same rule as the live map: a bucket the style switched off is
+            // off here too, or the exported sheet would carry POIs the screen
+            // never showed.
+            if (layout.visibility === 'none') { vis(false); return; }
             applyPoiOverlap(target, id, {
               textAllowOverlap: layout['text-allow-overlap'],
               textIgnorePlacement: layout['text-ignore-placement'],
@@ -1689,11 +1901,23 @@
 
       // The launcher is only shown while the digitization panel is closed.
       function syncLaunchers() {
-        $('openH').hidden = !panel.classList.contains('collapsed');
+        var mainOpen = !panel.classList.contains('collapsed');
+        var editOpen = !$('panelEdit').classList.contains('collapsed');
+        $('openH').hidden = mainOpen || editOpen;
+        $('openEdit').hidden = mainOpen || editOpen;
+        $('openImobyl').hidden = mainOpen || editOpen;
       }
 
       function setPanel(open) {
         panel.classList.toggle('collapsed', !open);
+        if (open) $('panelEdit').classList.add('collapsed');
+        syncLaunchers();
+      }
+
+      function setEditPanel(open) {
+        $('panelEdit').classList.toggle('collapsed', !open);
+        if (open) panel.classList.add('collapsed');
+        else setActiveTool(null);
         syncLaunchers();
       }
 
@@ -1702,16 +1926,24 @@
       }
 
       $('openH').addEventListener('click', function () { setPanel(true); });
+      $('openEdit').addEventListener('click', function () { setEditPanel(true); });
       Array.prototype.forEach.call(document.querySelectorAll('#panel .panel-title .back'), function (button) {
         button.addEventListener('click', function () {
           setPanel(false);
         });
+      });
+      Array.prototype.forEach.call(document.querySelectorAll('#panelEdit .panel-title .back'), function (button) {
+        button.addEventListener('click', function () { setEditPanel(false); });
       });
 
       window.addEventListener('keydown', function (e) {
         var tag = e.target && e.target.tagName ? e.target.tagName.toLowerCase() : '';
         if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
         if (e.key === 'h' || e.key === 'H') togglePanel();
+        if (e.key === 'j' || e.key === 'J') {
+          setEditPanel($('panelEdit').classList.contains('collapsed'));
+        }
+        if (e.key === 'Escape') setActiveTool(null);
       });
       syncLaunchers();
 
@@ -2033,6 +2265,41 @@
       // ==================== printable reference map ====================
       var activeMapSheetId = '';
       var referenceStatus = $('referenceStatus');
+      var DIGITIZE_REFERENCE_SOURCE_ID = 'digitize-reference-map';
+      var DIGITIZE_REFERENCE_LAYER_ID = 'digitize-reference-map-layer';
+
+      function removeReferenceMap() {
+        if (map.getLayer(DIGITIZE_REFERENCE_LAYER_ID)) {
+          map.removeLayer(DIGITIZE_REFERENCE_LAYER_ID);
+        }
+        if (map.getSource(DIGITIZE_REFERENCE_SOURCE_ID)) {
+          map.removeSource(DIGITIZE_REFERENCE_SOURCE_ID);
+        }
+      }
+
+      function reAddReferenceMap() {
+        if (!activeMapSheetId || mapCorners.length !== 4) return;
+        if (map.isStyleLoaded && !map.isStyleLoaded()) return;
+        if (!map.getSource(DIGITIZE_REFERENCE_SOURCE_ID)) {
+          map.addSource(DIGITIZE_REFERENCE_SOURCE_ID, {
+            type: 'image',
+            url: '/api/map-sheets/' + encodeURIComponent(activeMapSheetId) + '/image',
+            coordinates: mapCorners
+          });
+        }
+        if (!map.getLayer(DIGITIZE_REFERENCE_LAYER_ID)) {
+          map.addLayer({
+            id: DIGITIZE_REFERENCE_LAYER_ID,
+            type: 'raster',
+            source: DIGITIZE_REFERENCE_SOURCE_ID,
+            paint: {
+              'raster-opacity': 1,
+              'raster-fade-duration': 0,
+              'raster-resampling': 'linear'
+            }
+          });
+        }
+      }
 
       // A sheet ID is either "7" (single) or "7_3" (map type _ participant).
       var SHEET_ID_RE = /^[1-9][0-9]{0,8}(?:_[1-9][0-9]{0,8})?$/;
@@ -2061,13 +2328,22 @@
       // the first generated ID active.
       var scanSheetId = '';
 
-      function enteredSheetId() {
-        if (scanSheetId && SHEET_ID_RE.test(scanSheetId)) return scanSheetId;
-        try {
-          return plannedSheetIds()[0];
-        } catch (_e) {
-          throw new Error('Scan a generated paper map so its ID can be detected.');
+      function requestedDigitizeSheetId() {
+        var mapId = String($('digitizeMapId').value || '').trim();
+        var participantId = String($('digitizeParticipantId').value || '').trim();
+        if (!/^[1-9][0-9]{0,8}$/.test(mapId)) {
+          throw new Error('Enter the map ID printed on the paper.');
         }
+        if (participantId && !/^[1-9][0-9]{0,8}$/.test(participantId)) {
+          throw new Error('Participant ID must be 1 or higher.');
+        }
+        return participantId ? mapId + '_' + participantId : mapId;
+      }
+
+      function enteredSheetId() {
+        var requested = requestedDigitizeSheetId();
+        if (scanSheetId === requested && activeMapSheetId === requested) return requested;
+        throw new Error('Load the selected reference map before scanning.');
       }
 
       // IDs already stored on disk. Exporting onto one replaces it, so the
@@ -2215,11 +2491,19 @@
         if (!record || !Array.isArray(record.corners) || record.corners.length !== 4) {
           throw new Error('Reference map has no valid geographic corners.');
         }
+        removeReferenceMap();
         activeMapSheetId = String(record.id || '');
         mapCorners = record.corners.map(function (point) { return [Number(point[0]), Number(point[1])]; });
-        var storedTheme = record.theme === 'maplibre' ? 'maplibre' : 'streets';
-        if (setup.getCurrentTheme() !== storedTheme) setup.applyTheme(storedTheme);
+        // Only follow a theme the sheet actually recorded. Older sheets were
+        // saved with none, and reading that absence as "raster" would drop the
+        // page out of the generator's style the moment such a sheet loaded.
+        var storedTheme = record.theme === 'maplibre' ? 'maplibre'
+          : record.theme === 'streets' ? 'streets' : '';
+        if (storedTheme && setup.getCurrentTheme() !== storedTheme) {
+          setup.applyTheme(storedTheme);
+        }
         syncBasemapToggle();
+        reAddReferenceMap();
         refreshExportBtn();
         if (moveMap && record.camera && Array.isArray(record.camera.center)) {
           map.jumpTo({
@@ -2243,6 +2527,74 @@
         applyMapSheet(data, moveMap);
         return data;
       }
+
+      function setReferenceSelectionReady(ready) {
+        $('stepCam').classList.toggle('off', !ready);
+      }
+
+      // Deselects the reference being scanned onto. It deliberately leaves the
+      // loaded reference sheets and their detections alone — each owns its own
+      // overlay, so previously loaded sheets stay on the map while a new one is
+      // being set up.
+      function clearSelectedReference() {
+        removeReferenceMap();
+        scanSheetId = '';
+        activeMapSheetId = '';
+        mapCorners = [];
+        currentReference = null;
+        setReferenceSelectionReady(false);
+      }
+
+      function invalidateDigitizeReference() {
+        if (scanSheetId || activeMapSheetId) clearSelectedReference();
+        setReferenceSelectionReady(false);
+        setStatus($('sheetIdStatus'), 'Click Load reference after entering the IDs.');
+      }
+
+      async function loadDigitizeReference() {
+        var id;
+        try {
+          id = requestedDigitizeSheetId();
+        } catch (error) {
+          clearSelectedReference();
+          setStatus($('sheetIdStatus'), error.message, 'err');
+          return;
+        }
+        clearSelectedReference();
+        var button = $('loadReferenceBtn');
+        button.disabled = true;
+        setStatus($('sheetIdStatus'), 'Loading map ID ' + id + '…');
+        try {
+          await loadMapSheet(id, true);
+          scanSheetId = id;
+          currentReference = addReference(id, mapCorners);
+          selectReferenceForEditing(currentReference);
+          refreshReferenceRow(currentReference);
+          setReferenceSelectionReady(true);
+          setStatus(
+            $('sheetIdStatus'),
+            'Showing and using the exact saved reference for map ID ' + id + '.',
+            'ok'
+          );
+        } catch (error) {
+          clearSelectedReference();
+          setStatus($('sheetIdStatus'), error.message || 'Could not load the reference map.', 'err');
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      ['digitizeMapId', 'digitizeParticipantId'].forEach(function (id) {
+        $(id).addEventListener('input', invalidateDigitizeReference);
+        $(id).addEventListener('keydown', function (event) {
+          if (event.key !== 'Enter') return;
+          event.preventDefault();
+          void loadDigitizeReference();
+        });
+      });
+      $('loadReferenceBtn').addEventListener('click', function () {
+        void loadDigitizeReference();
+      });
 
       // Save one sheet from an already-captured render. The capture is reused
       // across a whole batch: every participant sheet shows the same map, so
@@ -2339,11 +2691,15 @@
       var registrationBusy = false;
       var registrationTimer = 0;
 
-      // Multiple photos can be loaded at once. They are processed one at a
-      // time (each needs camImg + the shared canvases), and each keeps its own
-      // row + status in #sheetList. `activeSheet` is the one currently drawn on
-      // the map, which is what the GeoJSON export uses.
-      var sheets = [];            // { name, url, row, statusEl, corners, done }
+      // One entry per loaded reference sheet. Each owns its overlay canvas,
+      // pinned to its own geographic corners, so sheets covering completely
+      // different places sit on the map together — the detection output is
+      // geographic, and only the single shared canvas ever made that a problem.
+      // Photos are attached to whichever reference was loaded when they were
+      // dropped, and are processed one at a time because they share camImg.
+      var references = [];        // { id, corners, photos[], row, canvas, ... }
+      var currentReference = null;
+      var sheets = [];            // flat photo queue: { name, url, reference }
       var activeSheet = null;
       var queueRunning = false;
 
@@ -2351,66 +2707,227 @@
         return { w: camImg.naturalWidth || 0, h: camImg.naturalHeight || 0 };
       }
 
-      function addSheetRow(name) {
+      function findReference(id) {
+        return references.filter(function (r) { return r.id === id; })[0] || null;
+      }
+
+      function describeReference(reference) {
+        var done = reference.photos.filter(function (p) { return p.result; }).length;
+        var failed = reference.photos.filter(function (p) { return p.failed; }).length;
+        if (!reference.photos.length) return 'no photo yet';
+        var bits = [done + '/' + reference.photos.length + ' photo' +
+          (reference.photos.length === 1 ? '' : 's')];
+        if (failed) bits.push(failed + ' failed');
+        var counts = {};
+        reference.photos.forEach(function (photo) {
+          if (!photo.result) return;
+          Object.keys(KIND_LABELS).forEach(function (kind) {
+            counts[kind] = (counts[kind] || 0) + Number((photo.result.counts || {})[kind] || 0);
+          });
+        });
+        var totals = Object.keys(KIND_LABELS)
+          .filter(function (k) { return counts[k] > 0; })
+          .map(function (k) { return counts[k] + ' ' + KIND_LABELS[k].many; });
+        if (totals.length) bits.push(totals.join(', '));
+        return bits.join(' · ');
+      }
+
+      function refreshReferenceRow(reference) {
+        reference.statusEl.textContent = describeReference(reference);
+        var failed = reference.photos.some(function (p) { return p.failed; });
+        var any = reference.photos.some(function (p) { return p.result; });
+        reference.row.classList.toggle('ok', any && !failed);
+        reference.row.classList.toggle('err', failed && !any);
+        reference.row.classList.toggle('off', !reference.visible);
+      }
+
+      function addReference(id, corners) {
+        var existing = findReference(id);
+        if (existing) {
+          existing.corners = corners.slice();
+          return existing;
+        }
+        var canvas = document.createElement('canvas');
+        canvas.id = 'ink-' + references.length + '-' + Date.now();
+        canvas.width = INK_W;
+        canvas.height = INK_H;
+        canvas.style.display = 'none';
+        document.body.appendChild(canvas);
+
         var row = document.createElement('li');
+        var show = document.createElement('input');
+        show.type = 'checkbox';
+        show.checked = true;
+        show.className = 'sh';
+        show.title = 'Show this reference sheet in the combined result';
+        show.setAttribute('aria-label', 'Show map ' + id);
         var label = document.createElement('span');
         label.className = 'nm';
-        label.textContent = name;
+        label.textContent = 'Map ' + id;
+        label.title = 'Map ' + id;
         var state = document.createElement('span');
         state.className = 'st';
-        state.textContent = 'queued';
+        state.textContent = 'no photo yet';
         var remove = document.createElement('button');
         remove.type = 'button';
         remove.className = 'x';
         remove.title = 'Remove';
         remove.textContent = '×';
-        row.append(label, state, remove);
+        row.append(show, label, state, remove);
         $('sheetList').appendChild(row);
-        return { row: row, statusEl: state, removeBtn: remove };
+        $('sheetListHint').hidden = false;
+
+        var reference = {
+          id: id,
+          corners: corners.slice(),
+          photos: [],
+          row: row,
+          statusEl: state,
+          showBox: show,
+          canvas: canvas,
+          sourceId: 'paper-ink-' + canvas.id,
+          layerId: 'paper-ink-layer-' + canvas.id,
+          visible: true,
+          painted: false
+        };
+        row.addEventListener('click', function (event) {
+          if (event.target === show || event.target === remove) return;
+          selectReferenceForEditing(reference);
+        });
+        row.style.cursor = 'pointer';
+        row.title = 'Click to edit this sheet by hand';
+        show.addEventListener('change', function () {
+          reference.visible = show.checked;
+          applyReferenceVisibility(reference);
+          refreshReferenceRow(reference);
+          refreshLegends();
+          setStatus($('inkStatus'), aggregateStatus());
+        });
+        remove.addEventListener('click', function () { removeReference(reference); });
+        references.push(reference);
+        return reference;
+      }
+
+      function removeReference(reference) {
+        var index = references.indexOf(reference);
+        if (index >= 0) references.splice(index, 1);
+        reference.photos.forEach(function (photo) {
+          var at = sheets.indexOf(photo);
+          if (at >= 0) sheets.splice(at, 1);
+          if (photo.url) URL.revokeObjectURL(photo.url);
+        });
+        if (map.getLayer(reference.layerId)) map.removeLayer(reference.layerId);
+        if (map.getSource(reference.sourceId)) map.removeSource(reference.sourceId);
+        reference.canvas.remove();
+        reference.row.remove();
+        if (currentReference === reference) currentReference = null;
+        if (editingReference === reference) editingReference = null;
+        $('sheetListHint').hidden = !references.length;
+        if (!references.length) {
+          projected = false;
+          soloResult = null;
+          inkCanvas.getContext('2d').clearRect(0, 0, INK_W, INK_H);
+        }
+        refreshLegends();
+        setStatus($('inkStatus'), aggregateStatus());
+        refreshExportBtn();
+      }
+
+      function applyReferenceVisibility(reference) {
+        if (!map.getLayer(reference.layerId)) return;
+        map.setLayoutProperty(
+          reference.layerId, 'visibility', reference.visible ? 'visible' : 'none'
+        );
+      }
+
+      function ensureReferenceLayer(reference) {
+        if (reference.corners.length !== 4) return;
+        var coordinates = [
+          reference.corners[0], reference.corners[1],
+          reference.corners[2], reference.corners[3]
+        ];
+        var source = map.getSource(reference.sourceId);
+        if (source) {
+          if (typeof source.setCoordinates === 'function') source.setCoordinates(coordinates);
+          // Registering a photo calls applyMapSheet, which removes and re-adds
+          // the clean reference raster — landing it on top of this overlay and
+          // hiding every detected mark. Lift the ink back above it.
+          if (map.getLayer(reference.layerId)) map.moveLayer(reference.layerId);
+        } else {
+          map.addSource(reference.sourceId, {
+            type: 'canvas',
+            canvas: reference.canvas.id,
+            coordinates: coordinates,
+            animate: true
+          });
+          map.addLayer({
+            id: reference.layerId,
+            type: 'raster',
+            source: reference.sourceId,
+            paint: {
+              'raster-opacity': INK_OPACITY,
+              'raster-fade-duration': 0,
+              'raster-resampling': 'linear'
+            }
+          });
+        }
+        applyReferenceVisibility(reference);
       }
 
       function setSheetState(sheet, text, kind) {
-        sheet.statusEl.textContent = text;
-        sheet.row.className = kind || '';
+        if (!sheet.reference) return;
+        sheet.reference.statusEl.textContent = text;
+        sheet.reference.row.classList.toggle('err', kind === 'err');
       }
 
       function removeSheet(sheet) {
         var index = sheets.indexOf(sheet);
         if (index >= 0) sheets.splice(index, 1);
         if (sheet.url) URL.revokeObjectURL(sheet.url);
-        sheet.row.remove();
-        if (activeSheet === sheet) {
-          activeSheet = null;
-          clearInkLayer();
-          refreshExportBtn();
+        if (sheet.reference) {
+          var at = sheet.reference.photos.indexOf(sheet);
+          if (at >= 0) sheet.reference.photos.splice(at, 1);
+          paintReference(sheet.reference);
+          refreshReferenceRow(sheet.reference);
         }
+        if (activeSheet === sheet) activeSheet = sheets.filter(function (s) { return s.result; })[0] || null;
+        refreshLegends();
+        setStatus($('inkStatus'), aggregateStatus());
+        refreshExportBtn();
       }
 
       // Load one photo, align it, and run detection — the "load = detect" flow.
+      // The photo carries the reference it was dropped onto, so a queue can span
+      // several reference sheets without the ids getting crossed.
       function processSheet(sheet) {
         return new Promise(function (resolve) {
-          setSheetState(sheet, 'aligning…');
+          setSheetState(sheet, 'aligning ' + sheet.name + '…');
           usingCamera = false;
           stopAutoRegistration();
           paperCorners = [];
 
           function done(text, kind) {
-            setSheetState(sheet, text, kind);
+            sheet.failed = kind === 'err';
+            if (sheet.reference) refreshReferenceRow(sheet.reference);
+            else setSheetState(sheet, text, kind);
             resolve();
           }
 
           camImg.onload = async function () {
             camImg.onload = null;
-            var aligned = await autoRegisterMapSheet(true);
+            var aligned = await autoRegisterMapSheet(true, sheet.sheetId);
             if (!aligned) { done('no tags', 'err'); return; }
             sheet.corners = paperCorners.slice();
-            setSheetState(sheet, 'detecting…');
-            var detected = await renderInk();
+            setSheetState(sheet, 'detecting ' + sheet.name + '…');
+            var detected = await renderInk(sheet);
             if (!detected) { done('failed', 'err'); return; }
-            addOrUpdateInkSource();
             projected = true;
             activeSheet = sheet;
             sheet.done = true;
+            if (sheet.reference) {
+              paintReference(sheet.reference);
+              ensureReferenceLayer(sheet.reference);
+            }
             refreshExportBtn();
             done('detected', 'ok');
           };
@@ -2420,6 +2937,16 @@
           };
           camImg.src = sheet.url;
         });
+      }
+
+      // A threshold change invalidates every photo, not just the last one.
+      async function reprocessAll() {
+        if (!sheets.length) { await renderInk(null); references.forEach(paintReference); return; }
+        sheets.forEach(function (sheet) { sheet.done = false; sheet.failed = false; });
+        await runQueue();
+        references.forEach(paintReference);
+        refreshLegends();
+        setStatus($('inkStatus'), aggregateStatus());
       }
 
       async function runQueue() {
@@ -2440,22 +2967,28 @@
         var files = Array.prototype.slice.call(fileList || [])
           .filter(function (file) { return file && file.type.indexOf('image/') === 0; });
         if (!files.length) return;
-        try { enteredSheetId(); }
-        catch (error) { setStatus(camStatus, error.message, 'err'); return; }
+        if (!currentReference) {
+          setStatus(camStatus, 'Load a reference map first — photos attach to it.', 'err');
+          return;
+        }
 
+        // Photos belong to whichever reference is loaded right now, so the
+        // queue can carry work for several reference sheets at once.
+        var owner = currentReference;
         files.forEach(function (file) {
-          var ui = addSheetRow(file.name || 'photo');
           var sheet = {
             name: file.name || 'photo',
             url: URL.createObjectURL(file),
-            row: ui.row,
-            statusEl: ui.statusEl,
+            sheetId: owner ? owner.id : '',
+            reference: owner,
             done: false,
-            failed: false
+            failed: false,
+            result: null
           };
-          ui.removeBtn.addEventListener('click', function () { removeSheet(sheet); });
+          if (owner) owner.photos.push(sheet);
           sheets.push(sheet);
         });
+        if (owner) refreshReferenceRow(owner);
         setStatus(camStatus, '');
         runQueue();
       }
@@ -2515,13 +3048,13 @@
         }
       }
 
-      async function autoRegisterMapSheet(reportFailure) {
+      async function autoRegisterMapSheet(reportFailure, forcedSheetId) {
         if (registrationBusy || paperCorners.length === 4) return paperCorners.length === 4;
         var fs = frameSize();
         if (!fs.w || !fs.h) return false;
         registrationBusy = true;
         try {
-          var id = enteredSheetId();
+          var id = forcedSheetId || enteredSheetId();
           var capture = $('camCanvas');
           capture.width = fs.w;
           capture.height = fs.h;
@@ -2592,7 +3125,9 @@
         camImg.removeAttribute('src');
         sheets.slice().forEach(removeSheet);
         clearPaperCorners();
-        clearInkLayer();
+        projected = false;
+        soloResult = null;
+        references.forEach(paintReference);
         setStatus(camStatus, '');
         setStatus($('inkStatus'), '');
       });
@@ -2608,10 +3143,126 @@
       var projected = false;
       var thresholdTimer = 0;
       var drawingBusy = false;
-      var lastMaskImage = null;
+      var lastColorClasses = [];
+      var lastStickerColors = [];
+      var enabledStickerColors = new Set();   // keys of "colour:shape"
+      var lastRenderedStickerKeys = new Set();
+      var showStickerMarks = true;
+      // The class mask records, per pixel, which kind of feature the blob was
+      // decided to be and which colour class it belongs to. Compositing from it
+      // is what lets routes and stickers be shown separately without asking the
+      // backend to run detection again.
+      // Result of a detection run that has no row of its own (live camera).
+      var soloResult = null;
 
-      // Stroke colour and layer opacity are no longer user controls; the
-      // detected ink is drawn in one fixed colour at a fixed opacity.
+      // Every detected photo belonging to a reference sheet that is still
+      // ticked. Used only for the legends and the status line — the drawing
+      // itself is painted per reference, onto that reference's own canvas.
+      function visibleResults() {
+        var found = [];
+        references.forEach(function (reference) {
+          if (!reference.visible) return;
+          reference.photos.forEach(function (photo) {
+            if (photo.result) found.push(photo.result);
+          });
+        });
+        if (!found.length && soloResult) return [soloResult];
+        return found;
+      }
+
+      function manualStickerTally() {
+        var tally = [];
+        references.forEach(function (reference) {
+          if (!reference.visible || !reference.manual) return;
+          reference.manual.markers.forEach(function (marker) { tally.push(marker); });
+        });
+        return tally;
+      }
+
+      function refreshLegends() {
+        var shown = visibleResults();
+        var counts = {};
+        var colorById = {};
+        var stickerById = {};
+        manualStickerTally().forEach(function (marker) {
+          counts.sticker = (counts.sticker || 0) + 1;
+          var running = stickerById[marker.colorClass];
+          if (!running) {
+            stickerById[marker.colorClass] = {
+              id: marker.colorClass, label: marker.colorLabel, color: marker.color,
+              count: 1, circle: marker.shape === 'circle' ? 1 : 0,
+              triangle: marker.shape === 'triangle' ? 1 : 0
+            };
+          } else {
+            running.count += 1;
+            running[marker.shape] = (running[marker.shape] || 0) + 1;
+          }
+        });
+        shown.forEach(function (result) {
+          Object.keys(KIND_LABELS).forEach(function (kind) {
+            counts[kind] = (counts[kind] || 0) + Number((result.counts || {})[kind] || 0);
+          });
+          (result.colors || []).forEach(function (item) { colorById[item.id] = item; });
+          (result.stickerColors || []).forEach(function (item) {
+            var running = stickerById[item.id];
+            if (!running) {
+              stickerById[item.id] = {
+                id: item.id, label: item.label, color: item.color,
+                count: item.count, circle: item.circle || 0, triangle: item.triangle || 0
+              };
+            } else {
+              running.count += item.count;
+              running.circle += item.circle || 0;
+              running.triangle += item.triangle || 0;
+            }
+          });
+        });
+        renderStickerColorLegend(
+          Object.keys(colorById).map(function (k) { return colorById[k]; }),
+          Object.keys(stickerById).map(function (k) { return stickerById[k]; })
+        );
+        renderKindLegend(counts);
+        return counts;
+      }
+
+      function aggregateStatus() {
+        var shown = visibleResults();
+        if (!shown.length && !manualStickerTally().length) {
+          return 'Nothing shown — load a reference and drop a photo.';
+        }
+        var counts = {};
+        var ink = 0, unrefined = 0;
+        shown.forEach(function (result) {
+          ink += result.inkPixels;
+          if (!result.eccRefined) unrefined += 1;
+          Object.keys(KIND_LABELS).forEach(function (kind) {
+            counts[kind] = (counts[kind] || 0) + Number((result.counts || {})[kind] || 0);
+          });
+        });
+        if (!ink && !manualStickerTally().length) {
+          return 'No drawing found — lower the difference threshold.';
+        }
+        var summary = Object.keys(KIND_LABELS).filter(function (kind) {
+          return counts[kind] > 0;
+        }).map(function (kind) {
+          var total = counts[kind];
+          return total + ' ' + (total === 1 ? KIND_LABELS[kind].one : KIND_LABELS[kind].many);
+        }).join(', ');
+        var byHand = manualStickerTally().length;
+        var strokes = references.reduce(function (total, reference) {
+          return total + (reference.visible && reference.manual ? reference.manual.strokes.length : 0);
+        }, 0);
+        return (summary || 'Drawing isolated from the saved clean map') + ' ✓' +
+          (shown.length > 1 ? ' · ' + shown.length + ' photos' : '') +
+          (byHand || strokes ? ' · ' + (byHand + strokes) + ' by hand' : '') +
+          (unrefined ? ' · ' + unrefined + ' not refined' : '');
+      }
+      var enabledKinds = new Set();
+      var classCanvas = document.createElement('canvas');
+
+      // Older backend responses contain an alpha-only mask. Keep the former red
+      // rendering as a compatibility fallback; current responses carry the
+      // colour-segmented pixels directly.
       var INK_COLOR = '#d3302f';
       var INK_OPACITY = 0.95;
 
@@ -2620,7 +3271,7 @@
         $('thresholdVal').textContent = thresholdInput.value;
         if (projected) {
           window.clearTimeout(thresholdTimer);
-          thresholdTimer = window.setTimeout(function () { renderInk(); }, 180);
+          thresholdTimer = window.setTimeout(function () { reprocessAll(); }, 180);
         }
       });
 
@@ -2629,16 +3280,531 @@
           !(projected && mapCorners.length === 4 && paperCorners.length === 4);
       }
 
+      // Composite from the class mask: every pixel knows its kind and its
+      // colour class, so both filters apply exactly. The mask is read at its
+      // own resolution with smoothing off — interpolating it would blend the
+      // kind and colour codes into meaningless in-between values — and only the
+      // finished picture is scaled down onto the overlay canvas.
+      // Draw one reference sheet onto its own canvas. Its photos are filtered
+      // individually and then laid over one another — whichever photo saw a
+      // given pixel first keeps it, so two scans of the same sheet reinforce
+      // rather than erase each other.
+      function paintReference(reference) {
+        var shown = reference.photos
+          .filter(function (photo) { return photo.result && photo.result.classImage; })
+          .map(function (photo) { return photo.result; });
+        var target = reference.canvas;
+        var manual = reference.manual;
+        var hasManual = Boolean(manual && (manual.markers.length || manual.strokes.length));
+        if (!shown.length && !hasManual) {
+          target.getContext('2d').clearRect(0, 0, target.width, target.height);
+          if (map && typeof map.triggerRepaint === 'function') map.triggerRepaint();
+          return;
+        }
+        var size = manualTargetSize(reference);
+        var first = shown.length ? shown[0].classImage : null;
+        var width = first ? (first.naturalWidth || first.width) : size.w;
+        var height = first ? (first.naturalHeight || first.height) : size.h;
+        if (!width || !height) return;
+        if (classCanvas.width !== width || classCanvas.height !== height) {
+          classCanvas.width = width;
+          classCanvas.height = height;
+        }
+        var cctx = classCanvas.getContext('2d', { willReadFrequently: true });
+        cctx.globalCompositeOperation = 'source-over';
+        var merged = null;
+        shown.forEach(function (result) {
+          cctx.imageSmoothingEnabled = false;
+          cctx.clearRect(0, 0, width, height);
+          cctx.drawImage(result.classImage, 0, 0);
+          var pixels = cctx.getImageData(0, 0, width, height);
+          paintOneClassMask(pixels.data, result);
+          if (!merged) {
+            merged = pixels;
+            return;
+          }
+          var into = merged.data;
+          var from = pixels.data;
+          for (var j = 0; j < from.length; j += 4) {
+            if (!from[j + 3] || into[j + 3]) continue;
+            into[j] = from[j];
+            into[j + 1] = from[j + 1];
+            into[j + 2] = from[j + 2];
+            into[j + 3] = from[j + 3];
+          }
+        });
+        cctx.clearRect(0, 0, width, height);
+        if (merged) cctx.putImageData(merged, 0, 0);
+
+        // Hand-drawn paths sit with the detected ones, then the eraser lifts
+        // whatever it has been dragged over — detected or drawn, both at once.
+        if (manual && manual.strokes.length && enabledKinds.has('line')) {
+          cctx.lineCap = 'round';
+          cctx.lineJoin = 'round';
+          manual.strokes.forEach(function (stroke) {
+            if (stroke.points.length < 1) return;
+            cctx.strokeStyle = stroke.color;
+            cctx.lineWidth = stroke.width;
+            cctx.beginPath();
+            cctx.moveTo(stroke.points[0][0], stroke.points[0][1]);
+            stroke.points.forEach(function (point) { cctx.lineTo(point[0], point[1]); });
+            if (stroke.points.length === 1) cctx.lineTo(stroke.points[0][0] + 0.1, stroke.points[0][1]);
+            cctx.stroke();
+          });
+        }
+        if (manual && manual.erased) {
+          cctx.globalCompositeOperation = 'destination-out';
+          cctx.drawImage(manual.erased, 0, 0);
+          cctx.globalCompositeOperation = 'source-over';
+        }
+
+        shown.forEach(function (result) { drawPathLines(cctx, result); });
+        shown.forEach(function (result) { drawStickerMarkers(cctx, result); });
+        if (manual && manual.markers.length) {
+          drawStickerMarkers(cctx, {
+            markers: manual.markers,
+            stickerDiameter: manualStickerDiameter(reference)
+          });
+        }
+
+        // The reference's own canvas is what maplibre samples, pinned to that
+        // sheet's corners, so each sheet lands on its own patch of the world.
+        if (target.width !== width || target.height !== height) {
+          target.width = width;
+          target.height = height;
+        }
+        var tctx = target.getContext('2d');
+        tctx.globalCompositeOperation = 'source-over';
+        tctx.clearRect(0, 0, width, height);
+        tctx.imageSmoothingEnabled = true;
+        tctx.drawImage(classCanvas, 0, 0);
+        if (map && typeof map.triggerRepaint === 'function') map.triggerRepaint();
+      }
+
+      function paintOneClassMask(data, result) {
+        var kindCodes = result.kindCodes || {};
+        var kindAllowed = [];
+        Object.keys(kindCodes).forEach(function (kind) {
+          kindAllowed[kindCodes[kind]] = enabledKinds.has(kind);
+        });
+        var red = [], green = [], blue = [];
+        (result.colors || []).forEach(function (item) {
+          var slot = Number(item.index) + 1;
+          var hex = String(item.color || '#d3302f').replace('#', '');
+          red[slot] = parseInt(hex.slice(0, 2), 16);
+          green[slot] = parseInt(hex.slice(2, 4), 16);
+          blue[slot] = parseInt(hex.slice(4, 6), 16);
+        });
+        var stickerCode = kindCodes.sticker;
+        var lineCode = kindCodes.line;
+
+        for (var i = 0; i < data.length; i += 4) {
+          var alpha = data[i + 3];
+          if (!alpha) continue;
+          var kindSlot = data[i];
+          var colorSlot = data[i + 1];
+          // Neither a sticker's pixels nor a path's are painted. Both are
+          // drawn from what the export actually contains — a point for a
+          // sticker, a simplified polyline for a path — so what is on screen
+          // is what lands in the GeoJSON, not the ragged ink behind it.
+          var hidden = kindSlot === stickerCode || kindSlot === lineCode ||
+            !kindAllowed[kindSlot] || red[colorSlot] === undefined;
+          if (hidden) {
+            data[i + 3] = 0;
+            continue;
+          }
+          data[i] = red[colorSlot];
+          data[i + 1] = green[colorSlot];
+          data[i + 2] = blue[colorSlot];
+        }
+      }
+
+      // The traced route as a polyline, with its vertices shown, so what is on
+      // screen is the geometry that will be exported rather than the ink it was
+      // derived from. A white casing keeps it readable over the printed map.
+      function drawPathLines(context, result) {
+        var paths = result.paths || [];
+        if (!paths.length || !enabledKinds.has('line')) return;
+        context.save();
+        context.lineCap = 'round';
+        context.lineJoin = 'round';
+        paths.forEach(function (path) {
+          var points = path.points || [];
+          if (points.length < 2) return;
+          var weight = Math.max(2.5, (path.widthPx || 6) * 0.85);
+          context.beginPath();
+          context.moveTo(points[0][0], points[0][1]);
+          for (var i = 1; i < points.length; i += 1) {
+            context.lineTo(points[i][0], points[i][1]);
+          }
+          context.strokeStyle = 'rgba(255,255,255,0.85)';
+          context.lineWidth = weight + Math.max(2.5, weight * 0.7);
+          context.stroke();
+          context.strokeStyle = path.color;
+          context.lineWidth = weight;
+          context.stroke();
+          context.fillStyle = path.color;
+          points.forEach(function (point) {
+            context.beginPath();
+            context.arc(point[0], point[1], Math.max(1.6, weight * 0.42), 0, Math.PI * 2);
+            context.fill();
+          });
+        });
+        context.restore();
+      }
+
+      // A plus for a circle, a minus for a triangle, in the sticker's own
+      // colour. Drawn at the class mask's own resolution so the marks scale with
+      // everything else when the finished picture is put on the overlay.
+      function drawStickerMarkers(context, result) {
+        var markers = result.markers || [];
+        if (!markers.length || !enabledKinds.has('sticker') || !showStickerMarks) return;
+        var arm = Math.max(5, result.stickerDiameter * 0.62);
+        var weight = Math.max(2, result.stickerDiameter * 0.18);
+        context.save();
+        context.lineCap = 'round';
+        context.lineJoin = 'round';
+        markers.forEach(function (marker) {
+          if (!stickerAllowed(marker)) return;
+          context.beginPath();
+          context.moveTo(marker.x - arm, marker.y);
+          context.lineTo(marker.x + arm, marker.y);
+          if (marker.shape === 'circle') {
+            context.moveTo(marker.x, marker.y - arm);
+            context.lineTo(marker.x, marker.y + arm);
+          }
+          // A white underlay keeps a dark mark readable over dark ink and a
+          // pale one readable over the map.
+          context.strokeStyle = 'rgba(255,255,255,0.9)';
+          context.lineWidth = weight + Math.max(2, weight * 0.8);
+          context.stroke();
+          context.strokeStyle = marker.color;
+          context.lineWidth = weight;
+          context.stroke();
+        });
+        context.restore();
+      }
+
       function paintDrawingMask() {
-        if (!lastMaskImage) return;
-        var ictx = inkCanvas.getContext('2d');
-        ictx.clearRect(0, 0, INK_W, INK_H);
-        ictx.globalCompositeOperation = 'source-over';
-        ictx.drawImage(lastMaskImage, 0, 0, INK_W, INK_H);
-        ictx.globalCompositeOperation = 'source-in';
-        ictx.fillStyle = INK_COLOR;
-        ictx.fillRect(0, 0, INK_W, INK_H);
-        ictx.globalCompositeOperation = 'source-over';
+        // The heatmap goes down first so the reference overlays, which are
+        // moved to the top as they are ensured, keep their marks readable
+        // above it.
+        refreshStickerHeatmap();
+        references.forEach(function (reference) {
+          paintReference(reference);
+          ensureReferenceLayer(reference);
+        });
+      }
+
+      // ---- sticker density heatmap -------------------------------------
+      // Same colour ramp, zoom curves and slider ranges as the results page,
+      // so a density read there and here mean the same thing. It is fed from
+      // exactly what the filters below leave switched on — the ticked sticker
+      // colours, across every ticked photo of every ticked reference sheet,
+      // hand-placed stickers included.
+      var HEAT_SOURCE_ID = 'digitize-sticker-heat-source';
+      var HEAT_LAYER_ID = 'digitize-sticker-heat-layer';
+      var heatEnabled = false;
+      var heatRadius = 60;
+      var heatIntensity = 1;
+
+      function buildStickerHeatLayer(baseRadius, baseIntensity) {
+        return {
+          id: HEAT_LAYER_ID,
+          type: 'heatmap',
+          source: HEAT_SOURCE_ID,
+          maxzoom: 22,
+          paint: {
+            'heatmap-weight': ['coalesce', ['get', 'weight'], 1],
+            'heatmap-intensity': [
+              'interpolate', ['linear'], ['zoom'],
+              10, baseIntensity * 0.6,
+              16, baseIntensity,
+              22, baseIntensity * 1.8
+            ],
+            'heatmap-color': [
+              'interpolate', ['linear'], ['heatmap-density'],
+              0.00, 'rgba(33,102,172,0)',
+              0.20, 'rgb(103,169,207)',
+              0.40, 'rgb(209,229,240)',
+              0.60, 'rgb(253,219,199)',
+              0.80, 'rgb(239,138,98)',
+              1.00, 'rgb(178,24,43)'
+            ],
+            'heatmap-radius': [
+              'interpolate', ['linear'], ['zoom'],
+              10, baseRadius * 0.6,
+              16, baseRadius,
+              22, baseRadius * 2.2
+            ],
+            'heatmap-opacity': [
+              'interpolate', ['linear'], ['zoom'],
+              10, 0.85,
+              22, 0.7
+            ]
+          }
+        };
+      }
+
+      // Every sticker currently on screen, as geographic points. Detected and
+      // hand-placed ones are treated alike — both are a colour, a shape and a
+      // position, and both should count towards where people put things.
+      function stickerHeatFeatures() {
+        var features = [];
+        if (!enabledKinds.has('sticker')) return features;
+        references.forEach(function (reference) {
+          if (!reference.visible) return;
+          var c = reference.corners;
+          if (!c || c.length !== 4) return;
+          var size = manualTargetSize(reference);
+          var spanLng = c[1][0] - c[0][0];
+          var spanLat = c[3][1] - c[0][1];
+          function push(marker) {
+            if (!stickerAllowed(marker)) return;
+            var u = size.w > 1 ? marker.x / (size.w - 1) : 0;
+            var v = size.h > 1 ? marker.y / (size.h - 1) : 0;
+            features.push({
+              type: 'Feature',
+              properties: {
+                weight: 1,
+                colorClass: marker.colorClass,
+                shape: marker.shape
+              },
+              geometry: {
+                type: 'Point',
+                coordinates: [c[0][0] + spanLng * u, c[0][1] + spanLat * v]
+              }
+            });
+          }
+          reference.photos.forEach(function (photo) {
+            if (photo.result) photo.result.markers.forEach(push);
+          });
+          if (reference.manual) reference.manual.markers.forEach(push);
+        });
+        return features;
+      }
+
+      function refreshStickerHeatmap() {
+        var data = {
+          type: 'FeatureCollection',
+          features: heatEnabled ? stickerHeatFeatures() : []
+        };
+        var source = map.getSource(HEAT_SOURCE_ID);
+        if (source) {
+          source.setData(data);
+        } else {
+          if (!heatEnabled) return;
+          map.addSource(HEAT_SOURCE_ID, { type: 'geojson', data: data });
+          map.addLayer(buildStickerHeatLayer(heatRadius, heatIntensity));
+        }
+        if (map.getLayer(HEAT_LAYER_ID)) {
+          map.setLayoutProperty(
+            HEAT_LAYER_ID, 'visibility', heatEnabled ? 'visible' : 'none'
+          );
+        }
+        var count = data.features.length;
+        setStatus($('heatStatus'), heatEnabled
+          ? (count ? count + ' sticker' + (count === 1 ? '' : 's') + ' in the heatmap.'
+                   : 'No stickers match the current filters.')
+          : '', count ? 'ok' : '');
+      }
+
+      // Radius and intensity live in the layer's paint expressions, so the
+      // layer is rebuilt rather than patched.
+      function updateHeatParams() {
+        if (!map.getLayer(HEAT_LAYER_ID)) return;
+        map.removeLayer(HEAT_LAYER_ID);
+        map.addLayer(buildStickerHeatLayer(heatRadius, heatIntensity));
+        map.setLayoutProperty(
+          HEAT_LAYER_ID, 'visibility', heatEnabled ? 'visible' : 'none'
+        );
+        references.forEach(function (reference) {
+          if (map.getLayer(reference.layerId)) map.moveLayer(reference.layerId);
+        });
+      }
+
+      $('showMarks').addEventListener('change', function (event) {
+        showStickerMarks = event.target.checked;
+        paintDrawingMask();
+      });
+
+      $('heatEnabled').addEventListener('change', function (event) {
+        heatEnabled = event.target.checked;
+        $('heatControls').hidden = !heatEnabled;
+        refreshStickerHeatmap();
+        references.forEach(function (reference) {
+          if (map.getLayer(reference.layerId)) map.moveLayer(reference.layerId);
+        });
+      });
+
+      $('heatRadius').addEventListener('input', function (event) {
+        heatRadius = Number(event.target.value);
+        $('heatRadiusVal').textContent = String(heatRadius);
+        updateHeatParams();
+      });
+
+      $('heatIntensity').addEventListener('input', function (event) {
+        heatIntensity = Number(event.target.value);
+        $('heatIntensityVal').textContent = heatIntensity.toFixed(1);
+        updateHeatParams();
+      });
+
+      // The backend filters stickers by colour only, so ask it for every
+      // colour that still has a shape switched on and drop the unwanted shapes
+      // from the response here.
+      function selectedStickerColors() {
+        var colours = new Set();
+        enabledStickerColors.forEach(function (key) { colours.add(key.split(':')[0]); });
+        return lastStickerColors
+          .filter(function (item) { return colours.has(item.id); })
+          .map(function (item) { return item.id; });
+      }
+
+      function keepExportedFeature(feature) {
+        var props = feature.properties || {};
+        if (props.kind !== 'sticker') return true;
+        return enabledStickerColors.has(stickerKey(props.colorClass, props.shape));
+      }
+
+      // One chip per colour of sticker actually on the sheet. Routes, areas and
+      // symbols are switched by kind instead — their colour says nothing beyond
+      // which pen happened to be free.
+      // A sticker's meaning is its colour AND its shape, so each combination
+      // that actually occurs gets its own chip: a green plus can be shown
+      // without the green minuses coming with it.
+      function stickerKey(colorClass, shape) { return colorClass + ':' + shape; }
+
+      function stickerAllowed(marker) {
+        return enabledStickerColors.has(stickerKey(marker.colorClass, marker.shape));
+      }
+
+      function renderStickerColorLegend(colors, stickerColors) {
+        var legend = $('colorLegend');
+        legend.textContent = '';
+        lastColorClasses = Array.isArray(colors) ? colors : [];
+        lastStickerColors = Array.isArray(stickerColors) ? stickerColors : [];
+
+        var combos = [];
+        lastStickerColors.forEach(function (item) {
+          ['circle', 'triangle'].forEach(function (shape) {
+            var total = Number(item[shape] || 0);
+            if (total > 0) {
+              combos.push({
+                key: stickerKey(item.id, shape), id: item.id, shape: shape,
+                label: item.label, color: item.color, count: total
+              });
+            }
+          });
+        });
+
+        // Keep whatever was already unticked; only combinations that are new
+        // since the last render start out on.
+        var previous = enabledStickerColors;
+        var seen = new Set(combos.map(function (combo) { return combo.key; }));
+        enabledStickerColors = new Set();
+        combos.forEach(function (combo) {
+          if (!previous.size || previous.has(combo.key) || !lastRenderedStickerKeys.has(combo.key)) {
+            enabledStickerColors.add(combo.key);
+          }
+        });
+        lastRenderedStickerKeys = seen;
+
+        if (!combos.length) {
+          legend.hidden = true;
+          return;
+        }
+        combos.forEach(function (combo) {
+          var shapeWord = combo.shape === 'circle' ? 'round' : 'triangular';
+          var chip = document.createElement('label');
+          chip.className = 'color-chip';
+          chip.title = combo.count + ' ' + shapeWord + ' ' +
+            combo.label.toLowerCase() + ' sticker' + (combo.count === 1 ? '' : 's');
+
+          var checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.checked = enabledStickerColors.has(combo.key);
+          checkbox.setAttribute(
+            'aria-label', 'Show ' + shapeWord + ' ' + combo.label + ' stickers'
+          );
+          checkbox.addEventListener('change', function () {
+            if (checkbox.checked) enabledStickerColors.add(combo.key);
+            else enabledStickerColors.delete(combo.key);
+            paintDrawingMask();
+          });
+
+          var dot = document.createElement('span');
+          dot.className = 'dot';
+          dot.style.backgroundColor = combo.color;
+          // The chip carries the same mark the map draws: + for round,
+          // − for triangular.
+          var sign = document.createElement('span');
+          sign.className = 'sign';
+          sign.textContent = combo.shape === 'circle' ? '+' : '–';
+          var text = document.createElement('span');
+          text.textContent = combo.label + ' ' + combo.count;
+          chip.appendChild(checkbox);
+          chip.appendChild(dot);
+          chip.appendChild(sign);
+          chip.appendChild(text);
+          legend.appendChild(chip);
+        });
+        legend.hidden = false;
+      }
+
+      // ---- what the drawing was understood to be -------------------------
+      var KIND_LABELS = {
+        sticker: { glyph: '●', one: 'sticker', many: 'stickers' },
+        line: { glyph: '╱', one: 'path', many: 'paths' },
+        area: { glyph: '◯', one: 'area', many: 'areas' }
+      };
+
+      function selectedKinds() {
+        return Object.keys(KIND_LABELS).filter(function (kind) {
+          return enabledKinds.has(kind);
+        });
+      }
+
+      function renderKindLegend(counts) {
+        var legend = $('kindLegend');
+        legend.textContent = '';
+        var kinds = counts ? Object.keys(KIND_LABELS).filter(function (kind) {
+          return Number(counts[kind] || 0) > 0;
+        }) : [];
+        enabledKinds = new Set(kinds);
+        if (!kinds.length) { legend.hidden = true; return; }
+        kinds.forEach(function (kind) {
+          var meta = KIND_LABELS[kind];
+          var total = Number(counts[kind] || 0);
+          var chip = document.createElement('label');
+          chip.className = 'kind-chip';
+          chip.title = 'Show ' + meta.many + ' on the map and include them in the export';
+
+          var checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.checked = true;
+          checkbox.setAttribute('aria-label', 'Show ' + meta.many);
+          checkbox.addEventListener('change', function () {
+            if (checkbox.checked) enabledKinds.add(kind);
+            else enabledKinds.delete(kind);
+            paintDrawingMask();
+          });
+
+          var glyph = document.createElement('span');
+          glyph.className = 'glyph';
+          glyph.textContent = meta.glyph;
+          var text = document.createElement('span');
+          var strong = document.createElement('b');
+          strong.textContent = String(total);
+          text.appendChild(strong);
+          text.appendChild(document.createTextNode(
+            ' ' + (total === 1 ? meta.one : meta.many)
+          ));
+          chip.appendChild(checkbox);
+          chip.appendChild(glyph);
+          chip.appendChild(text);
+          legend.appendChild(chip);
+        });
+        legend.hidden = false;
       }
 
       function loadDrawingMask(dataUrl) {
@@ -2653,7 +3819,7 @@
       // Rectification and subtraction run on the backend, where the saved clean
       // map PNG can be compared with this exact photographed sheet. Only pixels
       // absent from that reference are returned as a transparent ink mask.
-      async function renderInk() {
+      async function renderInk(targetSheet) {
         if (drawingBusy) return false;
         var fs = frameSize();
         if (!fs.w || !fs.h || paperCorners.length !== 4) return false;
@@ -2667,7 +3833,7 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              id: enteredSheetId(),
+              id: (targetSheet && targetSheet.sheetId) || enteredSheetId(),
               image: camCanvas.toDataURL('image/jpeg', 0.94),
               paperCorners: paperCorners,
               threshold: Number(thresholdInput.value)
@@ -2675,11 +3841,44 @@
           });
           var data = await response.json();
           if (!response.ok || !data.ok) throw new Error(data.error || 'Drawing subtraction failed.');
-          lastMaskImage = await loadDrawingMask(data.mask);
+          // Each photo keeps its own result rather than overwriting a single
+          // shared one, so several sheets of the same map can be shown at once
+          // and switched on and off individually.
+          var result = {
+            segmented: Boolean(data.colorMask),
+            kindCodes: data.kindCodes || null,
+            markers: Array.isArray(data.markers) ? data.markers : [],
+            paths: Array.isArray(data.paths) ? data.paths : [],
+            stickerDiameter: (data.alignment && data.alignment.stickerDiameterPx) || 24,
+            colors: Array.isArray(data.colors) ? data.colors : [],
+            stickerColors: Array.isArray(data.stickerColors) ? data.stickerColors : [],
+            counts: data.counts || null,
+            inkPixels: data.inkPixels || 0,
+            eccRefined: Boolean(data.alignment && data.alignment.eccRefined),
+            classImage: data.classMask ? await loadDrawingMask(data.classMask) : null,
+            maskImage: await loadDrawingMask(data.colorMask || data.mask)
+          };
+          if (targetSheet) {
+            targetSheet.result = result;
+          } else if (currentReference) {
+            // A live-camera capture has no row of its own; it stands in as a
+            // single photo on whichever reference is loaded.
+            var live = currentReference.photos.filter(function (p) { return p.live; })[0];
+            if (!live) {
+              live = {
+                name: 'live camera', live: true, sheetId: currentReference.id,
+                reference: currentReference, done: true, failed: false, result: null
+              };
+              currentReference.photos.push(live);
+            }
+            live.result = result;
+            refreshReferenceRow(currentReference);
+          } else {
+            soloResult = result;
+          }
+          refreshLegends();
           paintDrawingMask();
-          setStatus($('inkStatus'), data.inkPixels
-            ? 'Drawing isolated from the saved clean map ✓'
-            : 'No drawing found — lower the difference threshold.', data.inkPixels ? 'ok' : '');
+          setStatus($('inkStatus'), aggregateStatus(), data.inkPixels ? 'ok' : '');
           return true;
         } catch (error) {
           setStatus($('inkStatus'), error.message || 'Drawing subtraction failed.', 'err');
@@ -2689,50 +3888,353 @@
         }
       }
 
-      function inkCoordinates() {
-        // maplibre image/canvas coordinates: [top-left, top-right, bottom-right,
-        // bottom-left] of the canvas — which is exactly corner order 1..4.
-        return [mapCorners[0], mapCorners[1], mapCorners[2], mapCorners[3]];
-      }
-
-      function addOrUpdateInkSource() {
-        var src = map.getSource('paper-ink');
-        if (src && typeof src.setCoordinates === 'function') {
-          src.setCoordinates(inkCoordinates());
-          return;
-        }
-        map.addSource('paper-ink', {
-          type: 'canvas',
-          canvas: 'inkCanvas',
-          coordinates: inkCoordinates(),
-          animate: true
-        });
-        map.addLayer({
-          id: 'paper-ink-layer',
-          type: 'raster',
-          source: 'paper-ink',
-          paint: {
-            'raster-opacity': INK_OPACITY,
-            'raster-fade-duration': 0,
-            'raster-resampling': 'linear'
-          }
-        });
-      }
-
-      function clearInkLayer() {
-        projected = false;
-        lastMaskImage = null;
-        inkCanvas.getContext('2d').clearRect(0, 0, INK_W, INK_H);
-        if (map.getLayer('paper-ink-layer')) map.removeLayer('paper-ink-layer');
-        if (map.getSource('paper-ink')) map.removeSource('paper-ink');
-      }
-
       // Re-add after a basemap style switch wipes custom sources.
       function reAddInkLayer() {
-        if (projected && mapCorners.length === 4 && !map.getSource('paper-ink')) {
-          try { addOrUpdateInkSource(); } catch (_e) {}
+        if (heatEnabled && !map.getSource(HEAT_SOURCE_ID)) {
+          try { refreshStickerHeatmap(); } catch (_e) {}
         }
+        references.forEach(function (reference) {
+          if (map.getSource(reference.sourceId)) return;
+          try { ensureReferenceLayer(reference); } catch (_e) {}
+        });
       }
+
+      // ==================== manual correction ====================
+      // Detection is good but not perfect, so everything it produces can be
+      // added to or rubbed out by hand. Edits live on the reference sheet
+      // selected in the list, in that sheet's own mask pixel coordinates, so
+      // they survive re-detection at a different threshold and land in the
+      // export next to what was found automatically.
+      //
+      // The five sticker colours below are the palette the backend classifies
+      // into; black and red are the two colours a path is ever drawn in.
+      var MANUAL_STICKER_COLORS = [
+        { id: 'yellow', label: 'Yellow', color: '#f7ea55' },
+        { id: 'green', label: 'Green', color: '#5ba24f' },
+        { id: 'orange', label: 'Orange', color: '#f59a4a' },
+        { id: 'cyan', label: 'Cyan', color: '#4acfff' },
+        { id: 'pink', label: 'Pink', color: '#f05c8c' }
+      ];
+      var MANUAL_PATH_COLORS = [
+        { id: 'black', label: 'Black', color: '#252525' },
+        { id: 'red', label: 'Red', color: '#eb6f73' }
+      ];
+
+      var activeTool = null;      // { kind:'sticker'|'path'|'eraser', ... }
+      var editingReference = null;
+      var drawingStroke = null;
+
+      function manualStore(reference) {
+        if (!reference.manual) reference.manual = { markers: [], strokes: [], erased: null };
+        return reference.manual;
+      }
+
+      function manualTargetSize(reference) {
+        var photo = reference.photos.filter(function (p) { return p.result; })[0];
+        var image = photo && photo.result.classImage;
+        if (image) {
+          return {
+            w: image.naturalWidth || image.width,
+            h: image.naturalHeight || image.height
+          };
+        }
+        return { w: reference.canvas.width || INK_W, h: reference.canvas.height || INK_H };
+      }
+
+      // lng/lat -> that sheet's mask pixels. The sheet corners are an
+      // axis-aligned rectangle in lng/lat, so the mapping is a plain linear
+      // interpolation between them — the same blend the backend inverts when it
+      // turns pixels back into coordinates.
+      function lngLatToSheetPixel(reference, lngLat) {
+        var c = reference.corners;
+        if (!c || c.length !== 4) return null;
+        var spanLng = c[1][0] - c[0][0];
+        var spanLat = c[3][1] - c[0][1];
+        if (!spanLng || !spanLat) return null;
+        var size = manualTargetSize(reference);
+        return {
+          x: ((lngLat.lng - c[0][0]) / spanLng) * (size.w - 1),
+          y: ((lngLat.lat - c[0][1]) / spanLat) * (size.h - 1),
+          w: size.w,
+          h: size.h
+        };
+      }
+
+      function manualStickerDiameter(reference) {
+        var photo = reference.photos.filter(function (p) { return p.result; })[0];
+        return (photo && photo.result.stickerDiameter) || 27;
+      }
+
+      function setActiveTool(tool) {
+        activeTool = tool;
+        Array.prototype.forEach.call(
+          document.querySelectorAll('#panelEdit .tool'),
+          function (button) {
+            button.classList.toggle('is-active', Boolean(tool) && button.dataset.toolKey === tool.key);
+          }
+        );
+        var canvas = map.getCanvasContainer();
+        canvas.classList.toggle('map-editing', Boolean(tool));
+        if (tool) {
+          map.dragPan.disable();
+          map.doubleClickZoom.disable();
+        } else {
+          map.dragPan.enable();
+          map.doubleClickZoom.enable();
+        }
+        refreshEditTarget();
+      }
+
+      function selectReferenceForEditing(reference) {
+        editingReference = reference;
+        references.forEach(function (item) {
+          item.row.classList.toggle('editing', item === reference);
+        });
+        refreshEditTarget();
+      }
+
+      // Which sheet a hand edit lands on: the one clicked in the list, or the
+      // one just loaded if nothing has been clicked yet.
+      function editTarget() {
+        return editingReference || currentReference;
+      }
+
+      function refreshEditTarget() {
+        var target = editTarget();
+        var text;
+        if (!target) text = 'Load a reference map first.';
+        else if (!activeTool) text = 'Editing map ' + target.id + ' — pick a tool.';
+        else text = 'Map ' + target.id + ' · ' + activeTool.label +
+          ' — click the map' + (activeTool.kind === 'sticker' ? '.' : ' and drag.');
+        setStatus($('editTargetStatus'), text, target ? 'ok' : '');
+      }
+
+      function buildToolButton(host, key, label, render, onPick) {
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'tool';
+        button.dataset.toolKey = key;
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        button.innerHTML = render;
+        button.addEventListener('click', function () {
+          if (activeTool && activeTool.key === key) { setActiveTool(null); return; }
+          setActiveTool(onPick());
+        });
+        host.appendChild(button);
+      }
+
+      function stickerGlyph(color, shape) {
+        var stroke = 'stroke="' + color + '" stroke-width="4" stroke-linecap="round"';
+        var bars = shape === 'circle'
+          ? '<line x1="10" y1="4" x2="10" y2="16" ' + stroke + ' />'
+          : '';
+        return '<svg width="20" height="20" viewBox="0 0 20 20">' +
+          '<line x1="4" y1="10" x2="16" y2="10" ' + stroke + ' />' + bars + '</svg>';
+      }
+
+      MANUAL_STICKER_COLORS.forEach(function (entry) {
+        buildToolButton(
+          $('toolStickerCircle'), 'circle-' + entry.id, entry.label + ' round sticker',
+          stickerGlyph(entry.color, 'circle'),
+          function () {
+            return {
+              key: 'circle-' + entry.id, kind: 'sticker', shape: 'circle',
+              color: entry.color, colorClass: entry.id, colorLabel: entry.label,
+              label: entry.label + ' round sticker'
+            };
+          }
+        );
+        buildToolButton(
+          $('toolStickerTriangle'), 'triangle-' + entry.id, entry.label + ' triangular sticker',
+          stickerGlyph(entry.color, 'triangle'),
+          function () {
+            return {
+              key: 'triangle-' + entry.id, kind: 'sticker', shape: 'triangle',
+              color: entry.color, colorClass: entry.id, colorLabel: entry.label,
+              label: entry.label + ' triangular sticker'
+            };
+          }
+        );
+      });
+
+      MANUAL_PATH_COLORS.forEach(function (entry) {
+        buildToolButton(
+          $('toolPaths'), 'path-' + entry.id, entry.label + ' path',
+          '<svg width="24" height="20" viewBox="0 0 24 20">' +
+            '<path d="M3 15 C 8 3, 16 17, 21 5" fill="none" stroke="' + entry.color +
+            '" stroke-width="3.5" stroke-linecap="round" /></svg>',
+          function () {
+            return {
+              key: 'path-' + entry.id, kind: 'path',
+              color: entry.color, colorClass: entry.id, colorLabel: entry.label,
+              label: entry.label + ' path'
+            };
+          }
+        );
+      });
+
+      buildToolButton(
+        $('toolEraser'), 'eraser', 'Eraser',
+        '<svg width="22" height="20" viewBox="0 0 22 20">' +
+          '<path d="M4 15 L11 4 L18 9 L12 16 Z" fill="none" stroke="#ddd" stroke-width="2.2" ' +
+          'stroke-linejoin="round" /><line x1="3" y1="17.5" x2="19" y2="17.5" stroke="#ddd" ' +
+          'stroke-width="2.2" stroke-linecap="round" /></svg>',
+        function () { return { key: 'eraser', kind: 'eraser', label: 'Eraser' }; }
+      );
+
+      $('penWidth').addEventListener('input', function () {
+        $('penWidthVal').textContent = $('penWidth').value;
+      });
+
+      $('clearManualBtn').addEventListener('click', function () {
+        var target = editTarget();
+        if (!target) return;
+        target.manual = { markers: [], strokes: [], erased: null };
+        paintReference(target);
+        refreshLegends();
+        refreshStickerHeatmap();
+        setStatus($('editStatus'), 'Hand edits cleared on map ' + target.id + '.', 'ok');
+      });
+
+      // Hand edits, expressed the same way the backend expresses detection: a
+      // sticker is a Point with a colour and a shape, a path is a LineString.
+      function manualGeoFeatures(reference) {
+        if (!reference || !reference.manual) return [];
+        var c = reference.corners;
+        if (!c || c.length !== 4) return [];
+        var size = manualTargetSize(reference);
+        function toLngLat(x, y) {
+          var u = size.w > 1 ? x / (size.w - 1) : 0;
+          var v = size.h > 1 ? y / (size.h - 1) : 0;
+          return [
+            Number((c[0][0] + (c[1][0] - c[0][0]) * u).toFixed(8)),
+            Number((c[0][1] + (c[3][1] - c[0][1]) * v).toFixed(8))
+          ];
+        }
+        var features = [];
+        reference.manual.markers.forEach(function (marker) {
+          features.push({
+            type: 'Feature',
+            properties: {
+              kind: 'sticker', shape: marker.shape, color: marker.color,
+              colorClass: marker.colorClass, colorLabel: marker.colorLabel,
+              source: 'manual'
+            },
+            geometry: { type: 'Point', coordinates: toLngLat(marker.x, marker.y) }
+          });
+        });
+        reference.manual.strokes.forEach(function (stroke) {
+          if (stroke.points.length < 2) return;
+          features.push({
+            type: 'Feature',
+            properties: {
+              kind: 'line', color: stroke.color, colorClass: stroke.colorClass,
+              colorLabel: stroke.colorLabel, strokeWidthPx: stroke.width,
+              source: 'manual'
+            },
+            geometry: {
+              type: 'LineString',
+              coordinates: stroke.points.map(function (point) {
+                return toLngLat(point[0], point[1]);
+              })
+            }
+          });
+        });
+        return features;
+      }
+
+      // ---- pointer handling on the map ---------------------------------
+      function eraseAt(reference, point) {
+        var store = manualStore(reference);
+        var radius = Math.max(8, Number($('penWidth').value) * 1.6);
+        var before = store.markers.length;
+        store.markers = store.markers.filter(function (marker) {
+          return Math.hypot(marker.x - point.x, marker.y - point.y) > radius;
+        });
+        // Detected markers are suppressed rather than deleted, so re-detecting
+        // does not quietly bring back something already rubbed out.
+        reference.photos.forEach(function (photo) {
+          if (!photo.result) return;
+          photo.result.markers = photo.result.markers.filter(function (marker) {
+            return Math.hypot(marker.x - point.x, marker.y - point.y) > radius;
+          });
+        });
+        if (!store.erased) {
+          store.erased = document.createElement('canvas');
+          store.erased.width = point.w;
+          store.erased.height = point.h;
+        }
+        var ectx = store.erased.getContext('2d');
+        ectx.fillStyle = '#fff';
+        ectx.beginPath();
+        ectx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+        ectx.fill();
+        return before !== store.markers.length;
+      }
+
+      function onEditPointerDown(event) {
+        if (!activeTool) return;
+        var target = editTarget();
+        if (!target) return;
+        event.preventDefault();
+        var point = lngLatToSheetPixel(target, event.lngLat);
+        if (!point) return;
+        if (activeTool.kind === 'sticker') {
+          manualStore(target).markers.push({
+            x: point.x, y: point.y, shape: activeTool.shape,
+            color: activeTool.color, colorClass: activeTool.colorClass,
+            colorLabel: activeTool.colorLabel, manual: true
+          });
+          paintReference(target);
+          refreshLegends();
+          refreshStickerHeatmap();
+          setStatus($('editStatus'), 'Added a ' + activeTool.label.toLowerCase() + '.', 'ok');
+          return;
+        }
+        if (activeTool.kind === 'eraser') {
+          drawingStroke = { erasing: true, reference: target };
+          eraseAt(target, point);
+          paintReference(target);
+          return;
+        }
+        drawingStroke = {
+          reference: target,
+          points: [[point.x, point.y]],
+          color: activeTool.color,
+          colorClass: activeTool.colorClass,
+          colorLabel: activeTool.colorLabel,
+          width: Number($('penWidth').value)
+        };
+        manualStore(target).strokes.push(drawingStroke);
+      }
+
+      function onEditPointerMove(event) {
+        if (!drawingStroke) return;
+        var target = drawingStroke.reference;
+        var point = lngLatToSheetPixel(target, event.lngLat);
+        if (!point) return;
+        if (drawingStroke.erasing) eraseAt(target, point);
+        else drawingStroke.points.push([point.x, point.y]);
+        paintReference(target);
+      }
+
+      function onEditPointerUp() {
+        if (!drawingStroke) return;
+        var target = drawingStroke.reference;
+        drawingStroke = null;
+        paintReference(target);
+        refreshLegends();
+        refreshStickerHeatmap();
+        setStatus($('editStatus'), 'Edit saved on map ' + target.id + '.', 'ok');
+      }
+
+      map.on('mousedown', onEditPointerDown);
+      map.on('mousemove', onEditPointerMove);
+      map.on('mouseup', onEditPointerUp);
+      map.on('touchstart', onEditPointerDown);
+      map.on('touchmove', onEditPointerMove);
+      map.on('touchend', onEditPointerUp);
 
       // Vectorised on the backend (contour trace + Douglas-Peucker), which
       // re-runs detection from the same photo so the polygons always match the
@@ -2756,12 +4258,25 @@
               id: enteredSheetId(),
               image: camCanvas.toDataURL('image/jpeg', 0.94),
               paperCorners: paperCorners,
-              threshold: Number(thresholdInput.value)
+              threshold: Number(thresholdInput.value),
+              stickerColors: selectedStickerColors(),
+              kinds: selectedKinds()
             })
           });
           var data = await response.json();
           if (!response.ok || !data.ok) throw new Error(data.error || 'GeoJSON export failed.');
 
+          // Hand edits belong in the file too, or a correction made on screen
+          // would silently vanish the moment it was exported.
+          data.geojson.features = (data.geojson.features || []).filter(keepExportedFeature);
+          var manualFeatures = manualGeoFeatures(
+            findReference(data.sheetId) || editTarget()
+          ).filter(keepExportedFeature);
+          if (manualFeatures.length) {
+            data.geojson.features = (data.geojson.features || []).concat(manualFeatures);
+            data.geojson.properties = data.geojson.properties || {};
+            data.geojson.properties.manualFeatures = manualFeatures.length;
+          }
           var count = (data.geojson.features || []).length;
           if (!count) {
             setStatus($('inkStatus'), 'Nothing to export — no drawing was detected.');
@@ -2776,7 +4291,15 @@
           link.click();
           link.remove();
           URL.revokeObjectURL(url);
-          setStatus($('inkStatus'), 'Exported ' + count + ' shape' + (count === 1 ? '' : 's') + '.', 'ok');
+          var breakdown = data.counts ? Object.keys(KIND_LABELS).filter(function (kind) {
+            return Number(data.counts[kind] || 0) > 0;
+          }).map(function (kind) {
+            var total = Number(data.counts[kind]);
+            return total + ' ' + (total === 1 ? KIND_LABELS[kind].one : KIND_LABELS[kind].many);
+          }).join(', ') : '';
+          setStatus($('inkStatus'),
+            'Exported ' + count + ' feature' + (count === 1 ? '' : 's') +
+            (breakdown ? ' — ' + breakdown + '.' : '.'), 'ok');
         } catch (error) {
           setStatus($('inkStatus'), error.message || 'GeoJSON export failed.', 'err');
         } finally {

@@ -12,6 +12,16 @@ import {
   MdStayCurrentLandscape,
 } from 'react-icons/md'
 import {
+  declutterPoiIcons,
+  installPoiDeclutter,
+} from '../libs/poi-declutter'
+import {
+  applyRoadLabelMode,
+  installRoadLabelMode,
+  ROAD_LABEL_MODES,
+  RoadLabelMode,
+} from '../libs/road-label-mode'
+import {
   dedupeBusStops,
   installTransitRuntime,
 } from '../libs/transit-runtime'
@@ -57,6 +67,124 @@ type PaperMapToolsProps = {
 const REACH_SOURCE_ID = "paper-walk-reach";
 const REACH_FILL_ID = "paper-walk-reach-fill";
 const REACH_LINE_ID = "paper-walk-reach-line";
+
+// ------------------------------------------------------------------ printing
+//
+// Fixing the SCALE rather than the zoom is what makes sheets comparable between
+// workshops: a centimetre of pencil is then the same distance on every sheet.
+// The frame's ground coverage follows from its physical size, so the map's zoom
+// is derived from the scale rather than the other way round.
+// "Fix zoom" holds the RENDER zoom constant while the frame's coverage is free.
+// Web zoom normally welds the two together: widen the view and the style drops
+// to a coarser level, shedding labels and detail. Pinning the zoom and sizing
+// the canvas to ground/resolution instead keeps z15.5's detail and label
+// selection whatever area the sheet ends up covering -- the cost is that
+// everything prints physically smaller as the coverage grows.
+
+// Render size comes from a target dpi against the frame's physical width. The
+// old fixed 1000px height printed at only ~87 dpi on A3.
+const DPI_OPTIONS = [150, 300, 600];
+const LABEL_MM_OPTIONS = [0, 1.5, 2, 2.5, 3, 4];
+const RENDER_MAX_WIDTH = 8192;
+// toDataURL is the bottleneck, not the GPU: past this the encode takes minutes.
+const RENDER_MAX_PIXELS = 30e6;
+const RENDER_TIMEOUT_MS = 120000;
+
+const PT_TO_MM = 25.4 / 72;
+const REF_LABEL_PX = 12;      // a nominal street label in the style
+
+function frameWidthMm(layout: SheetLayout) {
+  return layout.mapFrame[2] * PT_TO_MM;
+}
+
+/** Pixel width for a target dpi, capped by what this machine can encode. */
+function renderWidthFor(layout: SheetLayout, dpi: number, maxTexture: number) {
+  const aspect = layout.mapFrame[2] / layout.mapFrame[3];
+  let limit = Math.min(RENDER_MAX_WIDTH, maxTexture > 0 ? maxTexture : 4096);
+  if (limit * (limit / aspect) > RENDER_MAX_PIXELS) {
+    limit = Math.floor(Math.sqrt(RENDER_MAX_PIXELS * aspect));
+  }
+  const wanted = Math.round(dpi * frameWidthMm(layout) / 25.4);
+  return Math.max(512, Math.min(wanted, limit));
+}
+
+/** Multiply a size, scaling an expression's OUTPUT stops rather than wrapping
+ *  it: ["*", expr, k] demotes a top-level ["zoom"] interpolate, which the spec
+ *  forbids and which silently invalidates the layer. */
+function scaleSize(v: any, k: number): any {
+  if (typeof v === "number") return v * k;
+  if (!Array.isArray(v) || !v.length) return v;
+  const op = v[0];
+  const out: any[] = [];
+  if (op === "interpolate" || op === "interpolate-hcl" || op === "interpolate-lab") {
+    out.push(v[0], v[1], v[2]);
+    for (let i = 3; i < v.length; i += 2) out.push(v[i], scaleSize(v[i + 1], k));
+    return out;
+  }
+  if (op === "step") {
+    out.push(v[0], v[1], scaleSize(v[2], k));
+    for (let i = 3; i < v.length; i += 2) out.push(v[i], scaleSize(v[i + 1], k));
+    return out;
+  }
+  if (op === "case") {
+    out.push(v[0]);
+    for (let i = 1; i < v.length - 1; i += 2) out.push(v[i], scaleSize(v[i + 1], k));
+    out.push(scaleSize(v[v.length - 1], k));
+    return out;
+  }
+  if (op === "match") {
+    out.push(v[0], v[1]);
+    for (let i = 2; i < v.length - 1; i += 2) out.push(v[i], scaleSize(v[i + 1], k));
+    out.push(scaleSize(v[v.length - 1], k));
+    return out;
+  }
+  if (op === "literal") return v;
+  if (JSON.stringify(v).indexOf('"zoom"') !== -1) return v;   // cannot wrap
+  return ["*", v, k];
+}
+
+/** Scale every pixel-measured symbol property so the print keeps the on-screen
+ *  layout with more pixels. Ems (text-offset, text-max-width) must NOT be
+ *  touched: they already follow text-size. */
+function styleForPrint(
+  style: StyleSpecification, renderWidth: number, viewWidth: number,
+  layout: SheetLayout, labelMm: number,
+): StyleSpecification {
+  const k = labelMm > 0
+    ? (labelMm * renderWidth) / (REF_LABEL_PX * frameWidthMm(layout))
+    : renderWidth / Math.max(1, viewWidth);   // no target: keep what is on screen
+  if (!(k > 0) || Math.abs(k - 1) < 1e-6) return style;
+  (style.layers || []).forEach((layer: any) => {
+    if (layer.type !== "symbol") return;
+    const lay = layer.layout || (layer.layout = {});
+    const paint = layer.paint || (layer.paint = {});
+    if (lay["text-field"] !== undefined) {
+      lay["text-size"] = scaleSize(lay["text-size"] ?? 16, k);
+      lay["text-padding"] = scaleSize(lay["text-padding"] ?? 2, k);
+    }
+    if (lay["icon-image"] !== undefined) {
+      lay["icon-size"] = scaleSize(lay["icon-size"] ?? 1, k);
+      lay["icon-padding"] = scaleSize(lay["icon-padding"] ?? 2, k);
+    }
+    if (paint["text-halo-width"] !== undefined) {
+      paint["text-halo-width"] = scaleSize(paint["text-halo-width"], k);
+    }
+  });
+  return style;
+}
+
+// Normalised web-mercator: linear in screen space, which is what lets the
+// frozen-view overlay map pixels to ground with plain arithmetic.
+function mercatorX(lng: number) { return (lng + 180) / 360; }
+function mercatorY(lat: number) {
+  const r = lat * Math.PI / 180;
+  return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2;
+}
+function invMercatorX(x: number) { return x * 360 - 180; }
+function invMercatorY(y: number) {
+  const n = Math.PI * (1 - 2 * y);
+  return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+}
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error || "Unknown error");
@@ -225,6 +353,19 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
     }
   });
   const [participants, setParticipants] = useState("1");
+  const [fixZoom, setFixZoom] = useState(false);
+  const [renderZoom, setRenderZoom] = useState(15.5);
+  const [dpi, setDpi] = useState<number>(300);
+  const [labelMm, setLabelMm] = useState<number>(2.5);
+  const [roadLabelMode, setRoadLabelMode] = useState<RoadLabelMode>(() => {
+    try {
+      const stored = window.localStorage.getItem("paperRoadLabelMode") as RoadLabelMode;
+      return ROAD_LABEL_MODES.includes(stored) ? stored : "hide";
+    } catch (_error) {
+      return "hide";
+    }
+  });
+  const [maxTexture, setMaxTexture] = useState<number>(0);
   const [usedSheetIds, setUsedSheetIds] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState("");
@@ -232,6 +373,242 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
   const reachRequest = useRef(0);
 
   const layout = layouts ? layouts[pageSize] : null;
+
+  /**
+   * "Fix zoom": freeze the level the sheet renders at, then compose coverage
+   * like paper.
+   *
+   * Clicking the button renders a snapshot of the current view at the current
+   * zoom -- TWICE the viewport in each direction, so there is saved margin to
+   * widen into -- and lays it over the map. Scrolling scales that snapshot and
+   * dragging pans it; the content never re-evaluates, exactly like moving a
+   * printed sheet. Driving the live map instead (inflating its container under
+   * a CSS transform) fought Maputnik's layout and MapLibre's resize handling,
+   * which is why scroll did nothing and the viewport broke.
+   *
+   * The overlay's own geometry is the single source of truth at export: frame
+   * corners map to ground through it, never through the live map underneath.
+   */
+  const fixRef = useRef<{
+    zoom: number;
+    rect: {left: number; top: number; width: number; height: number};
+    overlay: HTMLCanvasElement;
+    snapshot: HTMLCanvasElement;
+    snapX0: number; snapY0: number; snapX1: number; snapY1: number;
+    mercPerSnapPx: number;      // mercator units per snapshot CSS px
+    centerMx: number;           // mercator at the viewport centre
+    centerMy: number;
+    mercPerVis: number;         // mercator units per visual px (the paper scale)
+    drag: {x: number; y: number; mx: number; my: number} | null;
+  } | null>(null);
+  const freezeBusy = useRef(false);
+
+  /** Offscreen render of an exact centre/zoom at a given CSS size. */
+  const renderSnapshot = useCallback(async (
+    center: {lng: number; lat: number},
+    zoom: number,
+    cssWidth: number,
+    cssHeight: number,
+  ) => {
+    const limit = maxTexture > 0 ? maxTexture : 4096;
+    const ratio = Math.min(
+      window.devicePixelRatio || 1, limit / cssWidth, limit / cssHeight);
+    const host = document.createElement("div");
+    host.className = "maputnik-paper-render-host";
+    host.style.width = `${cssWidth}px`;
+    host.style.height = `${cssHeight}px`;
+    document.body.appendChild(host);
+    const shot = new MapLibreGl.Map({
+      container: host,
+      style: props.replaceAccessTokens(cloneDeep(props.mapStyle)),
+      center: [center.lng, center.lat],
+      zoom,
+      interactive: false,
+      attributionControl: false,
+      canvasContextAttributes: {preserveDrawingBuffer: true},
+      fadeDuration: 0,
+      pixelRatio: ratio,
+    });
+    const removeTransitRuntime = installTransitRuntime(shot);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          reject(new Error("The frozen view timed out while rendering."));
+        }, RENDER_TIMEOUT_MS);
+        shot.once("error", (event: {error?: Error}) => {
+          window.clearTimeout(timeout);
+          reject(new Error(event?.error?.message || "Snapshot render failed."));
+        });
+        shot.once("style.load", () => {
+          applyRoadLabelMode(shot, roadLabelMode);
+          if (reachEnabled && reachData) drawReach(shot, reachData);
+          shot.once("idle", () => {
+            window.clearTimeout(timeout);
+            resolve();
+          });
+        });
+      });
+      if (dedupeBusStops(shot)) {
+        await new Promise<void>(resolve => shot.once("idle", () => resolve()));
+      }
+      if (declutterPoiIcons(shot)) {
+        await new Promise<void>(resolve => shot.once("idle", () => resolve()));
+      }
+      // Copy before remove(): the WebGL canvas dies with the map.
+      const source = shot.getCanvas();
+      const copy = document.createElement("canvas");
+      copy.width = source.width;
+      copy.height = source.height;
+      const context = copy.getContext("2d");
+      if (!context) throw new Error("Canvas is unavailable");
+      context.drawImage(source, 0, 0);
+      return {canvas: copy, bounds: shot.getBounds()};
+    } finally {
+      removeTransitRuntime();
+      shot.remove();
+      host.remove();
+    }
+  }, [maxTexture, props.mapStyle, props.replaceAccessTokens, reachData, reachEnabled, roadLabelMode]);
+
+  const releaseFixZoom = useCallback(() => {
+    const map = props.map;
+    const st = fixRef.current;
+    fixRef.current = null;
+    setFixZoom(false);
+    setExportKind("idle");
+    setExportStatus("");
+    if (!st) return;
+    st.overlay.remove();
+    if (map) {
+      // Fold the composed coverage into a real zoom so the view does not jump;
+      // labels re-evaluate at that level, which is what unfixing means.
+      map.jumpTo({
+        center: [invMercatorX(st.centerMx), invMercatorY(st.centerMy)],
+        zoom: st.zoom - Math.log2(st.mercPerVis / st.mercPerSnapPx),
+      });
+    }
+  }, [props.map]);
+
+  const activateFixZoom = useCallback(async () => {
+    const map = props.map;
+    if (!map || fixRef.current || freezeBusy.current) return;
+    const container = map.getContainer();
+    const r = container.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const zoom = Math.round(map.getZoom() * 100) / 100;
+    freezeBusy.current = true;
+    setExportKind("busy");
+    setExportStatus(`Freezing z${zoom}…`);
+    try {
+      const centre = map.getCenter();
+      const shot = await renderSnapshot(
+        centre, zoom, Math.round(r.width * 2), Math.round(r.height * 2));
+
+      const overlay = document.createElement("canvas");
+      const dpr = window.devicePixelRatio || 1;
+      overlay.width = Math.round(r.width * dpr);
+      overlay.height = Math.round(r.height * dpr);
+      overlay.style.cssText =
+        `position:fixed;left:${r.left}px;top:${r.top}px;` +
+        `width:${r.width}px;height:${r.height}px;` +
+        `z-index:60;cursor:grab;touch-action:none;background:#fff;`;
+      document.body.appendChild(overlay);
+
+      const snapX0 = mercatorX(shot.bounds.getWest());
+      const snapX1 = mercatorX(shot.bounds.getEast());
+      const snapY0 = mercatorY(shot.bounds.getNorth());
+      const snapY1 = mercatorY(shot.bounds.getSouth());
+      const mercPerSnapPx = (snapX1 - snapX0) / (r.width * 2);
+      const st = {
+        zoom,
+        rect: {left: r.left, top: r.top, width: r.width, height: r.height},
+        overlay,
+        snapshot: shot.canvas,
+        snapX0, snapY0, snapX1, snapY1,
+        mercPerSnapPx,
+        centerMx: mercatorX(centre.lng),
+        centerMy: mercatorY(centre.lat),
+        mercPerVis: mercPerSnapPx,   // 1:1 with the snapshot at the freeze
+        drag: null as {x: number; y: number; mx: number; my: number} | null,
+      };
+
+      const draw = () => {
+        const ctx = st.overlay.getContext("2d");
+        if (!ctx) return;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, st.rect.width, st.rect.height);
+        const x0 = st.rect.width / 2 + (st.snapX0 - st.centerMx) / st.mercPerVis;
+        const y0 = st.rect.height / 2 + (st.snapY0 - st.centerMy) / st.mercPerVis;
+        const x1 = st.rect.width / 2 + (st.snapX1 - st.centerMx) / st.mercPerVis;
+        const y1 = st.rect.height / 2 + (st.snapY1 - st.centerMy) / st.mercPerVis;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(st.snapshot, x0, y0, x1 - x0, y1 - y0);
+      };
+
+      overlay.addEventListener("wheel", event => {
+        event.preventDefault();
+        const cx = event.clientX - st.rect.left;
+        const cy = event.clientY - st.rect.top;
+        const before = st.mercPerVis;
+        const next = Math.max(st.mercPerSnapPx / 2,
+          Math.min(st.mercPerSnapPx * 6, before * Math.exp(event.deltaY * 0.0012)));
+        if (next === before) return;
+        // Keep the ground under the cursor where it is while scaling.
+        st.centerMx += (cx - st.rect.width / 2) * (before - next);
+        st.centerMy += (cy - st.rect.height / 2) * (before - next);
+        st.mercPerVis = next;
+        draw();
+      }, {passive: false});
+      overlay.addEventListener("pointerdown", event => {
+        st.drag = {x: event.clientX, y: event.clientY, mx: st.centerMx, my: st.centerMy};
+        overlay.setPointerCapture(event.pointerId);
+        overlay.style.cursor = "grabbing";
+      });
+      overlay.addEventListener("pointermove", event => {
+        if (!st.drag) return;
+        st.centerMx = st.drag.mx - (event.clientX - st.drag.x) * st.mercPerVis;
+        st.centerMy = st.drag.my - (event.clientY - st.drag.y) * st.mercPerVis;
+        draw();
+      });
+      const stopDrag = () => {
+        st.drag = null;
+        overlay.style.cursor = "grab";
+      };
+      overlay.addEventListener("pointerup", stopDrag);
+      overlay.addEventListener("pointercancel", stopDrag);
+
+      fixRef.current = st;
+      draw();
+      setRenderZoom(zoom);
+      setFixZoom(true);
+      setExportKind("ok");
+      setExportStatus(`z${zoom} locked`);
+    } catch (error) {
+      setExportKind("error");
+      setExportStatus(messageFromError(error));
+    } finally {
+      freezeBusy.current = false;
+    }
+  }, [props.map, renderSnapshot]);
+
+  // Never leave a stale overlay if the component goes away.
+  useEffect(() => () => {
+    if (fixRef.current) releaseFixZoom();
+  }, [releaseFixZoom]);
+
+  // A render past MAX_TEXTURE_SIZE fails or clamps silently, so cap to it.
+  useEffect(() => {
+    try {
+      const probe = document.createElement("canvas");
+      const gl = (probe.getContext("webgl2") || probe.getContext("webgl")) as
+        WebGLRenderingContext | null;
+      if (gl) setMaxTexture(gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
+    } catch (_error) { setMaxTexture(0); }
+  }, []);
+
+
 
   const plannedSheetIds = useCallback(() => {
     const type = mapType.trim();
@@ -401,6 +778,26 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
     };
   }, [props.map]);
 
+  // Keep the editing view honest about what the sheet will show: the same
+  // declutter pass that runs before capture also runs on the live map.
+  useEffect(() => {
+    if (!props.map) return;
+    return installPoiDeclutter(props.map);
+  }, [props.map]);
+
+  useEffect(() => {
+    if (!props.map) return;
+    return installRoadLabelMode(props.map, roadLabelMode);
+  }, [props.map, roadLabelMode]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("paperRoadLabelMode", roadLabelMode);
+    } catch (_error) {
+      // Private browsing; the mode simply will not persist.
+    }
+  }, [roadLabelMode]);
+
   const capturePrintableMap = useCallback(async () => {
     const map = props.map;
     if (!map || !layout) throw new Error("The map is not ready.");
@@ -409,44 +806,135 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
     const height = container.clientHeight;
     if (!width || !height) throw new Error("The map has no printable area.");
 
-    const box = previewBox(layout, width, height);
+    const frozen = fixRef.current;
     const frame = layout.mapFrame;
-    const left = box.x + frame[0] * box.scale;
-    const top = box.y + frame[1] * box.scale;
-    const right = left + frame[2] * box.scale;
-    const bottom = top + frame[3] * box.scale;
-    const captureBounds = new LngLatBounds();
-    [[left, top], [right, top], [right, bottom], [left, bottom]].forEach(point => {
-      captureBounds.extend(map.unproject(point as [number, number]));
-    });
+    let captureBounds: LngLatBounds;
+    let viewFrameWidth: number;
+    if (frozen) {
+      // While frozen, the overlay is the truth. The live map has not moved
+      // since the freeze, so unprojecting through it would export whatever was
+      // on screen back then -- which is exactly the mismatch this replaces.
+      const fbox = previewBox(layout, frozen.rect.width, frozen.rect.height);
+      const l = fbox.x + frame[0] * fbox.scale;
+      const t = fbox.y + frame[1] * fbox.scale;
+      const r = l + frame[2] * fbox.scale;
+      const b = t + frame[3] * fbox.scale;
+      const mx = (x: number) =>
+        frozen.centerMx + (x - frozen.rect.width / 2) * frozen.mercPerVis;
+      const my = (y: number) =>
+        frozen.centerMy + (y - frozen.rect.height / 2) * frozen.mercPerVis;
+      captureBounds = new LngLatBounds(
+        [invMercatorX(mx(l)), invMercatorY(my(b))],   // south-west
+        [invMercatorX(mx(r)), invMercatorY(my(t))],   // north-east
+      );
+      viewFrameWidth = frame[2] * fbox.scale;
+    } else {
+      const box = previewBox(layout, width, height);
+      const left = box.x + frame[0] * box.scale;
+      const top = box.y + frame[1] * box.scale;
+      const right = left + frame[2] * box.scale;
+      const bottom = top + frame[3] * box.scale;
+      captureBounds = new LngLatBounds();
+      [[left, top], [right, top], [right, bottom], [left, bottom]].forEach(point => {
+        captureBounds.extend(map.unproject(point as [number, number]));
+      });
+      viewFrameWidth = right - left;
+    }
 
-    const renderHeight = 1000;
-    const renderWidth = Math.round(renderHeight * frame[2] / frame[3]);
+    // Target pixels for the sheet: dpi against the frame's physical width.
+    const targetWidth = renderWidthFor(layout, dpi, maxTexture);
+    const targetHeight = Math.round(targetWidth * frame[3] / frame[2]);
+
+    // How many CSS pixels the map is given, and how many real pixels it draws.
+    //
+    // Free zoom: they are the same, and fitBounds picks whatever zoom suits.
+    //
+    // Fix zoom: the map is laid out at ground/resolution(renderZoom) CSS px so
+    // the STYLE evaluates at that zoom -- same labels, same detail, same line
+    // weights, whatever area the frame covers. pixelRatio then multiplies the
+    // framebuffer up to the target, which is what gives full print resolution
+    // without changing the zoom. Sizing the canvas directly instead, as this
+    // did at first, pinned the detail correctly but capped the sheet at ~83 dpi.
+    let cssWidth = targetWidth;
+    let cssHeight = targetHeight;
+    let pixelRatio = 1;
+    let pinnedZoom = 0;
+    let pinnedCentre: [number, number] | null = null;
+    if (frozen) {
+      // Exact, straight from MapLibre's own convention: the mercator square
+      // [0,1] spans 512 * 2^zoom CSS px. The previous metres detour used the
+      // 256-tile constant (156543/2^z), which is HALF MapLibre's resolution --
+      // the canvas came out half size, so at the pinned zoom it covered half
+      // the frame's ground per axis and the PDF was the frame's central
+      // quarter. This is why the export did not match the screen.
+      const world = 512 * (2 ** frozen.zoom);
+      const mercW = mercatorX(captureBounds.getEast())
+        - mercatorX(captureBounds.getWest());
+      const mercH = mercatorY(captureBounds.getSouth())
+        - mercatorY(captureBounds.getNorth());
+      cssWidth = Math.max(64, Math.round(mercW * world));
+      cssHeight = Math.max(64, Math.round(mercH * world));
+      // The centre must be the mercator midpoint too, not the arithmetic-mean
+      // latitude of getCenter(), so the render sits exactly on the frame.
+      pinnedCentre = [
+        invMercatorX((mercatorX(captureBounds.getWest())
+          + mercatorX(captureBounds.getEast())) / 2),
+        invMercatorY((mercatorY(captureBounds.getNorth())
+          + mercatorY(captureBounds.getSouth())) / 2),
+      ];
+      pixelRatio = targetWidth / cssWidth;
+      pinnedZoom = frozen.zoom;
+    }
+
+    // The backing canvas is css size TIMES pixelRatio; both dimensions must fit
+    // the texture limit or the render fails with nothing to say for itself.
+    // Below 1 is legal and right for huge coverage at a high pinned zoom: the
+    // sheet keeps that zoom's labels and simply prints with fewer dots.
+    const limit = maxTexture > 0 ? maxTexture : 4096;
+    pixelRatio = Math.min(pixelRatio, limit / cssWidth, limit / cssHeight);
+    const renderWidth = Math.round(cssWidth * pixelRatio);
+    const renderHeight = Math.round(cssHeight * pixelRatio);
+
     const host = document.createElement("div");
     host.className = "maputnik-paper-render-host";
-    host.style.width = `${renderWidth}px`;
-    host.style.height = `${renderHeight}px`;
+    host.style.width = `${cssWidth}px`;
+    host.style.height = `${cssHeight}px`;
     document.body.appendChild(host);
 
-    const printableStyle = props.replaceAccessTokens(cloneDeep(props.mapStyle));
+    // Pinned: the style goes in untouched. The canvas CSS size equals the
+    // frame's on-screen extent at the pinned zoom, so MapLibre reproduces the
+    // live placement exactly, and pixelRatio alone supplies the dpi. Running
+    // styleForPrint on top would scale text a second time.
+    const printableStyle = pinnedZoom
+      ? props.replaceAccessTokens(cloneDeep(props.mapStyle))
+      : styleForPrint(
+        props.replaceAccessTokens(cloneDeep(props.mapStyle)),
+        renderWidth, viewFrameWidth, layout, labelMm);
     const printMap = new MapLibreGl.Map({
       container: host,
       style: printableStyle,
-      bounds: captureBounds,
-      fitBoundsOptions: {padding: 0, duration: 0},
+      ...(pinnedZoom
+        ? {center: pinnedCentre as [number, number], zoom: pinnedZoom}
+        : {bounds: captureBounds, fitBoundsOptions: {padding: 0, duration: 0}}),
       interactive: false,
       attributionControl: false,
       canvasContextAttributes: {preserveDrawingBuffer: true},
       fadeDuration: 0,
+      // Explicit, never devicePixelRatio: on a HiDPI screen that silently
+      // doubles the framebuffer past the texture limit and toDataURL never
+      // returns. Here it is also the lever that buys resolution at a fixed zoom.
+      pixelRatio,
     });
     const removeTransitRuntime = installTransitRuntime(printMap);
 
     try {
       await new Promise<void>((resolve, reject) => {
         const timeout = window.setTimeout(() => {
-          reject(new Error("Printable map tiles timed out."));
-        }, 20000);
+          reject(new Error(
+            `Render timed out at ${renderWidth}x${renderHeight}px.`));
+        }, RENDER_TIMEOUT_MS);
         printMap.once("style.load", () => {
+          applyRoadLabelMode(printMap, roadLabelMode);
           if (reachEnabled && reachData) drawReach(printMap, reachData);
           printMap.once("idle", () => {
             window.clearTimeout(timeout);
@@ -455,6 +943,11 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
         });
       });
       if (dedupeBusStops(printMap)) {
+        await new Promise<void>(resolve => printMap.once("idle", () => resolve()));
+      }
+      // After the bus filter settles: shuffle overlapping POI icons apart, then
+      // let MapLibre re-place labels around the shifted icons.
+      if (declutterPoiIcons(printMap)) {
         await new Promise<void>(resolve => printMap.once("idle", () => resolve()));
       }
       const canvas = printMap.getCanvas();
@@ -489,6 +982,12 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
     props.replaceAccessTokens,
     reachData,
     reachEnabled,
+    fixZoom,
+    renderZoom,
+    dpi,
+    labelMm,
+    maxTexture,
+    roadLabelMode,
   ]);
 
   const exportPdf = useCallback(async () => {
@@ -605,6 +1104,57 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
         >
           <option value="A4">A4</option>
           <option value="A3">A3</option>
+        </select>
+        <button
+          className={`maputnik-paper-tools__fix${fixZoom ? " is-active" : ""}`}
+          type="button"
+          disabled={!mapReady}
+          title={fixZoom
+            ? `Rendering locked at z${renderZoom}. Scrolling changes how much map is in the frame, not the detail. Click to release.`
+            : "Freeze the current zoom level. Scrolling then changes how much map fits in the frame -- like scaling paper -- while labels and detail stay as they are now."}
+          onClick={() => (fixZoom ? releaseFixZoom() : activateFixZoom())}
+        >
+          {fixZoom ? `z${renderZoom} locked` : "Fix zoom"}
+        </button>
+        <select
+          className="maputnik-select maputnik-paper-tools__page-size"
+          aria-label="Print quality"
+          title="Render resolution of the exported sheet"
+          value={dpi}
+          disabled={!mapReady}
+          onChange={event => setDpi(Number(event.target.value))}
+        >
+          {DPI_OPTIONS.map(value => (
+            <option key={value} value={value}>{value} dpi</option>
+          ))}
+        </select>
+        <select
+          className="maputnik-select maputnik-paper-tools__page-size"
+          aria-label="Printed label size"
+          title={fixZoom
+            ? "Inactive while the zoom is locked -- the sheet reproduces the labels exactly as shown"
+            : "Physical height of street labels on the exported sheet. The on-screen view is not affected."}
+          value={labelMm}
+          disabled={!mapReady || fixZoom}
+          onChange={event => setLabelMm(Number(event.target.value))}
+        >
+          {LABEL_MM_OPTIONS.map(mm => (
+            <option key={mm} value={mm}>
+              {mm === 0 ? "as shown" : `${mm.toFixed(1)} mm`}
+            </option>
+          ))}
+        </select>
+        <select
+          className="maputnik-select maputnik-paper-tools__page-size"
+          aria-label="Road label collisions"
+          title="When road names collide: keep the style's behaviour, hide the less important name, or also shift names along their road to a free spot"
+          value={roadLabelMode}
+          disabled={!mapReady}
+          onChange={event => setRoadLabelMode(event.target.value as RoadLabelMode)}
+        >
+          <option value="styled">roads: as styled</option>
+          <option value="hide">roads: hide clash</option>
+          <option value="shift">roads: shift</option>
         </select>
         <label className="maputnik-paper-tools__check">
           <input

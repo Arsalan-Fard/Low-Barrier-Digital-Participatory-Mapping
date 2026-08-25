@@ -2,6 +2,7 @@ import React from 'react'
 import {detect} from 'detect-browser';
 
 import {
+  MdArrowBack,
   MdOpenInBrowser,
   MdSettings,
   MdLayers,
@@ -10,9 +11,7 @@ import {
   MdSave
 } from 'react-icons/md'
 import type {Map, StyleSpecification} from 'maplibre-gl'
-import pkgJson from '../../package.json'
 //@ts-ignore
-import maputnikLogo from 'maputnik-design/logos/logo-color.svg?inline'
 import { withTranslation, WithTranslation } from 'react-i18next';
 import { supportedLanguages } from '../i18n';
 import type { OnStyleChangedCallback } from '../libs/definitions';
@@ -217,20 +216,12 @@ class AppToolbarInternal extends React.Component<
           >
             {t("Map view")}
           </button>
-          <a
-            className="maputnik-toolbar-logo"
-            target="blank"
-            rel="noreferrer noopener"
-            href="https://github.com/maplibre/maputnik"
-          >
-            <img src={maputnikLogo} alt={t("Maputnik on GitHub")} />
-            <h1>
-              <span className="maputnik-toolbar-name">{pkgJson.name}</span>
-              <span className="maputnik-toolbar-version">v{pkgJson.version}</span>
-            </h1>
-          </a>
         </div>
         <div className="maputnik-toolbar__actions" role="navigation" aria-label="Toolbar">
+          <ToolbarAction wdKey="nav:back" onClick={() => window.location.assign("/")}>
+            <MdArrowBack />
+            <IconText>{t("Menu")}</IconText>
+          </ToolbarAction>
           <ToolbarAction wdKey="nav:open" onClick={this.props.onToggleModal.bind(this, 'open')}>
             <MdOpenInBrowser />
             <IconText>{t("Open")}</IconText>

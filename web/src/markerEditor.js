@@ -400,7 +400,7 @@
           key: 'extra-' + tool + '-' + Date.now().toString(36),
           group: isDraw ? 'Drawing' : 'Comment',
           tool: tool,
-          label: (isDraw ? 'Drawing ' : 'Post-it ') + count,
+          label: (isDraw ? 'Pointer ' : 'Post-it ') + count,
           tagId: null,
           tagId2: null,
           selectorTagId: isDraw ? null : undefined,
@@ -444,6 +444,13 @@
       }
 
       function renderMarkerEditor() {
+        var pointerNumber = 0;
+        state.slots.forEach(function (slot) {
+          if (slot.tool === 'draw') {
+            pointerNumber += 1;
+            slot.label = 'Pointer ' + pointerNumber;
+          }
+        });
         renderFamilyOptions();
         els.body.innerHTML = '';
         // Top: the two addable tool groups, each in its own bordered section.
@@ -467,22 +474,10 @@
         els.body.appendChild(section);
       }
 
-      function escapeHtml(text) {
-        return String(text == null ? '' : text)
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;');
-      }
-
-      function svgDataUri(svg) {
-        return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-      }
-
       function selectedMarkerEntries() {
         var entries = [];
         var seen = {};
-        function add(slot, prop, suffix) {
+        function add(slot, prop, useLabel) {
           if (!slot || slot[prop] == null || slot[prop] === '') return;
           var id = Number(slot[prop]);
           if (!Number.isFinite(id) || seen[String(id)]) return;
@@ -490,18 +485,22 @@
           entries.push({
             slot: slot,
             tagId: id,
-            label: String(slot.label || slot.group || 'Marker') + (suffix ? ' ' + suffix : '')
+            label: String(useLabel || slot.label || slot.group || 'Marker')
           });
         }
+        var pointerNumber = 0;
         state.slots.forEach(function (slot) {
-          add(slot, 'tagId', '');
           if (slot.tool === 'draw') {
-            add(slot, 'tagId2', 'fold');
-            add(slot, 'selectorTagId', 'selector');
-            add(slot, 'selectorTagId2', 'selector fold');
-          }
-          if (slot.tool === 'keyboard-annotation') {
-            add(slot, 'tagId2', 'keyboard');
+            pointerNumber += 1;
+            add(slot, 'tagId', 'Pointer ' + pointerNumber + ' (left)');
+            add(slot, 'tagId2', 'Pointer ' + pointerNumber + ' (right)');
+            add(slot, 'selectorTagId', 'Selector ' + pointerNumber + ' (left)');
+            add(slot, 'selectorTagId2', 'Selector ' + pointerNumber + ' (right)');
+          } else {
+            add(slot, 'tagId', '');
+            if (slot.tool === 'keyboard-annotation') {
+              add(slot, 'tagId2', String(slot.label || 'Keyboard') + ' keyboard');
+            }
           }
         });
         return entries;
@@ -514,40 +513,21 @@
           return;
         }
         var size = Math.max(1, Math.min(20, Number(state.tagSizeCm) || 3));
-        setMarkerStatus('Preparing sheet...', '');
-        Promise.all(entries.map(function (entry) {
-          return fetch(markerSvgPath(entry.tagId), { cache: 'no-store' })
-            .then(function (r) { if (!r.ok) throw new Error('missing'); return r.text(); })
-            .then(function (svg) { return { entry: entry, uri: svgDataUri(svg) }; })
-            .catch(function () { return { entry: entry, uri: '' }; });
-        })).then(function (items) {
-          var cards = items.map(function (item) {
-            var id = item.entry.tagId;
-            var img = item.uri
-              ? '<img src="' + item.uri + '" alt="AprilTag ' + escapeHtml(id) + '">'
-              : '<div class="missing">Missing SVG</div>';
-            return '<div class="tag">' + img +
-              '<div class="label">' + escapeHtml(item.entry.label) + ' - ID ' + escapeHtml(id) + '</div></div>';
-          }).join('');
-          var html = '<!doctype html><html><head><meta charset="utf-8"><title>Markers</title>' +
-            '<style>@page{margin:1cm}body{font-family:Arial,sans-serif;color:#111}' +
-            '.sheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(' + (size + 1.2) + 'cm,1fr));gap:.8cm;align-items:start}' +
-            '.tag{text-align:center;break-inside:avoid}.tag img{width:' + size + 'cm;height:' + size + 'cm;object-fit:contain}' +
-            '.label{font-size:10pt;margin-top:.2cm}.missing{width:' + size + 'cm;height:' + size + 'cm;border:1px solid #999;display:flex;align-items:center;justify-content:center;margin:0 auto;color:#777}' +
-            '</style></head><body><div class="sheet">' + cards + '</div></body></html>';
-          var blob = new Blob([html], { type: 'text/html' });
-          var url = URL.createObjectURL(blob);
-          var a = document.createElement('a');
-          a.href = url;
-          a.download = 'markers_' + state.family + '_' + String(size).replace('.', '_') + 'cm.html';
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-          setMarkerStatus('', '');
-        }).catch(function () {
-          setMarkerStatus('Download failed', 'err');
-        });
+        var params = new URLSearchParams();
+        params.set('family', state.family);
+        params.set('sizeCm', String(size));
+        params.set('entries', JSON.stringify(entries.map(function (item) {
+          return { id: item.tagId, use: item.label };
+        })));
+        var link = document.createElement('a');
+        link.href = '/api/marker-sheet.pdf?' + params.toString();
+        link.download = 'markers_' + state.family + '_' +
+          String(size).replace('.', '_') + 'cm.pdf';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setMarkerStatus('PDF download started', '');
+        window.setTimeout(function () { setMarkerStatus('', ''); }, 1800);
       }
 
       els.family.addEventListener('change', function () {
