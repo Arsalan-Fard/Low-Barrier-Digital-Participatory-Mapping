@@ -923,6 +923,12 @@
       var phoneStreetViewLastRequestedLngLat = null;
       var phoneStreetViewLastRequestAtMs = 0;
       var phoneStreetViewLastUrl = '';
+      // Why the view is blank ('' when it isn't), kept so the 150 ms poll
+      // doesn't wipe it straight away.
+      var phoneStreetViewBlankReason = '';
+      var phoneMapsSdkPromise = null;
+      var phoneStreetViewService = null;
+      var STREET_VIEW_SEARCH_RADIUS_M = 80;
       var STREET_VIEW_REQUEST_DISTANCE_M = 15;
       var STREET_VIEW_REQUEST_DEBOUNCE_MS = 400;
       var STREET_VIEW_REQUEST_COOLDOWN_MS = 1000;
@@ -991,11 +997,52 @@
         phoneStreetViewPendingRequestKey = '';
       }
 
-      function buildPhoneStreetViewUrl(lngLat, key) {
-        if (!hasFiniteLngLat(lngLat) || !key) return '';
+      // The Maps SDK is loaded only to look panoramas up: the embed iframe has
+      // no source filter, so a bare `location=` can land inside a shop or museum.
+      function ensurePhoneMapsSdk(key) {
+        if (window.google && window.google.maps && window.google.maps.StreetViewService) {
+          return Promise.resolve(window.google.maps);
+        }
+        if (phoneMapsSdkPromise) return phoneMapsSdkPromise;
+        phoneMapsSdkPromise = new Promise(function (resolve) {
+          var tag = document.createElement('script');
+          tag.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key);
+          tag.async = true;
+          tag.addEventListener('load', function () {
+            resolve(window.google && window.google.maps ? window.google.maps : null);
+          });
+          tag.addEventListener('error', function () {
+            phoneMapsSdkPromise = null;   // a later request may try again
+            resolve(null);
+          });
+          document.head.appendChild(tag);
+        });
+        return phoneMapsSdkPromise;
+      }
+
+      // Nearest OUTDOOR panorama id; '' when there is none, null when the SDK
+      // can't filter by source (then nothing can be proven outdoor).
+      function findPhoneOutdoorPano(maps, lngLat) {
+        if (!maps || !maps.StreetViewService || !maps.StreetViewSource || !maps.StreetViewSource.OUTDOOR) {
+          return Promise.resolve(null);
+        }
+        if (!phoneStreetViewService) phoneStreetViewService = new maps.StreetViewService();
+        return new Promise(function (resolve) {
+          phoneStreetViewService.getPanorama({
+            location: { lat: Number(lngLat.lat), lng: Number(lngLat.lng) },
+            radius: STREET_VIEW_SEARCH_RADIUS_M,
+            source: maps.StreetViewSource.OUTDOOR
+          }, function (data, status) {
+            resolve(status === 'OK' && data && data.location && data.location.pano ? data.location.pano : '');
+          });
+        });
+      }
+
+      function buildPhoneStreetViewUrl(pano, key) {
+        if (!pano || !key) return '';
         var url = new URL('https://www.google.com/maps/embed/v1/streetview');
         url.searchParams.set('key', key);
-        url.searchParams.set('location', String(Number(lngLat.lat)) + ',' + String(Number(lngLat.lng)));
+        url.searchParams.set('pano', pano);
         url.searchParams.set('heading', '0');
         url.searchParams.set('pitch', '0');
         url.searchParams.set('fov', '80');
@@ -1006,7 +1053,7 @@
         if (!hasFiniteLngLat(rawLngLat)) return false;
         var quantized = quantizeLngLat(rawLngLat);
         if (!quantized) return false;
-        if (!phoneStreetViewLastRequestedLngLat || !phoneStreetViewLastUrl) return true;
+        if (!phoneStreetViewLastRequestedLngLat) return true;
         return distanceMeters(quantized, phoneStreetViewLastRequestedLngLat) >= STREET_VIEW_REQUEST_DISTANCE_M;
       }
 
@@ -1016,18 +1063,36 @@
         if (!quantized) return;
         fetchGoogleMapsKey().then(function (key) {
           if (!phoneStreetViewFrame || !streetViewFullscreen || !streetViewFullscreen.classList.contains('visible')) return;
-          var url = buildPhoneStreetViewUrl(quantized, key);
-          if (!url) {
+          if (!key) {
             setStreetFsStatus('Google Maps key not configured');
             return;
           }
-          if (phoneStreetViewLastUrl !== url) {
-            phoneStreetViewFrame.src = url;
-            phoneStreetViewLastUrl = url;
-          }
+          // Recorded before the lookup, so a spot with no outdoor imagery isn't
+          // asked about again on every cooldown -- only once the tag moves on.
           phoneStreetViewLastRequestedLngLat = quantized;
           phoneStreetViewLastRequestAtMs = Date.now();
-          setStreetFsStatus('');
+          return ensurePhoneMapsSdk(key).then(function (maps) {
+            return findPhoneOutdoorPano(maps, quantized);
+          }).then(function (pano) {
+            if (!phoneStreetViewFrame || !streetViewFullscreen || !streetViewFullscreen.classList.contains('visible')) return;
+            var url = buildPhoneStreetViewUrl(pano, key);
+            if (!url) {
+              // Showing nothing beats showing an interior.
+              phoneStreetViewBlankReason = pano === null ? 'Street View unavailable' : 'No outdoor Street View here';
+              if (phoneStreetViewLastUrl) {
+                phoneStreetViewFrame.src = 'about:blank';
+                phoneStreetViewLastUrl = '';
+              }
+              setStreetFsStatus(phoneStreetViewBlankReason);
+              return;
+            }
+            phoneStreetViewBlankReason = '';
+            if (phoneStreetViewLastUrl !== url) {
+              phoneStreetViewFrame.src = url;
+              phoneStreetViewLastUrl = url;
+            }
+            setStreetFsStatus('');
+          });
         }).catch(function () {
           setStreetFsStatus('Network error');
         });
@@ -1065,7 +1130,7 @@
               else setStreetFsStatus(err || 'Waiting...');
               return;
             }
-            setStreetFsStatus('');
+            setStreetFsStatus(phoneStreetViewBlankReason);
             if (!hasFiniteLngLat(data.lngLat)) return;
             if (shouldRequestPhoneStreetView(data.lngLat)) {
               schedulePhoneStreetViewRequest(data.lngLat);

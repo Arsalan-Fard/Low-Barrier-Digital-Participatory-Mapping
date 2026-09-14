@@ -6,6 +6,9 @@
   var layerEl = null;
   var applyingLayout = false;
   var saveTimer = 0;
+  // Set by reset(). Nothing may write a layout back for the rest of this
+  // page's life once the alignment has been deliberately cleared.
+  var savingBlocked = false;
 
   function isFiniteNumber(v) {
     return typeof v === 'number' && Number.isFinite(v);
@@ -72,6 +75,7 @@
   }
 
   function writePayload(payload) {
+    if (savingBlocked) return false;
     try {
       var raw = JSON.stringify(payload);
       window.localStorage.setItem(STORAGE_KEY, raw);
@@ -189,11 +193,107 @@
     return true;
   }
 
+  // ---- viewport <-> layer coordinates -------------------------------------
+  // The projector paints the VIEWPORT, so a camera tag's uv (normalised inside
+  // the projected quad) names a viewport point. Content, though, is laid out
+  // inside #projectionWarp, which the warp transform then bends. To put an
+  // element under a tag you therefore need the layer point that the transform
+  // maps ONTO that viewport point -- i.e. the inverse warp. The layer is fixed
+  // at viewport 0,0 with transform-origin 0 0, so its transform alone relates
+  // the two and no bounding-rect offset is involved. Both are the identity when
+  // nothing is warped. (mapWarp.js does the same for the workshop map page.)
+  function layerMatrix() {
+    if (!layerEl) return null;
+    var transform = window.getComputedStyle(layerEl).transform;
+    if (!transform || transform === 'none') return null;
+    try {
+      return new DOMMatrixReadOnly(transform);
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function project(x, y, matrix) {
+    if (!matrix) return { x: x, y: y };
+    try {
+      var p = new DOMPoint(x, y, 0, 1).matrixTransform(matrix);
+      if (typeof p.w === 'number' && p.w && p.w !== 1) return { x: p.x / p.w, y: p.y / p.w };
+      return { x: p.x, y: p.y };
+    } catch (_err) {
+      return { x: x, y: y };
+    }
+  }
+
+  function screenToLayer(x, y) {
+    var m = layerMatrix();
+    if (!m) return { x: x, y: y };
+    try {
+      return project(x, y, m.inverse());
+    } catch (_err) {
+      return { x: x, y: y };
+    }
+  }
+
+  function layerToScreen(x, y) {
+    return project(x, y, layerMatrix());
+  }
+
+  // uv (0..1 across the projected surface) -> the layer point that lands there.
+  function uvToLayer(u, v, width, height) {
+    var w = width || window.innerWidth;
+    var h = height || window.innerHeight;
+    return screenToLayer(Number(u) * w, Number(v) * h);
+  }
+
+  // Clear the saved projection alignment and flatten the page now.
+  //
+  // Removing the storage keys is not enough on its own: this module saves the
+  // live layout on beforeunload, so a caller that cleared storage and then
+  // reloaded had its OWN unload handler write the still-warped layout straight
+  // back, and the page came up warped again -- which is exactly what the Reset
+  // button on the home page did. Blocking saves first is what makes the clear
+  // stick, and flattening the layout means the page straightens immediately
+  // whether or not the caller reloads.
+  function reset() {
+    savingBlocked = true;
+    if (saveTimer) { window.clearTimeout(saveTimer); saveTimer = 0; }
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_AUTO_KEY);
+    } catch (_err) { /* private mode: the layout below still straightens it */ }
+
+    var size = elementSize();
+    if (instance && typeof instance.setLayout === 'function' && size.width && size.height) {
+      var square = defaultSourcePoints(size.width, size.height);
+      applyingLayout = true;
+      try {
+        instance.setLayout([{ id: WARP_ID, sourcePoints: square, targetPoints: square }]);
+      } catch (err) {
+        console.error('Failed to clear the page warp:', err);
+      } finally {
+        window.setTimeout(function () { applyingLayout = false; }, 0);
+      }
+    }
+    return true;
+  }
+
   function shouldKeepOutsideWarp(node) {
     if (!node || node.nodeType !== 1) return false;
     if (node.hasAttribute('data-page-warp-exclude')) return true;
     var id = String(node.id || '');
     return id === 'cornerTags' || id === 'driftTagOverlay';
+  }
+
+  // Whether the page has declared itself non-scrolling (html or body with
+  // overflow hidden/clip), as the map pages and the workshop home do.
+  function pageDeclaresNoScroll() {
+    try {
+      var body = window.getComputedStyle(document.body).overflowY;
+      var root = window.getComputedStyle(document.documentElement).overflowY;
+      return body === 'hidden' || body === 'clip' || root === 'hidden' || root === 'clip';
+    } catch (_err) {
+      return false;
+    }
   }
 
   function ensureLayer() {
@@ -210,7 +310,26 @@
     wrapper.style.top = '0';
     wrapper.style.width = '100vw';
     wrapper.style.height = '100vh';
-    wrapper.style.overflow = 'auto';
+    // Once the body's children move in here, this layer IS the page's scroll
+    // container: body itself holds nothing. So a page that has declared
+    // itself non-scrolling must not grow scrollbars here either. It used to
+    // (overflow: auto regardless), and on the map pages any child poking past
+    // the viewport -- a sheet window at the table's edge, a pen menu near a
+    // corner, a popup -- popped both scrollbars up, shrank the layer's client
+    // box by their width, and the fixed-inset map with it; when the child
+    // moved back, the map grew again. Scrolling pages (results) keep the
+    // layer as their scroller.
+    //
+    // clip rather than hidden where the engine has it: a hidden scroller is
+    // still scrolled by focus() and scrollIntoView(), which would shift the
+    // whole page under the projector; clip never scrolls. An engine without
+    // clip ignores that assignment and keeps hidden.
+    if (pageDeclaresNoScroll()) {
+      wrapper.style.overflow = 'hidden';
+      wrapper.style.overflow = 'clip';
+    } else {
+      wrapper.style.overflow = 'auto';
+    }
     wrapper.style.transformOrigin = '0 0';
 
     document.body.insertBefore(wrapper, document.body.firstChild);
@@ -252,6 +371,10 @@
     applySavedLayout: applySavedLayout,
     saveCurrentLayout: saveCurrentLayout,
     saveTargetPoints: saveTargetPoints,
+    reset: reset,
+    screenToLayer: screenToLayer,
+    layerToScreen: layerToScreen,
+    uvToLayer: uvToLayer,
     isActive: function () { return !!instance; },
     getLayer: function () { return layerEl; },
     storageKey: STORAGE_KEY

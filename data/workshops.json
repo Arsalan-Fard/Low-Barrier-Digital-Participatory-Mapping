@@ -11,15 +11,7 @@
           "indoor": false,
           "indoorId": "floorplan (2).dxf",
           "label": "Part 1",
-          "labels": [
-            {
-              "bgOpacity": 0.6,
-              "fontSize": 20,
-              "text": "kkkkkkkkkkkkkkkkkkk",
-              "xPct": 0.48936083558290033,
-              "yPct": 0.9084891257794029
-            }
-          ],
+          "labels": [],
           "mapView": null,
           "theme": "streets"
         },
@@ -28,11 +20,11 @@
           "id": 2,
           "images": [
             {
-              "src": "/api/workshop-assets/484681_1_En_3_Fig15_HTML_1786286188338.png",
               "name": "484681_1_En_3_Fig15_HTML.png",
+              "src": "/api/workshop-assets/484681_1_En_3_Fig15_HTML_1786286188338.png",
+              "widthPct": 0.41041666666666665,
               "xPct": 0.54375,
-              "yPct": 0.5917338709677419,
-              "widthPct": 0.41041666666666665
+              "yPct": 0.5917338709677419
             }
           ],
           "indoor": true,
@@ -41,6 +33,53 @@
           "labels": [],
           "mapView": null,
           "theme": "streets"
+        }
+      ]
+    },
+    {
+      "id": "ws_w972ns58gi",
+      "name": "Workshop 2",
+      "steps": [
+        {
+          "id": 1,
+          "label": "Part 1",
+          "theme": "streets",
+          "indoor": false,
+          "indoorId": "",
+          "mapView": {
+            "center": [
+              2.208499999999958,
+              48.711600248434735
+            ],
+            "zoom": 15.445811397114664,
+            "bearing": 0,
+            "pitch": 0
+          },
+          "labels": [
+            {
+              "text": "6yjttyj",
+              "xPct": 0.3484817661228146,
+              "yPct": 0.807146096882848,
+              "fontSize": 20,
+              "bgOpacity": 0.6
+            }
+          ],
+          "images": [],
+          "dataLayers": [
+            "roads",
+            "custom:umap_backup_institut-polytechnique-de-paris.geojson"
+          ]
+        },
+        {
+          "id": 2,
+          "label": "Part 2",
+          "theme": "streets",
+          "indoor": true,
+          "indoorId": "floorplan (2).dxf",
+          "mapView": null,
+          "labels": [],
+          "images": [],
+          "dataLayers": []
         }
       ]
     }

@@ -54,7 +54,7 @@ STICKER_COLORS = {
     "green": ("Green", "#5ba24f"),
     "orange": ("Orange", "#f59a4a"),
     "cyan": ("Cyan", "#4acfff"),
-    "pink": ("Pink", "#f05c8c"),
+    "pink": ("Pink", "#ffb7e0"),
 }
 PATH_COLORS = {"black": ("Black", "#252525"), "red": ("Red", "#eb6f73")}
 
@@ -411,7 +411,6 @@ def build(args):
         "version": 1,
         "threshold": 29,
         "mapId": str(args.sheet),
-        "participantId": "",
         "heat": {colour: {"enabled": False, "binMetres": 220,
                           "perLevel": 1, "opacity": 0.65}
                  for colour in STICKER_COLORS},

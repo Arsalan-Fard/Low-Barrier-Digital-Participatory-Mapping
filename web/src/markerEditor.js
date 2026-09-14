@@ -1,5 +1,4 @@
-// Marker editor — shared by /settings (Marker pane) and /marker.
-// Extracted verbatim from settings.html; edit here, both pages update.
+// Marker editor for the /marker page.
     (function () {
       var els = {
         family: document.getElementById('markerFamily'),

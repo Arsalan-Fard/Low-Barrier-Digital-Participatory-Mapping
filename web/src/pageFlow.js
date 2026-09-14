@@ -46,7 +46,7 @@
         window.location.href = 'index.html';
       } else {
         if (typeof onBackToCamera === 'function') onBackToCamera();
-        window.location.href = '/settings';   // camera setup now lives in /settings (camera page retired)
+        window.location.href = '/home?setup';   // camera + screen setup lives on the home page
       }
     }
 

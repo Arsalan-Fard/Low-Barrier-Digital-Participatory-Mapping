@@ -758,6 +758,9 @@ const STREET_VIEW_REQUEST_DEBOUNCE_MS = 400;
 const STREET_VIEW_REQUEST_COOLDOWN_MS = 1000;
 const STREET_VIEW_COORD_DECIMALS = 4;
 const STREET_VIEW_MISSING_HOLD_MS = 3000;
+// How far the outdoor-panorama lookup may reach from the tag (same as the
+// digitize page's street window).
+const STREET_VIEW_SEARCH_RADIUS_M = 80;
 let defaultZoom = 16;
 const panTagRuntime = {
   lastApplyMs: 0,
@@ -810,6 +813,13 @@ let streetViewPanorama = null;
 let streetViewSdkPromise = null;
 let streetViewLastHeading = 0;
 let streetViewLastPosition = null; // { lat, lng }
+// Every panorama is picked by id through an OUTDOOR lookup, never by position,
+// so the inset can't land inside a shop or museum.
+let streetViewService = null;
+let streetViewLastPano = '';         // id of the outdoor panorama on show
+let streetViewQueryLngLat = null;    // point the last lookup was asked about
+let streetViewResolving = false;
+let streetViewNoOutdoor = false;     // last lookup found no outdoor imagery
 // Offset added to the tag's screen-space angle before using it as a Street
 // View heading. Adjust if "tag pointing up" should map to a different bearing.
 const STREET_VIEW_HEADING_OFFSET_DEG = 0;
@@ -843,9 +853,13 @@ function normalizeDrawToolMode(raw) {
     || key === 'sticker' || key === 'draw' ? key : 'draw';
 }
 
+// A phone with no tool chosen -- its mode tapped off, or cleared after placing
+// a comment -- leaves its pointer drawing, the default a fresh page starts in.
+// It used to mean 'none', which silently stopped the pointer until someone
+// picked Draw again or reloaded the page.
 function normalizePhoneControllerMode(raw) {
   var key = String(raw || '').toLowerCase();
-  if (!key) return 'none';
+  if (!key || key === 'none') return 'draw';
   return normalizeDrawToolMode(key);
 }
 
@@ -2774,14 +2788,13 @@ function fetchGoogleMapsKey() {
   return googleMapsKeyPromise;
 }
 
-function buildStreetViewUrl(lngLat, key, heading) {
-  if (!lngLat || !key) return '';
-  var lng = Number(lngLat.lng);
-  var lat = Number(lngLat.lat);
-  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return '';
+function buildStreetViewUrl(pano, key, heading) {
+  if (!pano || !pano.pano || !key) return '';
   var url = new URL('https://www.google.com/maps/embed/v1/streetview');
   url.searchParams.set('key', key);
-  url.searchParams.set('location', String(lat) + ',' + String(lng));
+  // A resolved outdoor pano id, never `location=`: the embed API has no source
+  // filter, so a bare location snaps to the nearest panorama even indoors.
+  url.searchParams.set('pano', pano.pano);
   var headingNum = Number(heading);
   url.searchParams.set('heading', String(Number.isFinite(headingNum) ? headingNum : STREET_VIEW_HEADING));
   url.searchParams.set('pitch', String(STREET_VIEW_PITCH));
@@ -2823,14 +2836,52 @@ function ensureStreetViewSdk() {
   return streetViewSdkPromise;
 }
 
-function ensureStreetViewPanorama(lngLat, heading) {
+// Nearest OUTDOOR panorama to a point, as { pano, lat, lng }, or null when
+// there is none -- or when the SDK never loaded, since then nothing can be
+// proven outdoor. Handing StreetViewPanorama a bare position instead lets
+// Google snap to whatever is nearest, indoor collections included.
+function resolveOutdoorPano(lngLat) {
+  return ensureStreetViewSdk().then(function (maps) {
+    if (!maps || !maps.StreetViewService) return null;
+    if (!streetViewService) streetViewService = new maps.StreetViewService();
+    var ask = {
+      location: { lat: Number(lngLat.lat), lng: Number(lngLat.lng) },
+      radius: STREET_VIEW_SEARCH_RADIUS_M
+    };
+    if (!maps.StreetViewSource || !maps.StreetViewSource.OUTDOOR) return null;
+    ask.source = maps.StreetViewSource.OUTDOOR;
+    return new Promise(function (resolve) {
+      streetViewService.getPanorama(ask, function (data, status) {
+        if (status !== 'OK' || !data || !data.location || !data.location.pano) {
+          resolve(null);
+          return;
+        }
+        var loc = data.location.latLng;
+        resolve({
+          pano: data.location.pano,
+          lat: loc ? Number(typeof loc.lat === 'function' ? loc.lat() : loc.lat) : Number(lngLat.lat),
+          lng: loc ? Number(typeof loc.lng === 'function' ? loc.lng() : loc.lng) : Number(lngLat.lng)
+        });
+      });
+    });
+  }).catch(function () { return null; });
+}
+
+function ensureStreetViewPanorama(pano, heading) {
   return ensureStreetViewSdk().then(function (maps) {
     if (!maps || !maps.StreetViewPanorama) return null;
-    if (streetViewPanorama) return streetViewPanorama;
+    if (streetViewPanorama) {
+      if (pano.pano !== streetViewLastPano) {
+        try { streetViewPanorama.setPano(pano.pano); } catch (_err) {}
+        streetViewLastPano = pano.pano;
+        streetViewLastPosition = { lat: pano.lat, lng: pano.lng };
+      }
+      return streetViewPanorama;
+    }
     var host = document.getElementById('streetViewPanorama');
     if (!host) return null;
     streetViewPanorama = new maps.StreetViewPanorama(host, {
-      position: { lat: Number(lngLat.lat), lng: Number(lngLat.lng) },
+      pano: pano.pano,
       pov: { heading: Number(heading) || 0, pitch: STREET_VIEW_PITCH },
       zoom: 0,
       addressControl: false,
@@ -2841,9 +2892,13 @@ function ensureStreetViewPanorama(lngLat, heading) {
       motionTracking: false,
       motionTrackingControl: false,
       showRoadLabels: false,
+      // No walking through links: a street panorama can link to the indoor
+      // collection of the building beside it.
+      clickToGo: false,
       visible: true
     });
-    streetViewLastPosition = { lat: Number(lngLat.lat), lng: Number(lngLat.lng) };
+    streetViewLastPano = pano.pano;
+    streetViewLastPosition = { lat: pano.lat, lng: pano.lng };
     streetViewLastHeading = Number(heading) || 0;
     if (streetViewInset) streetViewInset.classList.add('pano-ready');
     return streetViewPanorama;
@@ -2857,14 +2912,35 @@ function streetViewPositionsDifferEnough(a, b) {
   return streetViewDistanceMeters(a, b) >= STREET_VIEW_REQUEST_DISTANCE_M;
 }
 
+// Returns whether the inset has an outdoor panorama worth showing.
 function applyStreetViewPanoramaState(lngLat, heading) {
   if (!streetViewPanorama) return false;
   var pos = { lat: Number(lngLat.lat), lng: Number(lngLat.lng) };
-  if (Number.isFinite(pos.lat) && Number.isFinite(pos.lng)) {
-    if (streetViewPositionsDifferEnough(streetViewLastPosition, pos)) {
-      try { streetViewPanorama.setPosition(pos); } catch (_err) {}
-      streetViewLastPosition = pos;
-    }
+  if (Number.isFinite(pos.lat) && Number.isFinite(pos.lng)
+      && !streetViewResolving
+      && streetViewPositionsDifferEnough(streetViewQueryLngLat, pos)) {
+    // Moved far enough: look the outdoor panorama up rather than setPosition(),
+    // whose own nearest-pano snap can land indoors. Distance is measured from
+    // the last point asked about, not the pano found, or a pano sitting 40 m
+    // off would trigger a lookup every frame. The old panorama stays up until
+    // the answer arrives.
+    streetViewResolving = true;
+    streetViewQueryLngLat = pos;
+    resolveOutdoorPano(pos).then(function (pano) {
+      streetViewResolving = false;
+      if (!streetViewPanorama) return;
+      if (!pano) {
+        streetViewNoOutdoor = true;
+        setStreetViewVisible(false);
+        return;
+      }
+      streetViewNoOutdoor = false;
+      if (pano.pano !== streetViewLastPano) {
+        try { streetViewPanorama.setPano(pano.pano); } catch (_err) {}
+        streetViewLastPano = pano.pano;
+        streetViewLastPosition = { lat: pano.lat, lng: pano.lng };
+      }
+    });
   }
   var headingNum = Number(heading);
   if (Number.isFinite(headingNum)) {
@@ -2874,7 +2950,7 @@ function applyStreetViewPanoramaState(lngLat, heading) {
       streetViewLastHeading = headingNum;
     }
   }
-  return true;
+  return !streetViewNoOutdoor;
 }
 
 function setStreetViewVisible(visible) {
@@ -2940,36 +3016,48 @@ function commitStreetViewRequest(requestLngLat, heading) {
   if (streetViewDesiredState !== 'inside' || !pageFlow || !pageFlow.isMapPage()) return;
   var effectiveLngLat = quantizeStreetViewLngLat(requestLngLat);
   if (!effectiveLngLat) return;
-  // Prefer the JS panorama: position changes don't reload, heading changes
-  // are purely client-side.
-  ensureStreetViewPanorama(effectiveLngLat, heading).then(function (pano) {
+  // Recorded before the answer, so a spot with no outdoor imagery isn't asked
+  // about again on every cooldown -- only once the tag moves on.
+  streetViewLastRequestedLngLat = effectiveLngLat;
+  streetViewLastRequestAtMs = Date.now();
+  streetViewQueryLngLat = effectiveLngLat;
+  resolveOutdoorPano(effectiveLngLat).then(function (found) {
     if (streetViewDesiredState !== 'inside' || !pageFlow || !pageFlow.isMapPage()) return;
-    if (pano) {
-      applyStreetViewPanoramaState(effectiveLngLat, heading);
-      streetViewLastRequestedLngLat = effectiveLngLat;
-      streetViewLastRequestAtMs = Date.now();
-      if (streetViewLastAnchorPoint) positionStreetViewInset(streetViewLastAnchorPoint);
-      setStreetViewVisible(true);
+    if (!found) {
+      // Showing nothing beats showing an interior.
+      streetViewNoOutdoor = true;
+      streetViewLastUrl = '';
+      setStreetViewVisible(false);
       return;
     }
-    // Fallback path: the SDK didn't load. Use the embed iframe (slower —
-    // every heading change reloads it, but at least Street View still works).
-    if (!streetViewFrame) return;
-    fetchGoogleMapsKey().then(function (key) {
-      if (!streetViewFrame || streetViewDesiredState !== 'inside' || !pageFlow || !pageFlow.isMapPage()) return;
-      var url = buildStreetViewUrl(effectiveLngLat, key, heading);
-      if (!url) {
-        setStreetViewVisible(false);
+    streetViewNoOutdoor = false;
+    // Prefer the JS panorama: pano changes don't reload, heading changes
+    // are purely client-side.
+    ensureStreetViewPanorama(found, heading).then(function (pano) {
+      if (streetViewDesiredState !== 'inside' || !pageFlow || !pageFlow.isMapPage()) return;
+      if (pano) {
+        applyStreetViewPanoramaState(effectiveLngLat, heading);
+        if (streetViewLastAnchorPoint) positionStreetViewInset(streetViewLastAnchorPoint);
+        setStreetViewVisible(true);
         return;
       }
-      if (streetViewLastUrl !== url) {
-        streetViewFrame.src = url;
-        streetViewLastUrl = url;
-      }
-      streetViewLastRequestedLngLat = effectiveLngLat;
-      streetViewLastRequestAtMs = Date.now();
-      if (streetViewLastAnchorPoint) positionStreetViewInset(streetViewLastAnchorPoint);
-      setStreetViewVisible(true);
+      // Fallback path: the panorama couldn't be built. Use the embed iframe on
+      // the same outdoor pano id (slower -- every heading change reloads it).
+      if (!streetViewFrame) return;
+      fetchGoogleMapsKey().then(function (key) {
+        if (!streetViewFrame || streetViewDesiredState !== 'inside' || !pageFlow || !pageFlow.isMapPage()) return;
+        var url = buildStreetViewUrl(found, key, heading);
+        if (!url) {
+          setStreetViewVisible(false);
+          return;
+        }
+        if (streetViewLastUrl !== url) {
+          streetViewFrame.src = url;
+          streetViewLastUrl = url;
+        }
+        if (streetViewLastAnchorPoint) positionStreetViewInset(streetViewLastAnchorPoint);
+        setStreetViewVisible(true);
+      });
     });
   });
 }
@@ -2978,7 +3066,7 @@ function shouldRequestNewStreetView(rawLngLat) {
   if (!hasFiniteStreetViewLngLat(rawLngLat)) return false;
   var quantized = quantizeStreetViewLngLat(rawLngLat);
   if (!quantized) return false;
-  if (!streetViewLastRequestedLngLat || !streetViewLastUrl) return true;
+  if (!streetViewLastRequestedLngLat) return true;
   return streetViewDistanceMeters(quantized, streetViewLastRequestedLngLat) >= STREET_VIEW_REQUEST_DISTANCE_M;
 }
 
@@ -3046,13 +3134,13 @@ function refreshStreetViewInset(state, anchorPoint, lngLat, heading) {
   if (!hasFiniteStreetViewLngLat(streetViewLastLngLat)) {
     return;
   }
-  // If the JS panorama is live, every frame can update it cheaply: setPosition
-  // when the location moved enough (tile fetch only, no reload), setPov for
-  // heading changes (purely client-side, no network).
+  // If the JS panorama is live, every frame can update it cheaply: an outdoor
+  // lookup when the location moved enough, setPov for heading changes (purely
+  // client-side, no network). Stays hidden where there is no outdoor imagery.
   if (streetViewPanorama) {
-    applyStreetViewPanoramaState(streetViewLastLngLat, heading);
+    var hasOutdoor = applyStreetViewPanoramaState(streetViewLastLngLat, heading);
     if (streetViewLastAnchorPoint) positionStreetViewInset(streetViewLastAnchorPoint);
-    setStreetViewVisible(true);
+    setStreetViewVisible(hasOutdoor);
     return;
   }
   var currentQuantizedLngLat = quantizeStreetViewLngLat(streetViewLastLngLat);

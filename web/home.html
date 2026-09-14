@@ -217,6 +217,19 @@
     .action.ghost:hover { background: var(--green-tint); border-color: var(--green); }
     .action.active { background: #b0483e; border-color: #8c3128; }
 
+    /* Webcam device index — only useful when more than one camera is attached,
+       so it stays hidden until the Webcam source is picked. */
+    .webcam-index {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 13px; font-weight: 600; color: var(--muted);
+    }
+    .webcam-index[hidden] { display: none; }
+    .webcam-index input {
+      width: 54px; font-family: var(--font-ui); font-size: 13px; color: var(--ink);
+      background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
+    }
+    .webcam-index input:focus { outline: none; border-color: var(--green); }
+
     .status-line { font-size: 13px; min-height: 17px; color: var(--muted); }
     .status-line.ok { color: var(--green-dark); }
     .status-line.err { color: var(--danger); }
@@ -243,9 +256,20 @@
     #camFeed { cursor: crosshair; }
     .view-placeholder { font-size: 13.5px; color: var(--muted); padding: 16px; text-align: center; max-width: 420px; }
 
-    /* ---------- side navigation ---------- */
-    #sideNav {
+    /* ---------- right column: nav buttons, or a panel in their place ---------- */
+    #rightCol {
       flex: 0 0 clamp(210px, 18vw, 268px);
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      transition: flex-basis 0.18s ease;
+    }
+    /* A panel needs room for label + slider + value, so the column widens while
+       one is open. The camera view on the left simply takes the rest. */
+    #rightCol.panel-open { flex: 0 0 clamp(290px, 25vw, 380px); }
+
+    #sideNav {
+      flex: 1;
       display: flex;
       flex-direction: column;
       justify-content: center;
@@ -284,6 +308,88 @@
     .nav-btn.primary.ready { animation: nav-pulse 1.4s ease-in-out infinite; }
     .nav-btn.exit { color: var(--danger); border-color: #e6c6c0; }
     .nav-btn.exit:hover { background: #fbeeeb; border-color: var(--danger); }
+
+    /* ---------- swap-in side panels (tuning, phone link) ---------- */
+    /* `hidden` alone loses to the display rules below, so spell it out: the nav
+       and the panels share the column and exactly one of them is ever shown. */
+    #sideNav[hidden], .side-panel[hidden] { display: none; }
+    .side-panel {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(31, 114, 107, 0.08);
+      padding: 16px 18px;
+      overflow: hidden;
+    }
+    .sp-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .sp-head h2 { margin: 0; font-size: 17px; font-weight: 800; letter-spacing: -0.2px; }
+    .sp-back {
+      font-family: var(--font-ui); font-size: 15px; line-height: 1;
+      color: var(--ink); background: #fff;
+      border: 1px solid var(--line); border-radius: 9px;
+      padding: 7px 11px; cursor: pointer;
+      transition: background 0.14s ease, border-color 0.14s ease;
+    }
+    .sp-back:hover { background: var(--green-tint); border-color: var(--green); }
+    .sp-hint { margin: 0 0 12px; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+
+    /* Live "how many tags is the detector actually seeing" readout — the number
+       the sliders are being tuned against. */
+    .sp-detect {
+      display: flex; align-items: baseline; gap: 6px;
+      margin-bottom: 12px; padding: 9px 12px;
+      font-size: 13px; color: var(--green-dark);
+      background: var(--green-soft); border: 1px solid var(--line); border-radius: 10px;
+    }
+    .sp-detect strong { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .sp-detect.none { color: var(--danger); background: #fbeeeb; border-color: #e6c6c0; }
+
+    .sp-body { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+    .sp-btn-row { display: flex; gap: 8px; margin: 10px 0; }
+
+    /* slider rows, shared by the camera controls and the detector params */
+    .tune-group {
+      font-size: 12px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; color: var(--muted);
+      margin: 14px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line);
+    }
+    .tune-group:first-child { margin-top: 0; }
+    .tune-row {
+      display: grid;
+      grid-template-columns: 1fr 44px;
+      align-items: center;
+      gap: 2px 8px;
+      margin-bottom: 10px;
+    }
+    .tune-row__label { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+    .tune-row__val {
+      font-size: 12.5px; font-weight: 700; text-align: right;
+      font-variant-numeric: tabular-nums; color: var(--green-dark);
+    }
+    .tune-row__slider { grid-column: 1 / -1; width: 100%; accent-color: var(--green); margin: 0; }
+    .tune-row__def { grid-column: 1 / -1; font-size: 11px; color: var(--muted); }
+    .tune-row__select, #phoneAudioLink {
+      grid-column: 1 / -1; width: 100%;
+      font-family: var(--font-ui); font-size: 13px; color: var(--ink);
+      background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px;
+    }
+    .tune-row__select:focus, #phoneAudioLink:focus { outline: none; border-color: var(--green); }
+    .tune-check { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 12.5px; font-weight: 600; }
+    .tune-check input { width: 15px; height: 15px; accent-color: var(--green); margin: 0; }
+
+    #phoneAudioResolved { font-size: 12px; line-height: 1.45; color: var(--muted); word-break: break-all; min-height: 16px; }
+    #phoneAudioQrWrap { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 12px; }
+    #phoneAudioQr {
+      width: 180px; min-height: 180px; display: flex; align-items: center; justify-content: center;
+      background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+    }
+    #phoneAudioQr img, #phoneAudioQr canvas { display: block; max-width: 100%; }
+    #phoneAudioQrEmpty { padding: 16px; text-align: center; font-size: 12px; line-height: 1.4; color: var(--muted); }
+    #phoneAudioQrCaption { font-size: 11.5px; color: var(--muted); text-align: center; }
 
     /* small help button (reopens the guide) */
     #helpBtn {
@@ -540,6 +646,7 @@
       #layout { flex-direction: column; }
       #sideNav { flex: 0 0 auto; flex-direction: row; flex-wrap: wrap; justify-content: stretch; }
       #sideNav .nav-btn { flex: 1 1 40%; }
+      #rightCol, #rightCol.panel-open { flex: 1 1 auto; }
       .intro-grid { grid-template-columns: 1fr; overflow-y: auto; align-items: start; }
       .intro-photo img.setup { max-height: 52vh; }
       .intro-text { padding-top: 0; }
@@ -588,6 +695,9 @@
             </div>
           </span>
           <button class="pill" type="button" id="srcWebcam" data-source="webcam">Webcam</button>
+          <label class="webcam-index" id="webcamIndexWrap" hidden>Device
+            <input type="number" id="webcamIndex" min="0" max="9" value="0" />
+          </label>
           <span class="status-line" id="cameraStatus" style="flex:1"></span>
         </div>
 
@@ -614,13 +724,62 @@
       </div>
     </section>
 
-    <!-- ============ side navigation ============ -->
-    <nav id="sideNav" aria-label="Main actions">
-      <button class="nav-btn primary" type="button" id="goMap">Open Map<small>Start the workshop</small></button>
-      <a class="nav-btn" href="/marker" id="goMarker">Marker Setting<small>Tags &amp; tools</small></a>
-      <button class="nav-btn" type="button" id="goResults">Results<small>View collected data</small></button>
-      <button class="nav-btn exit" type="button" id="exitBtn">Exit</button>
-    </nav>
+    <!-- ============ right column ============ -->
+    <!-- The nav and the panels occupy the same column: opening one swaps out the
+         buttons rather than navigating, so the live camera view on the left keeps
+         streaming and keeps drawing the tags it detects. That view IS the feedback
+         for the tuning sliders, which is why they cannot live on their own page. -->
+    <div id="rightCol">
+      <nav id="sideNav" aria-label="Main actions">
+        <button class="nav-btn primary" type="button" id="goMap">Open Map<small>Start the workshop</small></button>
+        <a class="nav-btn" href="/marker" id="goMarker">Marker Setting<small>Tags &amp; tools</small></a>
+        <button class="nav-btn" type="button" id="goTuning">Camera Tuning<small>Exposure &amp; tag detection</small></button>
+        <button class="nav-btn" type="button" id="goShare">Phone Link<small>Comment link &amp; QR code</small></button>
+        <button class="nav-btn" type="button" id="goResults">Results<small>View collected data</small></button>
+        <button class="nav-btn exit" type="button" id="exitBtn">Exit</button>
+      </nav>
+
+      <!-- ---- camera tuning ---- -->
+      <aside class="side-panel" id="tuningPanel" aria-label="Camera tuning" hidden>
+        <div class="sp-head">
+          <button class="sp-back" type="button" data-panel-close aria-label="Back to menu">&larr;</button>
+          <h2>Camera Tuning</h2>
+        </div>
+        <p class="sp-hint">
+          Detected tags are outlined in the view on the left. Drag a slider and watch
+          the outlines &mdash; tune until every tag on the table holds steady.
+        </p>
+        <div class="sp-detect" id="tuneDetect"><strong id="tuneDetectN">&mdash;</strong> <span id="tuneDetectLabel">waiting for the camera</span></div>
+        <div class="sp-body">
+          <div id="cameraControls" aria-label="Camera controls"></div>
+          <div id="arucoTuning" aria-label="AprilTag (ArUco) detector tuning"></div>
+        </div>
+      </aside>
+
+      <!-- ---- phone comment link ---- -->
+      <aside class="side-panel" id="sharePanel" aria-label="Phone comment link" hidden>
+        <div class="sp-head">
+          <button class="sp-back" type="button" data-panel-close aria-label="Back to menu">&larr;</button>
+          <h2>Phone Link</h2>
+        </div>
+        <p class="sp-hint">
+          Paste the Cloudflare Quick Tunnel URL. It becomes the phone comment link
+          participants scan. (Auto-fills when a tunnel is detected.)
+        </p>
+        <div class="sp-body">
+          <input id="phoneAudioLink" type="text" placeholder="https://example.trycloudflare.com" autocomplete="off" spellcheck="false" />
+          <div class="sp-btn-row">
+            <button class="action" type="button" id="copyPhoneAudioLinkBtn">Copy link</button>
+            <button class="action ghost" type="button" id="clearPhoneAudioLinkBtn">Clear</button>
+          </div>
+          <div id="phoneAudioResolved"></div>
+          <div id="phoneAudioQrWrap">
+            <div id="phoneAudioQr"><div id="phoneAudioQrEmpty">Paste a tunnel link to generate a QR code.</div></div>
+            <div id="phoneAudioQrCaption">Points to the phone comment page.</div>
+          </div>
+        </div>
+      </aside>
+    </div>
   </main>
 
   <div id="note" data-page-warp-exclude>F11 toggles fullscreen</div>
@@ -634,7 +793,7 @@
 
   <!-- Auto-calibration grid: full-screen white field of AprilTags in raw
        projector pixels (excluded from the page warp). Populated by JS from
-       /api/auto-calibrate/layout, same as /settings. -->
+       /api/auto-calibrate/layout. -->
   <div id="calibGrid" data-page-warp-exclude aria-hidden="true"></div>
 
   <!-- ==================== first-run intro ==================== -->
@@ -757,6 +916,35 @@
       }
       $('goMap').addEventListener('click', goMap);
       $('goResults').addEventListener('click', goResults);
+
+      // ==================== side panels ====================
+      // Opening a panel hides the nav in place; the camera view is untouched and
+      // keeps streaming, which is the whole point for the tuning sliders.
+      var rightCol = $('rightCol');
+      var sideNav = $('sideNav');
+      var openPanel = null;
+
+      function showPanel(id) {
+        if (openPanel && openPanel !== id) $(openPanel).hidden = true;
+        openPanel = id;
+        sideNav.hidden = true;
+        $(id).hidden = false;
+        rightCol.classList.add('panel-open');
+        if (id === 'tuningPanel') initTuning();
+      }
+
+      function closePanel() {
+        if (openPanel) $(openPanel).hidden = true;
+        openPanel = null;
+        sideNav.hidden = false;
+        rightCol.classList.remove('panel-open');
+      }
+
+      document.querySelectorAll('[data-panel-close]').forEach(function (b) {
+        b.addEventListener('click', closePanel);
+      });
+      $('goTuning').addEventListener('click', function () { showPanel('tuningPanel'); });
+      $('goShare').addEventListener('click', function () { showPanel('sharePanel'); });
       $('exitBtn').addEventListener('click', doExit);
 
       window.addEventListener('keydown', function (e) {
@@ -766,11 +954,13 @@
         var key = String(e.key || '').toLowerCase();
         if (key === 'escape') {
           if (!introOverlay.hidden) { closeIntro(); return; }
+          if (openPanel) { closePanel(); return; }
           if (autoCalibActive) { stopAutoCalib(false); return; }
           doExit();
         } else if (introOverlay.hidden) {
           if (key === 'enter' || key === 'm') goMap();
           else if (key === 'r') goResults();
+          else if (key === 't') { if (openPanel === 'tuningPanel') closePanel(); else showPanel('tuningPanel'); }
         }
       });
 
@@ -791,10 +981,14 @@
         return '';
       }
 
+      var webcamIndexWrap = $('webcamIndexWrap');
+      var webcamIndex = $('webcamIndex');
+
       function markSource(kind) {
         currentSource = kind;
         srcSmartphone.classList.toggle('active', kind === 'smartphone');
         srcWebcam.classList.toggle('active', kind === 'webcam');
+        webcamIndexWrap.hidden = kind !== 'webcam';
       }
 
       function connect(kind, payload) {
@@ -828,8 +1022,9 @@
 
       function connectWebcam() {
         markSource('webcam');
-        // Default to the first webcam (device 0); other indices via /settings.
-        var idx = 0;
+        // Device 0 unless the index box says otherwise (more than one camera).
+        var idx = parseInt(webcamIndex.value, 10);
+        if (!Number.isFinite(idx) || idx < 0) idx = 0;
         setStatus(cameraStatus, 'Opening webcam…');
         connect('webcam', { index: idx }).then(function (res) {
           if (res.data && res.data.ok) {
@@ -1205,9 +1400,210 @@
           .catch(function () {});
       }
 
+      // ==================== camera tuning sliders ====================
+      // Two sources, one panel: /api/camera/controls (exposure, focus, resolution
+      // -- the phone's own settings, or cap.set on a UVC webcam) and
+      // /api/aruco-tuning (the detector's DetectorParameters). Both apply live, so
+      // the effect shows up in the camera view within a frame or two.
+      var cameraControlsEl = $('cameraControls');
+      var arucoTuningEl = $('arucoTuning');
+      var tuningBuilt = false;
+      var cameraControlsBuilt = false;
+
+      function groupTitle(text) {
+        var el = document.createElement('div');
+        el.className = 'tune-group';
+        el.textContent = text;
+        return el;
+      }
+
+      // Label + live value on one line, the slider full-width beneath it, so a
+      // narrow column still gives the slider its whole travel.
+      function sliderRow(c, onCommit, defaultText) {
+        var row = document.createElement('div');
+        row.className = 'tune-row';
+
+        var label = document.createElement('label');
+        label.className = 'tune-row__label';
+        label.textContent = c.label;
+
+        var val = document.createElement('span');
+        val.className = 'tune-row__val';
+        val.textContent = c.value;
+
+        var slider = document.createElement('input');
+        slider.type = 'range';
+        slider.className = 'tune-row__slider';
+        slider.min = c.min; slider.max = c.max; slider.step = c.step; slider.value = c.value;
+
+        row.appendChild(label);
+        row.appendChild(val);
+        row.appendChild(slider);
+        if (defaultText) {
+          var def = document.createElement('span');
+          def.className = 'tune-row__def';
+          def.textContent = defaultText;
+          row.appendChild(def);
+        }
+
+        var timer = null;
+        slider.addEventListener('input', function () {
+          val.textContent = slider.value;
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(function () { onCommit(Number(slider.value)); }, 130);
+        });
+        return row;
+      }
+
+      function initArucoTuning() {
+        if (!arucoTuningEl) return;
+        function putTuning(body) {
+          fetch('/api/aruco-tuning', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          }).catch(function () {});
+        }
+        fetch('/api/aruco-tuning', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data || !Array.isArray(data.controls)) return;
+            arucoTuningEl.innerHTML = '';
+            var heading = 'Tag detection';
+            if (data.activeBackend && data.activeBackend !== 'aruco') {
+              heading += ' (inactive, detector is ' + data.activeBackend + ')';
+            }
+            arucoTuningEl.appendChild(groupTitle(heading));
+            data.controls.forEach(function (c) {
+              arucoTuningEl.appendChild(sliderRow(c, function (v) {
+                var body = {}; body[c.key] = v; putTuning(body);
+              }, 'OpenCV default ' + c.default));
+            });
+
+            // Second pass: upscale tag-shaped rejected ROIs to rescue small or
+            // distant tags. Costly, so it ships off and keeps its own toggle.
+            if (Array.isArray(data.upscale)) {
+              arucoTuningEl.appendChild(groupTitle('Rescue distant tags'));
+              var wrap = document.createElement('label');
+              wrap.className = 'tune-check';
+              var cb = document.createElement('input');
+              cb.type = 'checkbox';
+              cb.checked = !!data.upscaleEnabled;
+              cb.addEventListener('change', function () { putTuning({ upEnabled: cb.checked ? 1 : 0 }); });
+              wrap.appendChild(cb);
+              wrap.appendChild(document.createTextNode('Upscale small regions (slower)'));
+              arucoTuningEl.appendChild(wrap);
+              data.upscale.forEach(function (c) {
+                arucoTuningEl.appendChild(sliderRow(c, function (v) {
+                  var body = {}; body[c.key] = v; putTuning(body);
+                }));
+              });
+            }
+            tuningBuilt = true;
+          })
+          .catch(function () {});
+      }
+
+      function initCameraControls() {
+        if (!cameraControlsEl) return;
+        fetch('/api/camera/controls', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data || !data.ok || !Array.isArray(data.controls)) return;
+            if (data.kind === 'none') { cameraControlsEl.innerHTML = ''; return; }
+            cameraControlsEl.innerHTML = '';
+            cameraControlsEl.appendChild(
+              groupTitle('Camera (' + (data.kind === 'ip' ? 'phone' : 'webcam') + ')'));
+
+            function putControl(name, value) {
+              fetch('/api/camera/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, value: value })
+              }).catch(function () {});
+            }
+
+            // Dragging exposure or focus implies manual, so untick its auto box
+            // to match what the backend already does on its side.
+            var autoCbByKey = {};
+            var pairedAuto = { exposure: 'exposureAuto', focus: 'focusAuto' };
+
+            data.controls.forEach(function (c) {
+              if (c.type === 'toggle') {
+                var wrap = document.createElement('label');
+                wrap.className = 'tune-check';
+                var cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = Number(c.value) !== 0;
+                cb.addEventListener('change', function () { putControl(c.key, cb.checked ? 1 : 0); });
+                autoCbByKey[c.key] = cb;
+                wrap.appendChild(cb);
+                wrap.appendChild(document.createTextNode(c.label));
+                cameraControlsEl.appendChild(wrap);
+                return;
+              }
+              if (c.type === 'select') {
+                var row = document.createElement('div');
+                row.className = 'tune-row';
+                var label = document.createElement('label');
+                label.className = 'tune-row__label';
+                label.textContent = c.label;
+                row.appendChild(label);
+                row.appendChild(document.createElement('span'));
+                var sel = document.createElement('select');
+                sel.className = 'tune-row__select';
+                (c.options || []).forEach(function (opt) {
+                  var o = document.createElement('option');
+                  o.value = opt; o.textContent = opt;
+                  if (String(opt) === String(c.value)) o.selected = true;
+                  sel.appendChild(o);
+                });
+                sel.addEventListener('change', function () { putControl(c.key, sel.value); });
+                row.appendChild(sel);
+                cameraControlsEl.appendChild(row);
+                return;
+              }
+              cameraControlsEl.appendChild(sliderRow(c, function (v) {
+                var ak = pairedAuto[c.key];
+                if (ak && autoCbByKey[ak]) autoCbByKey[ak].checked = false;
+                putControl(c.key, v);
+              }));
+            });
+            cameraControlsBuilt = true;
+          })
+          .catch(function () {});
+      }
+
+      // Built on first open, and again once a camera appears: the controls list
+      // comes back empty until the backend actually has one.
+      function initTuning() {
+        if (!tuningBuilt) initArucoTuning();
+        if (!cameraControlsBuilt) initCameraControls();
+      }
+
+      var tuneDetect = $('tuneDetect');
+      var tuneDetectN = $('tuneDetectN');
+      var tuneDetectLabel = $('tuneDetectLabel');
+
+      function refreshTuneReadout() {
+        if (openPanel !== 'tuningPanel') return;
+        if (!cameraConnected) {
+          tuneDetectN.textContent = '\u2014';
+          tuneDetectLabel.textContent = 'waiting for the camera';
+          tuneDetect.classList.remove('none');
+          return;
+        }
+        if (!cameraControlsBuilt) initCameraControls();
+        var n = lastTags.length;
+        tuneDetectN.textContent = String(n);
+        tuneDetectLabel.textContent = n === 1 ? 'tag detected' : 'tags detected';
+        tuneDetect.classList.toggle('none', n === 0);
+      }
+
       pollCameraStatus();
       setInterval(pollCameraStatus, 2500);
       setInterval(pollTags, 150);
+      setInterval(refreshTuneReadout, 250);
 
       // Auto-retry the smartphone connection every 10s, but ONLY while the
       // Smartphone source is selected and nothing is connected yet. Selecting
@@ -1269,10 +1665,22 @@
       }
       if (warpIsSignificant()) notice.hidden = false;
       reset.addEventListener('click', function () {
-        try { KEYS.forEach(function (k) { window.localStorage.removeItem(k); }); } catch (_e) {}
+        // pageWarp owns the clearing: it has to block its own beforeunload save
+        // before the keys go, or the reload below writes the warp straight back.
+        // The removeItem fallback is for the case where it never initialised.
+        if (window.CompactPageWarp && typeof window.CompactPageWarp.reset === 'function') {
+          window.CompactPageWarp.reset();
+        } else {
+          try { KEYS.forEach(function (k) { window.localStorage.removeItem(k); }); } catch (_e) {}
+        }
+        notice.hidden = true;
         window.location.reload();
       });
     })();
   </script>
+
+  <!-- Phone comment link + QR. phoneLinkShare.js self-wires off #phoneAudioLink. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="src/phoneLinkShare.js"></script>
 </body>
 </html>

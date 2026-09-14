@@ -22,8 +22,6 @@
       color: #fff; background: #202020; border: 1px solid #4a4a4a; border-radius: 10px;
     }
     input[type="number"]:focus { outline: none; border-color: #2f8f86; }
-    .pair { display: flex; gap: 10px; }
-    .pair > div { flex: 1; }
     button {
       width: 100%; padding: 18px; font-size: 17px; font-weight: 700;
       color: #fff; background: #2f8f86; border: 0; border-radius: 12px; cursor: pointer;
@@ -47,19 +45,11 @@
   <p class="sub">Photos go straight to the laptop, which aligns and digitises them.</p>
 
   <fieldset>
-    <legend>Which sheet</legend>
-    <div class="pair">
-      <div>
-        <label for="mapId">Map ID</label>
-        <input type="number" id="mapId" min="1" max="999999999" step="1" inputmode="numeric" placeholder="1" />
-      </div>
-      <div>
-        <label for="participantId">Participant</label>
-        <input type="number" id="participantId" min="1" max="999999999" step="1" inputmode="numeric" placeholder="—" />
-      </div>
-    </div>
-    <p class="hint">Leave Participant empty for a single-copy map. Both are
-      remembered, so a whole stack of one map only needs the number once.</p>
+    <legend>Map ID</legend>
+    <input type="number" id="mapId" min="1" max="999999999" step="1" inputmode="numeric"
+           placeholder="1" aria-label="Map ID" />
+    <p class="hint">Printed on the sheet. It is remembered, so a whole stack of
+      one map only needs it once; every photo becomes a sheet of its own.</p>
   </fieldset>
 
   <fieldset>
@@ -70,7 +60,7 @@
     <input type="file" id="shot" accept="image/*" capture="environment" />
     <button type="button" id="takeBtn">Take photo</button>
     <button type="button" id="sendBtn" class="secondary" style="margin-top:10px" disabled>Send to laptop</button>
-    <div class="status" id="status">Pick the sheet number, then take the photo.</div>
+    <div class="status" id="status">Enter the map ID, then take the photo.</div>
     <ul id="sent"></ul>
   </fieldset>
 
@@ -87,33 +77,28 @@
         el.className = 'status' + (kind ? ' ' + kind : '');
       }
 
-      // The sheet id is the same "7" or "7_3" the laptop uses, so a capture
-      // can be filed against the reference map without any extra lookup.
-      function sheetId() {
+      // Only the map is named here. The laptop gives every photo its own sheet
+      // number when it arrives, since one map has as many pages as people.
+      function mapId() {
         var map = String($('mapId').value || '').trim();
-        var participant = String($('participantId').value || '').trim();
-        if (!/^[1-9][0-9]{0,8}$/.test(map)) return '';
-        if (participant && !/^[1-9][0-9]{0,8}$/.test(participant)) return '';
-        return participant ? map + '_' + participant : map;
+        return /^[1-9][0-9]{0,8}$/.test(map) ? map : '';
       }
 
-      ['mapId', 'participantId'].forEach(function (id) {
-        try {
-          var saved = window.localStorage.getItem('capture:' + id);
-          if (saved) $(id).value = saved;
-        } catch (_e) { /* private browsing: just do not remember */ }
-        $(id).addEventListener('input', function () {
-          try { window.localStorage.setItem('capture:' + id, this.value); } catch (_e) {}
-          refreshButtons();
-        });
+      try {
+        var saved = window.localStorage.getItem('capture:mapId');
+        if (saved) $('mapId').value = saved;
+      } catch (_e) { /* private browsing: just do not remember */ }
+      $('mapId').addEventListener('input', function () {
+        try { window.localStorage.setItem('capture:mapId', this.value); } catch (_e) {}
+        refreshButtons();
       });
 
       function refreshButtons() {
-        $('sendBtn').disabled = !pending || !sheetId();
+        $('sendBtn').disabled = !pending || !mapId();
       }
 
       $('takeBtn').addEventListener('click', function () {
-        if (!sheetId()) {
+        if (!mapId()) {
           setStatus('Enter the map ID printed on the sheet first.', 'err');
           return;
         }
@@ -127,17 +112,17 @@
         var preview = $('preview');
         preview.src = URL.createObjectURL(file);
         preview.style.display = 'block';
-        setStatus('Ready to send sheet ' + sheetId() + '.', '');
+        setStatus('Ready to send a sheet of map ' + mapId() + '.', '');
         refreshButtons();
       });
 
       $('sendBtn').addEventListener('click', function () {
         if (!pending) return;
-        var id = sheetId();
+        var id = mapId();
         if (!id) { setStatus('Enter the map ID first.', 'err'); return; }
         var form = new FormData();
-        form.append('sheetId', id);
-        form.append('photo', pending, 'sheet-' + id + '.jpg');
+        form.append('mapId', id);
+        form.append('photo', pending, 'map-' + id + '.jpg');
 
         $('sendBtn').disabled = true;
         $('takeBtn').disabled = true;
@@ -161,21 +146,23 @@
           try { data = JSON.parse(xhr.responseText || '{}'); } catch (_e) {}
           if (xhr.status < 200 || xhr.status >= 300 || !data || data.ok !== true) {
             refreshButtons();
-            setStatus('Rejected: ' + ((data && data.error) || xhr.status), 'err');
+            setStatus(data && data.error === 'map_sheet_not_found'
+              ? 'Map ' + id + ' is not stored on the laptop. Check the ID on the sheet.'
+              : 'Rejected: ' + ((data && data.error) || xhr.status), 'err');
             return;
           }
           sentCount += 1;
+          var label = 'map ' + data.mapId + ' · sheet ' + data.sheetNumber;
           var item = document.createElement('li');
-          item.textContent = 'sheet ' + data.sheetId + ' · '
-            + new Date().toLocaleTimeString();
+          item.textContent = label + ' · ' + new Date().toLocaleTimeString();
           $('sent').insertBefore(item, $('sent').firstChild);
-          // Clear the shot but keep the sheet number: the next page of the
-          // same map is the overwhelmingly likely next action.
+          // Clear the shot but keep the map ID: the next page of the same map
+          // is the overwhelmingly likely next action.
           pending = null;
           $('shot').value = '';
           $('preview').style.display = 'none';
           refreshButtons();
-          setStatus('Sent (' + sentCount + '). The laptop is digitising it.', 'ok');
+          setStatus('Sent as ' + label + ' (' + sentCount + ' sent). The laptop is digitising it.', 'ok');
         };
         xhr.send(form);
       });

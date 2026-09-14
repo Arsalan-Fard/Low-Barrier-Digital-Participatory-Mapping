@@ -93,7 +93,10 @@ function createCategoryLayers(baseLayer: SymbolLayerSpecification) {
         "icon-padding": 2,
         "symbol-sort-key": ["coalesce", ["get", "rank"], 999],
         "text-optional": true,
-        visibility: rankLevel.visible ? "visible" : "none",
+        // A category can opt out of the rank default (health, education).
+        visibility: rankLevel.visible && (category as {visible?: boolean}).visible !== false
+          ? "visible"
+          : "none",
       },
     } satisfies SymbolLayerSpecification))
   ));

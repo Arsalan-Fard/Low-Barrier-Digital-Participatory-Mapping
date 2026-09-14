@@ -13,11 +13,10 @@
    "type": "vector",
    "url": "https://tiles.openfreemap.org/planet"
   },
-  "curated-poi": {
+  "workshop-schools": {
    "type": "geojson",
-   "data": "/api/custom-layers/poi-jean-baptiste-clement.geojson",
-   "attribution": "",
-   "generateId": true
+   "data": "/layers/workshop-schools.geojson",
+   "attribution": ""
   }
  },
  "sprite": [
@@ -7604,7 +7603,7 @@
      999
     ],
     "text-optional": true,
-    "visibility": "visible"
+    "visibility": "none"
    },
    "paint": {
     "text-color": "#3c4043",
@@ -7781,7 +7780,7 @@
      999
     ],
     "text-optional": true,
-    "visibility": "visible"
+    "visibility": "none"
    },
    "paint": {
     "text-color": "#3c4043",
@@ -11350,17 +11349,39 @@
    "source": "openmaptiles",
    "source-layer": "poi",
    "filter": [
-    "match",
+    "any",
     [
-     "get",
-     "class"
+     "==",
+     [
+      "get",
+      "class"
+     ],
+     "airport"
     ],
     [
-     "airport",
-     "rail"
-    ],
-    true,
-    false
+     "all",
+     [
+      "==",
+      [
+       "get",
+       "class"
+      ],
+      "railway"
+     ],
+     [
+      "match",
+      [
+       "get",
+       "subclass"
+      ],
+      [
+       "station",
+       "halt"
+      ],
+      true,
+      false
+     ]
+    ]
    ],
    "layout": {
     "icon-image": [
@@ -12907,43 +12928,24 @@
    }
   },
   {
-   "id": "curated_poi",
+   "id": "workshop_school",
    "type": "symbol",
-   "source": "curated-poi",
+   "source": "workshop-schools",
    "metadata": {
     "paper:curated": true
    },
    "layout": {
-    "icon-image": [
-     "concat",
-     "curated:",
-     [
-      "coalesce",
-      [
-       "get",
-       "icon"
-      ],
-      "civic"
-     ]
-    ],
+    "icon-image": "curated:home",
     "icon-size": 1,
     "icon-allow-overlap": true,
     "icon-ignore-placement": false,
-    "icon-padding": 2,
-    "symbol-sort-key": [
-     "coalesce",
-     [
-      "get",
-      "distance_m"
-     ],
-     9999
-    ]
+    "icon-padding": 2
    }
   },
   {
-   "id": "curated_poi-label",
+   "id": "workshop_school-label",
    "type": "symbol",
-   "source": "curated-poi",
+   "source": "workshop-schools",
    "metadata": {
     "paper:curated": true
    },
@@ -12969,25 +12971,10 @@
     "text-radial-offset": 1.4,
     "text-justify": "auto",
     "text-max-width": 9,
-    "text-padding": 3,
-    "symbol-sort-key": [
-     "coalesce",
-     [
-      "get",
-      "distance_m"
-     ],
-     9999
-    ]
+    "text-padding": 3
    },
    "paint": {
-    "text-color": [
-     "coalesce",
-     [
-      "get",
-      "fill"
-     ],
-     "#3c4043"
-    ],
+    "text-color": "#d93025",
     "text-halo-color": "#ffffff",
     "text-halo-width": 1.8,
     "text-halo-blur": 0.3

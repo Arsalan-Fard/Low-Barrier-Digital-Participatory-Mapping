@@ -38,11 +38,18 @@
   }
 
   &-item-handle {
-    flex: 1;
+    // Content-sized basis, so the row's flex-grow spacer never takes a share
+    // of the room away from the label; and shrinkable below that content
+    // width, so the label is what gives way when hovering brings the icon
+    // actions in. Otherwise the row overflows the 200px panel and the eye
+    // button is pushed past the edge, unreachable.
+    flex: 1 1 auto;
+    min-width: 0;
     display: flex;
     cursor: grab;
 
     svg {
+      flex: 0 0 auto;
       margin-right: 4px;
     }
   }
@@ -88,8 +95,9 @@
   .maputnik-layer-list-icon-action {
     background: initial;
     border: none;
-    padding: 0 2px;
+    padding: 0 1px;
     height: 15px;
+    flex: 0 0 auto;
 
     svg {
       fill: color.adjust(vars.$color-lowgray, $lightness: -20%);
@@ -104,6 +112,44 @@
     display: block;
   }
 
+  // The per-bucket random sample: 5 / 10 / 15 of the POIs in view. Hidden
+  // like the icon actions until the row is hovered or selected, except
+  // while a sample is active, when the count has to stay readable.
+  .maputnik-layer-list-sample {
+    display: none;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 1px;
+    margin-right: 3px;
+
+    &--active {
+      display: flex;
+    }
+  }
+
+  .maputnik-layer-list-sample__size {
+    background: initial;
+    border: 1px solid color.adjust(vars.$color-lowgray, $lightness: -35%);
+    border-radius: 2px;
+    color: color.adjust(vars.$color-lowgray, $lightness: -10%);
+    font-size: 10px;
+    line-height: 1;
+    padding: 1px 2px;
+    cursor: pointer;
+
+    &:hover {
+      color: vars.$color-white;
+      border-color: vars.$color-lowgray;
+    }
+
+    &--active {
+      background: vars.$color-lowgray;
+      border-color: vars.$color-lowgray;
+      color: vars.$color-black;
+      font-weight: bold;
+    }
+  }
+
   .maputnik-layer-list-item:hover,
   .maputnik-layer-list-item-selected {
     background-color: color.adjust(vars.$color-black, $lightness: 2%);
@@ -114,6 +160,10 @@
       svg {
         fill: color.adjust(vars.$color-lowgray, $lightness: -0.5%);
       }
+    }
+
+    .maputnik-layer-list-sample {
+      display: flex;
     }
   }
 
@@ -141,7 +191,12 @@
 
   &-item-id {
     all: inherit;
-    width: 115px;
+    // A block, not the flex box it inherits: text-overflow only works on one.
+    display: block;
+    flex: 1 1 auto;
+    width: auto;
+    max-width: 115px;
+    min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

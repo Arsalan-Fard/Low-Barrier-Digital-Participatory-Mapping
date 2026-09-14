@@ -65,7 +65,8 @@ function createCategoryLayers(baseLayer) {
         "icon-padding": 2,
         "symbol-sort-key": ["coalesce", ["get", "rank"], 999],
         "text-optional": true,
-        visibility: level.visible ? "visible" : "none",
+        // A category can opt out of the rank default (health, education).
+        visibility: level.visible && category.visible !== false ? "visible" : "none",
       },
     }))
   ));

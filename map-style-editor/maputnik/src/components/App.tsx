@@ -35,6 +35,7 @@ import tokens from '../config/tokens.json'
 import isEqual from 'lodash.isequal'
 import { MapOptions } from 'maplibre-gl';
 import { OnStyleChangedOpts, StyleSpecificationWithId } from '../libs/definitions'
+import { sampledLayer } from '../libs/poi-sample'
 
 // Buffer must be defined globally for @maplibre/maplibre-gl-style-spec validate() function to succeed.
 window.Buffer = buffer.Buffer;
@@ -553,6 +554,19 @@ export default class App extends React.Component<any, AppState> {
   }
 
 
+  /** Keep a random `size` of this bucket's features from the current view,
+   *  or show them all again (`null`). The pick lands in the layer's own
+   *  filter, so the frozen snapshot and the print follow the screen. */
+  onLayerSample = (index: number, size: number | null) => {
+    const map = this.maplibreMap;
+    const layers = this.state.mapStyle.layers;
+    const layer = layers[index];
+    if (!map || !layer || layer.type !== "symbol") return;
+    const changedLayers = layers.slice(0);
+    changedLayers[index] = sampledLayer(map, layer, size);
+    this.onLayersChange(changedLayers);
+  }
+
   onLayerIdChange = (index: number, _oldId: string, newId: string) => {
     const changedLayers = this.state.mapStyle.layers.slice(0)
     changedLayers[index] = {
@@ -881,6 +895,7 @@ export default class App extends React.Component<any, AppState> {
       onLayerCopy={this.onLayerCopy}
       onLayerVisibilityToggle={this.onLayerVisibilityToggle}
       onLayersChange={this.onLayersChange}
+      onLayerSample={this.onLayerSample}
       onLayerSelect={this.onLayerSelect}
       selectedLayerIndex={this.state.selectedLayerIndex}
       layers={layers}

@@ -4,8 +4,10 @@ import {MdContentCopy, MdVisibility, MdVisibilityOff, MdDelete} from 'react-icon
 import { IconContext } from 'react-icons'
 import {useSortable} from '@dnd-kit/sortable'
 import {CSS} from '@dnd-kit/utilities'
+import {useTranslation} from 'react-i18next'
 
 import IconLayer from './IconLayer'
+import {SAMPLE_SIZES} from '../libs/poi-sample'
 
 
 type DraggableLabelProps = {
@@ -72,6 +74,50 @@ class IconAction extends React.Component<IconActionProps> {
   }
 }
 
+type SampleControlProps = {
+  layerId: string
+  layerIndex: number
+  size: number | null
+  onSample(index: number, size: number | null): unknown
+};
+
+/** 5 / 10 / 15: keep only that many of the bucket's POIs, picked at random
+ *  from the current view. The active count re-rolls when clicked again;
+ *  "all" puts everything back. Only POI bucket rows get this. */
+const SampleControl: React.FC<SampleControlProps> = (props) => {
+  const {t} = useTranslation();
+  const active = props.size;
+  return <span
+    className={classnames({
+      "maputnik-layer-list-sample": true,
+      "maputnik-layer-list-sample--active": active !== null,
+    })}
+    // The row itself selects the layer on click; a count is not a selection.
+    onClick={e => e.stopPropagation()}
+    title={t("Keep only a random few of this layer's POIs from the current view; click the same number again to re-roll")}
+  >
+    {SAMPLE_SIZES.map(size => <button
+      key={size}
+      type="button"
+      tabIndex={-1}
+      data-wd-key={`layer-list-item:${props.layerId}:sample-${size}`}
+      className={classnames({
+        "maputnik-layer-list-sample__size": true,
+        "maputnik-layer-list-sample__size--active": active === size,
+      })}
+      onClick={() => props.onSample(props.layerIndex, size)}
+    >{size}</button>)}
+    {active !== null && <button
+      type="button"
+      tabIndex={-1}
+      data-wd-key={`layer-list-item:${props.layerId}:sample-all`}
+      className="maputnik-layer-list-sample__size maputnik-layer-list-sample__clear"
+      title={t("Show every POI again")}
+      onClick={() => props.onSample(props.layerIndex, null)}
+    >{t("all")}</button>}
+  </span>
+};
+
 type LayerListItemProps = {
   id?: string
   layerIndex: number
@@ -81,10 +127,14 @@ type LayerListItemProps = {
   isSelected?: boolean
   visibility?: string
   className?: string
+  /** A generated POI category/rank bucket: gets the sample control. */
+  poiBucket?: boolean
+  sampleSize?: number | null
   onLayerSelect(...args: unknown[]): unknown
   onLayerCopy?(...args: unknown[]): unknown
   onLayerDestroy?(...args: unknown[]): unknown
   onLayerVisibilityToggle?(...args: unknown[]): unknown
+  onLayerSample?(index: number, size: number | null): unknown
 };
 
 const LayerListItem = React.forwardRef<HTMLLIElement, LayerListItemProps>((props, ref) => {
@@ -141,6 +191,12 @@ const LayerListItem = React.forwardRef<HTMLLIElement, LayerListItemProps>((props
         dragListeners={listeners}
       />
       <span style={{flexGrow: 1}} />
+      {props.poiBucket && props.onLayerSample && <SampleControl
+        layerId={props.layerId}
+        layerIndex={props.layerIndex}
+        size={props.sampleSize ?? null}
+        onSample={props.onLayerSample}
+      />}
       <IconAction
         wdKey={"layer-list-item:" + props.layerId+":delete"}
         action={'delete'}

@@ -23,6 +23,7 @@ import generateUniqueId from '../libs/document-uid';
 import { findClosestCommonPrefix, layerPrefix } from '../libs/layer';
 import { WithTranslation, withTranslation } from 'react-i18next';
 import { OnMoveLayerCallback } from '../libs/definitions';
+import { sampleSize } from '../libs/poi-sample';
 
 type LayerListContainerProps = {
   layers: LayerSpecification[]
@@ -32,6 +33,7 @@ type LayerListContainerProps = {
   onLayerDestroy?(...args: unknown[]): unknown
   onLayerCopy(...args: unknown[]): unknown
   onLayerVisibilityToggle(...args: unknown[]): unknown
+  onLayerSample?(index: number, size: number | null): unknown
   sources: Record<string, SourceSpecification & {layers: string[]}>;
   errors: any[]
 };
@@ -163,8 +165,11 @@ class LayerListContainerInternal extends React.Component<LayerListContainerInter
     // This component tree only requires id and visibility from the layers
     // objects
     function getRequiredProps(layer: LayerSpecification) {
-      const out: {id: string, layout?: { visibility: any}} = {
+      const out: {id: string, layout?: { visibility: any}, sample?: number | null} = {
         id: layer.id,
+        // The sample control's state lives in metadata; a change there
+        // has to re-render the row as well.
+        sample: sampleSize(layer),
       };
 
       if (layer.layout) {
@@ -271,6 +276,9 @@ class LayerListContainerInternal extends React.Component<LayerListContainerInter
           layerIndex={idx}
           layerType={layer.type}
           visibility={(layer.layout || {}).visibility}
+          poiBucket={!!metadataLabel(layer, "paper:poi-category")}
+          sampleSize={sampleSize(layer)}
+          onLayerSample={this.props.onLayerSample}
           isSelected={idx === this.props.selectedLayerIndex}
           onLayerSelect={this.props.onLayerSelect}
           onLayerDestroy={this.props.onLayerDestroy?.bind(this)}

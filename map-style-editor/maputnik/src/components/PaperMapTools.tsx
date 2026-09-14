@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react'
 import cloneDeep from 'lodash.clonedeep'
 import MapLibreGl, {
   GeoJSONSource,
@@ -7,6 +7,9 @@ import MapLibreGl, {
   StyleSpecification,
 } from 'maplibre-gl'
 import {
+  MdAdd,
+  MdClose,
+  MdDescription,
   MdDirectionsWalk,
   MdPictureAsPdf,
   MdStayCurrentLandscape,
@@ -38,6 +41,8 @@ type SheetLayout = {
   patches: [number, number][]
   tagIds: number[]
   badge: [number, number, number, number]
+  // The side margin holding the ID plate; null while it is on the map.
+  badgePanel?: PanelSide | null
 };
 
 type SheetLayouts = Record<"A4" | "A3", SheetLayout>;
@@ -56,6 +61,154 @@ type PreviewBox = {
   height: number
   scale: number
 };
+
+// ------------------------------------------------------------- side margins
+//
+// A margin is a column of notes to the left or right of the map.
+// The page keeps its outer margin; the map FRAME gives up the width, and the
+// server derives the same frame from what we send (layout.mapFrame), so the
+// tags in the preview are the tags on paper. The arithmetic below mirrors
+// map_sheet_layout() and _clean_map_sheet_frame() in app.py.
+
+type PanelSide = "left" | "right";
+type SidePanel = {width: number; text: string};
+type SidePanels = Record<PanelSide, SidePanel | null>;
+type PanelUpdater = (panel: SidePanel) => SidePanel;
+type PanelRegion = {x: number; y: number; width: number; height: number};
+
+const PANEL_SIDES: PanelSide[] = ["left", "right"];
+const PAGE_MARGIN_PT = 12;
+const BADGE_W_PT = 70;
+const BADGE_H_PT = 14;
+const PANEL_MIN_PT = 36;
+const PANEL_PAD_PT = 6;
+const PANEL_FONT_PT: Record<"A4" | "A3", number> = {A4: 11, A3: 13};
+// How close (screen px) the drag has to come to a square map before it snaps.
+const SQUARE_SNAP_PX = 10;
+
+function round3(value: number) {
+  return Math.round(value * 1000) / 1000;
+}
+
+/** Widest the two margins may be together. The frame keeps the server's
+ *  minimum width, so nothing we send is clamped into a different layout. */
+function maxPanelTotal(base: SheetLayout) {
+  const minFrame = Math.max(base.patchSize * 4.25, base.page[0] * 0.28);
+  return base.page[0] - PAGE_MARGIN_PT * 2 - minFrame;
+}
+
+function clampPanelWidth(base: SheetLayout, width: number, otherWidth: number) {
+  return Math.max(PANEL_MIN_PT, Math.min(width, maxPanelTotal(base) - otherWidth));
+}
+
+/** The margin width that makes the map frame square. The frame is always
+ *  page height minus the two page margins tall, so it is square when the side
+ *  margins together take page width minus page height. */
+function squarePanelWidth(base: SheetLayout, otherWidth: number) {
+  return base.page[0] - base.page[1] - otherWidth;
+}
+
+/** Clamp, and within a few screen pixels of a square map snap to it: a 1:1
+ *  frame is a common wish and impossible to hit by hand. */
+function snapPanelWidth(base: SheetLayout, raw: number, otherWidth: number, scale: number) {
+  const width = clampPanelWidth(base, raw, otherWidth);
+  const square = squarePanelWidth(base, otherWidth);
+  const reachable = square >= PANEL_MIN_PT && square <= maxPanelTotal(base) - otherWidth;
+  return reachable && Math.abs(width - square) * scale <= SQUARE_SNAP_PX ? square : width;
+}
+
+function isSquareFrame(layout: SheetLayout) {
+  return Math.abs(layout.mapFrame[2] - layout.mapFrame[3]) < 0.01;
+}
+
+function panelWidths(base: SheetLayout, panels: SidePanels): Record<PanelSide, number> {
+  let left = panels.left ? panels.left.width : 0;
+  let right = panels.right ? panels.right.width : 0;
+  const total = maxPanelTotal(base);
+  if (left + right > total) {   // e.g. after switching A3 -> A4
+    const k = total / (left + right);
+    left *= k;
+    right *= k;
+  }
+  return {left, right};
+}
+
+/** Where the ID plate goes: centred at the foot of a side margin wide enough
+ *  to hold it, left before right, or else in the map's top-left corner beside
+ *  the first tag. Worked from the rounded frame the server receives, so both
+ *  sides reach the same answer. */
+function placeBadge(
+  base: SheetLayout, frame: [number, number, number, number], panels: SidePanels,
+): Pick<SheetLayout, "badge" | "badgePanel"> {
+  const [x, y, w, h] = frame;
+  const spans: Record<PanelSide, [number, number]> = {
+    left: [PAGE_MARGIN_PT, x - PAGE_MARGIN_PT],
+    right: [x + w, base.page[0] - PAGE_MARGIN_PT - (x + w)],
+  };
+  for (const side of PANEL_SIDES) {
+    const [left, width] = spans[side];
+    if (panels[side] && width >= BADGE_W_PT + PANEL_PAD_PT * 2) {
+      return {
+        badge: [
+          round3(left + (width - BADGE_W_PT) / 2),
+          round3(y + h - PANEL_PAD_PT - BADGE_H_PT),
+          BADGE_W_PT, BADGE_H_PT,
+        ],
+        badgePanel: side,
+      };
+    }
+  }
+  const p = base.patchSize;
+  return {
+    badge: [round3(x + p + 4), round3(y + (p - BADGE_H_PT) / 2), BADGE_W_PT, BADGE_H_PT],
+    badgePanel: null,
+  };
+}
+
+/** The sheet with the margins taken out of the frame: the eight tags and the
+ *  ID plate follow the frame exactly as they do on the server. */
+function layoutWithPanels(base: SheetLayout, panels: SidePanels): SheetLayout {
+  const widths = panelWidths(base, panels);
+  if (!widths.left && !widths.right) return base;
+  const p = base.patchSize;
+  const x = PAGE_MARGIN_PT + widths.left;
+  const y = PAGE_MARGIN_PT;
+  const w = base.page[0] - PAGE_MARGIN_PT * 2 - widths.left - widths.right;
+  const h = base.page[1] - PAGE_MARGIN_PT * 2;
+  const patches: [number, number][] = [
+    [x, y], [x + (w - p) / 2, y], [x + w - p, y],
+    [x, y + (h - p) / 2], [x + w - p, y + (h - p) / 2],
+    [x, y + h - p], [x + (w - p) / 2, y + h - p], [x + w - p, y + h - p],
+  ];
+  const mapFrame: [number, number, number, number] =
+    [round3(x), round3(y), round3(w), round3(h)];
+  return {
+    ...base,
+    mapFrame,
+    patches: patches.map(([px, py]) => [round3(px), round3(py)]),
+    ...placeBadge(base, mapFrame, panels),
+  };
+}
+
+function panelRegions(
+  base: SheetLayout, layout: SheetLayout, panels: SidePanels,
+): Record<PanelSide, PanelRegion> {
+  const widths = panelWidths(base, panels);
+  const frame = layout.mapFrame;
+  return {
+    left: {x: PAGE_MARGIN_PT, y: frame[1], width: widths.left, height: frame[3]},
+    right: {x: frame[0] + frame[2], y: frame[1], width: widths.right, height: frame[3]},
+  };
+}
+
+function serialisePanels(panels: SidePanels) {
+  const out: Record<PanelSide, {text: string} | null> = {left: null, right: null};
+  PANEL_SIDES.forEach(side => {
+    const panel = panels[side];
+    if (panel) out[side] = {text: panel.text};
+  });
+  return out;
+}
 
 type PaperMapToolsProps = {
   map: Map | null
@@ -261,9 +414,11 @@ function previewBox(layout: SheetLayout, width: number, height: number): Preview
 function PaperPreview({
   layout,
   viewport,
+  showBadge,
 }: {
   layout: SheetLayout
   viewport: Viewport
+  showBadge: boolean
 }) {
   const box = previewBox(layout, viewport.width, viewport.height);
   const pagePath = [
@@ -276,6 +431,7 @@ function PaperPreview({
   const patchSize = layout.patchSize * box.scale;
   const badge = layout.badge;
   const captionY = box.y < 22 ? box.y + 18 : box.y - 7;
+  const square = isSquareFrame(layout);
 
   return <svg
     className="maputnik-paper-preview"
@@ -292,7 +448,7 @@ function PaperPreview({
   >
     <path className="maputnik-paper-preview__shade" d={pagePath} fillRule="evenodd" />
     <rect
-      className="maputnik-paper-preview__frame"
+      className={`maputnik-paper-preview__frame${square ? " is-square" : ""}`}
       x={frameX}
       y={frameY}
       width={frame[2] * box.scale}
@@ -322,17 +478,216 @@ function PaperPreview({
         />
       </g>;
     })}
-    <rect
+    {/* The layout from /api/map-sheet-layout carries the default geometry and
+        knows nothing of this switch, so the switch decides here; the export
+        sends the same flag on so the PDF agrees with the preview. A plate
+        in a side margin is drawn by the margin, above its white paper. */}
+    {showBadge && !layout.badgePanel ? <rect
       className="maputnik-paper-preview__badge"
       x={box.x + badge[0] * box.scale}
       y={box.y + badge[1] * box.scale}
       width={badge[2] * box.scale}
       height={badge[3] * box.scale}
-    />
+    /> : null}
     <text className="maputnik-paper-preview__caption" x={box.x + 6} y={captionY}>
-      {layout.pageSize} landscape · export area
+      {layout.pageSize} landscape · export area{square ? " · map 1:1" : ""}
     </text>
   </svg>;
+}
+
+function PanelTextArea({
+  value,
+  placeholder,
+  onChange,
+}: {
+  value: string
+  placeholder?: string
+  onChange(text: string): void
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  // Grow with the text so the column reads like the printed one, not like a
+  // box with a scrollbar of its own. Runs every render: the scale changes too.
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    element.style.height = "0px";
+    element.style.height = `${element.scrollHeight}px`;
+  });
+  return <textarea
+    ref={ref}
+    className="maputnik-paper-panel__text"
+    rows={1}
+    value={value}
+    placeholder={placeholder}
+    spellCheck={false}
+    aria-label="Margin text"
+    onChange={event => onChange(event.target.value)}
+  />;
+}
+
+function MarginPanel({
+  side,
+  base,
+  box,
+  region,
+  panel,
+  otherWidth,
+  pageSize,
+  badge,
+  onUpdate,
+  onRemove,
+}: {
+  side: PanelSide
+  base: SheetLayout
+  box: PreviewBox
+  region: PanelRegion
+  panel: SidePanel
+  otherWidth: number
+  pageSize: "A4" | "A3"
+  badge: [number, number, number, number] | null
+  onUpdate(update: PanelUpdater): void
+  onRemove(): void
+}) {
+  const resize = useRef<{x: number; width: number} | null>(null);
+  const px = (pt: number) => pt * box.scale;
+  // The text stops above the plate, as it does in the PDF.
+  const padBottom = PANEL_PAD_PT + (badge ? BADGE_H_PT + PANEL_PAD_PT : 0);
+
+  return <div
+    className={`maputnik-paper-panel is-${side}`}
+    style={{
+      left: box.x + px(region.x),
+      top: box.y + px(region.y),
+      width: px(region.width),
+      height: px(region.height),
+      fontSize: px(PANEL_FONT_PT[pageSize]),
+    }}
+  >
+    <div
+      className="maputnik-paper-panel__body"
+      style={{padding: `${px(PANEL_PAD_PT)}px ${px(PANEL_PAD_PT)}px ${px(padBottom)}px`}}
+    >
+      <PanelTextArea
+        value={panel.text}
+        placeholder="Type notes here"
+        onChange={text => onUpdate(current => ({...current, text}))}
+      />
+    </div>
+    {badge ? <div
+      className="maputnik-paper-panel__badge"
+      style={{
+        left: px(badge[0] - region.x),
+        top: px(badge[1] - region.y),
+        width: px(badge[2]),
+        height: px(badge[3]),
+      }}
+    /> : null}
+    <div className="maputnik-paper-panel__tools">
+      <button
+        type="button"
+        className="maputnik-paper-panel__button"
+        title="Remove this margin"
+        aria-label="Remove this margin"
+        onClick={onRemove}
+      >
+        <MdClose />
+      </button>
+    </div>
+    <div
+      className={`maputnik-paper-panel__handle is-${side}`}
+      title="Drag to change the margin's width. Snaps where the map becomes square."
+      onPointerDown={event => {
+        event.preventDefault();
+        resize.current = {x: event.clientX, width: region.width};
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={event => {
+        if (!resize.current) return;
+        const delta = (event.clientX - resize.current.x) / box.scale;
+        const raw = side === "left"
+          ? resize.current.width + delta
+          : resize.current.width - delta;
+        const width = snapPanelWidth(base, raw, otherWidth, box.scale);
+        onUpdate(current => ({...current, width}));
+      }}
+      onPointerUp={() => { resize.current = null; }}
+      onPointerCancel={() => { resize.current = null; }}
+    />
+  </div>;
+}
+
+function PaperMargins({
+  base,
+  layout,
+  viewport,
+  panels,
+  pageSize,
+  showBadge,
+  onUpdate,
+  onAdd,
+  onRemove,
+}: {
+  base: SheetLayout
+  layout: SheetLayout
+  viewport: Viewport
+  panels: SidePanels
+  pageSize: "A4" | "A3"
+  showBadge: boolean
+  onUpdate(side: PanelSide, update: PanelUpdater): void
+  onAdd(side: PanelSide): void
+  onRemove(side: PanelSide): void
+}) {
+  const box = previewBox(layout, viewport.width, viewport.height);
+  const regions = panelRegions(base, layout, panels);
+  const widths = panelWidths(base, panels);
+  const buttonSize = 26;
+  const inset = 8;
+  return <div
+    className="maputnik-paper-margins"
+    style={{
+      left: viewport.left,
+      top: viewport.top,
+      width: viewport.width,
+      height: viewport.height,
+    }}
+  >
+    {PANEL_SIDES.map(side => {
+      const panel = panels[side];
+      if (panel) {
+        return <MarginPanel
+          key={side}
+          side={side}
+          base={base}
+          box={box}
+          region={regions[side]}
+          panel={panel}
+          otherWidth={side === "left" ? widths.right : widths.left}
+          pageSize={pageSize}
+          badge={showBadge && layout.badgePanel === side ? layout.badge : null}
+          onUpdate={update => onUpdate(side, update)}
+          onRemove={() => onRemove(side)}
+        />;
+      }
+      return <button
+        key={side}
+        type="button"
+        className={`maputnik-paper-margins__add is-${side}`}
+        style={{
+          left: side === "left"
+            ? box.x + inset
+            : box.x + box.width - inset - buttonSize,
+          // A third of the way down: the vertical centre is where the
+          // mid-left and mid-right tags sit, and the button would cover them.
+          top: box.y + box.height / 3 - buttonSize / 2,
+        }}
+        title={`Add a ${side} margin for notes`}
+        aria-label={`Add a ${side} margin`}
+        onClick={() => onAdd(side)}
+      >
+        <MdAdd />
+      </button>;
+    })}
+  </div>;
 }
 
 export default function PaperMapTools(props: PaperMapToolsProps) {
@@ -352,7 +707,8 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
       return "";
     }
   });
-  const [participants, setParticipants] = useState("1");
+  // Printing the ID is the default: it is what tells the scans apart later.
+  const [showBadge, setShowBadge] = useState(true);
   const [fixZoom, setFixZoom] = useState(false);
   const [renderZoom, setRenderZoom] = useState(15.5);
   const [dpi, setDpi] = useState<number>(300);
@@ -367,12 +723,41 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
   });
   const [maxTexture, setMaxTexture] = useState<number>(0);
   const [usedSheetIds, setUsedSheetIds] = useState<Set<string>>(new Set());
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<"" | "pdf" | "docx">("");
+  const [panels, setPanels] = useState<SidePanels>({left: null, right: null});
   const [exportStatus, setExportStatus] = useState("");
   const [exportKind, setExportKind] = useState<"idle" | "busy" | "ok" | "warn" | "error">("idle");
   const reachRequest = useRef(0);
 
-  const layout = layouts ? layouts[pageSize] : null;
+  const baseLayout = layouts ? layouts[pageSize] : null;
+  // Everything downstream -- preview, capture, export -- sees the frame with
+  // the margins already taken out of it.
+  const layout = useMemo(
+    () => (baseLayout ? layoutWithPanels(baseLayout, panels) : null),
+    [baseLayout, panels],
+  );
+
+  const updatePanel = useCallback((side: PanelSide, update: PanelUpdater) => {
+    setPanels(current => {
+      const panel = current[side];
+      return panel ? {...current, [side]: update(panel)} : current;
+    });
+  }, []);
+
+  const addPanel = useCallback((side: PanelSide) => {
+    if (!baseLayout) return;
+    setPanels(current => {
+      if (current[side]) return current;
+      const other = current[side === "left" ? "right" : "left"];
+      const width = clampPanelWidth(
+        baseLayout, Math.round(baseLayout.page[0] * 0.2), other ? other.width : 0);
+      return {...current, [side]: {width, text: ""}};
+    });
+  }, [baseLayout]);
+
+  const removePanel = useCallback((side: PanelSide) => {
+    setPanels(current => ({...current, [side]: null}));
+  }, []);
 
   /**
    * "Fix zoom": freeze the level the sheet renders at, then compose coverage
@@ -552,8 +937,13 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
         const cx = event.clientX - st.rect.left;
         const cy = event.clientY - st.rect.top;
         const before = st.mercPerVis;
+        // Out is capped at x2 -- exactly what the snapshot rendered ("twice
+        // the viewport ... margin to widen into"). The old x6 let the frame
+        // reach ground the snapshot never covered, which showed as a white
+        // void on screen, and spread the locked zoom's line weights so thin
+        // the exported sheet printed as blank paper.
         const next = Math.max(st.mercPerSnapPx / 2,
-          Math.min(st.mercPerSnapPx * 6, before * Math.exp(event.deltaY * 0.0012)));
+          Math.min(st.mercPerSnapPx * 2, before * Math.exp(event.deltaY * 0.0012)));
         if (next === before) return;
         // Keep the ground under the cursor where it is while scaling.
         st.centerMx += (cx - st.rect.width / 2) * (before - next);
@@ -610,29 +1000,27 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
 
 
 
-  const plannedSheetIds = useCallback(() => {
+  // Only the map is stored. Every printed copy is the same map, however many
+  // people fill one in; each page gets its own sheet number when it is
+  // digitised, not here.
+  const plannedMapId = useCallback(() => {
     const type = mapType.trim();
     if (!/^[1-9][0-9]{0,8}$/.test(type)) {
       throw new Error("Enter a map ID of 1 or higher.");
     }
-    const count = participants.trim() === "" ? 1 : Number.parseInt(participants, 10);
-    if (!Number.isFinite(count) || count < 1) {
-      throw new Error("Copies must be 1 or more.");
-    }
-    if (count > 200) {
-      throw new Error("The maximum is 200 copies.");
-    }
-    if (count === 1) return [type];
-    return Array.from({length: count}, (_value, index) => `${type}_${index + 1}`);
-  }, [mapType, participants]);
+    return type;
+  }, [mapType]);
 
-  const conflictingIds = useMemo(() => {
+  // Exporting onto a stored map ID replaces that map. Numbered copies an older
+  // export left behind ("7_1", ...) are the same map ID too.
+  const mapIdInUse = useMemo(() => {
     try {
-      return plannedSheetIds().filter(id => usedSheetIds.has(id));
+      const id = plannedMapId();
+      return [...usedSheetIds].some(used => used === id || used.startsWith(`${id}_`));
     } catch (_error) {
-      return [];
+      return false;
     }
-  }, [plannedSheetIds, usedSheetIds]);
+  }, [plannedMapId, usedSheetIds]);
 
   const refreshUsedSheetIds = useCallback(async () => {
     try {
@@ -990,45 +1378,56 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
     roadLabelMode,
   ]);
 
-  const exportPdf = useCallback(async () => {
-    setExporting(true);
+  /** Save the map and download it as PDF or Word. Both formats save the same
+   *  record -- the printed sheet has to be registered later whichever file it
+   *  was printed from -- only the download differs. Print as many copies as
+   *  there are people; they all carry the same map ID. */
+  const exportSheets = useCallback(async (format: "pdf" | "docx") => {
+    setExporting(format);
     setExportKind("busy");
     try {
-      const ids = plannedSheetIds();
+      const id = plannedMapId();
       setExportStatus("Rendering map…");
       const printable = await capturePrintableMap();
-      for (let index = 0; index < ids.length; index++) {
-        const id = ids[index];
-        setExportStatus(`Saving ${index + 1}/${ids.length}…`);
-        const response = await fetch("/api/map-sheets", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            id,
-            title: `Map ${id}`,
-            image: printable.image,
-            corners: printable.corners,
-            camera: printable.camera,
-            theme: "maplibre",
-            pageSize,
-          }),
-        });
-        const data = await response.json();
-        if (!response.ok || !data?.ok) {
-          throw new Error(data?.error || "PDF export failed");
-        }
-        const link = document.createElement("a");
-        link.href = data.pdfUrl;
-        link.download = `map-sheet-${id}.pdf`;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+      const sidePanels = serialisePanels(panels);
+      setExportStatus("Saving…");
+      const response = await fetch("/api/map-sheets", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          id,
+          title: `Map ${id}`,
+          image: printable.image,
+          corners: printable.corners,
+          camera: printable.camera,
+          theme: "maplibre",
+          pageSize,
+          layout: {
+            showBadge,
+            mapFrame: layout ? layout.mapFrame : undefined,
+            sidePanels,
+          },
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.error || "Export failed");
       }
+      const url = format === "docx" ? data.docxUrl : data.pdfUrl;
+      if (!url) {
+        throw new Error(format === "docx"
+          ? "Word export unavailable; the PDF was saved"
+          : "PDF export failed");
+      }
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `map-sheet-${id}.${format}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
       await refreshUsedSheetIds();
       setExportKind("ok");
-      setExportStatus(ids.length === 1
-        ? `Downloaded map ${ids[0]}`
-        : `Downloaded ${ids.length} maps`);
+      setExportStatus(`Downloaded map ${id}`);
     } catch (error) {
       const message = error instanceof DOMException && error.name === "SecurityError"
         ? "The tile server blocked map capture."
@@ -1036,26 +1435,27 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
       setExportKind("error");
       setExportStatus(message);
     } finally {
-      setExporting(false);
+      setExporting("");
     }
   }, [
     capturePrintableMap,
+    layout,
     pageSize,
-    plannedSheetIds,
+    panels,
+    plannedMapId,
     refreshUsedSheetIds,
+    showBadge,
   ]);
 
   useEffect(() => {
-    if (conflictingIds.length > 0 && (exportKind === "idle" || exportKind === "warn")) {
+    if (mapIdInUse && (exportKind === "idle" || exportKind === "warn")) {
       setExportKind("warn");
-      setExportStatus(conflictingIds.length === 1
-        ? `Map ${conflictingIds[0]} will be replaced`
-        : `${conflictingIds.length} maps will be replaced`);
-    } else if (conflictingIds.length === 0 && exportKind === "warn") {
+      setExportStatus(`Map ${mapType.trim()} will be replaced`);
+    } else if (!mapIdInUse && exportKind === "warn") {
       setExportKind("idle");
       setExportStatus("");
     }
-  }, [conflictingIds, exportKind]);
+  }, [mapIdInUse, mapType, exportKind]);
 
   const mapReady = Boolean(props.map && layout);
 
@@ -1169,7 +1569,7 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
 
       <div className="maputnik-paper-tools__group maputnik-paper-tools__export">
         <input
-          className={`maputnik-paper-tools__map-id${conflictingIds.length ? " is-used" : ""}`}
+          className={`maputnik-paper-tools__map-id${mapIdInUse ? " is-used" : ""}`}
           type="number"
           min="1"
           max="999999999"
@@ -1185,32 +1585,36 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
             }
           }}
         />
-        <input
-          className="maputnik-paper-tools__copies"
-          type="number"
-          min="1"
-          max="200"
-          step="1"
-          placeholder="Copies"
-          aria-label="Number of copies"
-          title="Number of participant copies"
-          value={participants}
-          onChange={event => {
-            setParticipants(event.target.value);
-            if (exportKind === "error" || exportKind === "ok") {
-              setExportKind("idle");
-              setExportStatus("");
-            }
-          }}
-        />
+        <label
+          className="maputnik-paper-tools__check"
+          title="Print the MAP ID plate in the sheet's top-left corner, or at the foot of a side margin when one is open. Off leaves that spot blank -- the ID still names the stored map and still has to be typed in to digitize the scan."
+        >
+          <input
+            type="checkbox"
+            checked={showBadge}
+            disabled={!mapReady}
+            onChange={event => setShowBadge(event.target.checked)}
+          />
+          <span>Map ID</span>
+        </label>
         <button
           className="maputnik-paper-tools__pdf"
           type="button"
-          disabled={!mapReady || exporting}
-          onClick={() => void exportPdf()}
+          disabled={!mapReady || exporting !== ""}
+          onClick={() => void exportSheets("pdf")}
         >
           <MdPictureAsPdf />
-          <span>{exporting ? "Working…" : "Export PDF"}</span>
+          <span>{exporting === "pdf" ? "Working…" : "Export PDF"}</span>
+        </button>
+        <button
+          className="maputnik-paper-tools__pdf maputnik-paper-tools__doc"
+          type="button"
+          disabled={!mapReady || exporting !== ""}
+          title="Save the same sheet as a Word document. The map and its tags are one picture; the margin notes stay editable text."
+          onClick={() => void exportSheets("docx")}
+        >
+          <MdDescription />
+          <span>{exporting === "docx" ? "Working…" : "Export DOC"}</span>
         </button>
         <span
           className={`maputnik-paper-tools__message is-${exportKind}`}
@@ -1222,8 +1626,21 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
       </div>
     </div>
 
-    {previewEnabled && layout && viewport && viewport.width > 0 && viewport.height > 0
-      ? <PaperPreview layout={layout} viewport={viewport} />
+    {previewEnabled && layout && baseLayout && viewport && viewport.width > 0 && viewport.height > 0
+      ? <>
+        <PaperPreview layout={layout} viewport={viewport} showBadge={showBadge} />
+        <PaperMargins
+          base={baseLayout}
+          layout={layout}
+          viewport={viewport}
+          panels={panels}
+          pageSize={pageSize}
+          showBadge={showBadge}
+          onUpdate={updatePanel}
+          onAdd={addPanel}
+          onRemove={removePanel}
+        />
+      </>
       : null}
   </>;
 }

@@ -1,0 +1,47 @@
+{
+  "type": "FeatureCollection",
+  "name": "workshop-schools",
+  "note": "The colleges this programme runs in, each marked with the red school POI. Drawn on the digitize map (web/imobyl.html, layer 'school-label') and in the map generation page's style (Maputnik liberty.json, source 'workshop-schools'), on every basemap, whatever the POI and label switches say. One feature per school; 'name' is what is printed. Coordinates are the OSM object's centroid; 'uai' is the Education nationale identifier.",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Collège Alphonse-Daudet",
+        "uai": "0751705W",
+        "osm": "way/122376330",
+        "address": "93 rue d'Alésia, 75014 Paris"
+      },
+      "geometry": { "type": "Point", "coordinates": [2.325448, 48.827988] }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Collège Georges Brassens",
+        "uai": "0750507U",
+        "osm": "way/113824702",
+        "address": "4 rue Erik Satie, 75019 Paris"
+      },
+      "geometry": { "type": "Point", "coordinates": [2.386842, 48.884478] }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Collège Jean-Baptiste Clément",
+        "uai": "0750478M",
+        "osm": "node/9146738813",
+        "address": "26 rue Henri-Chevreau, 75020 Paris"
+      },
+      "geometry": { "type": "Point", "coordinates": [2.389673, 48.869886] }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Collège Montgolfier",
+        "uai": "0752523K",
+        "osm": "node/3668432572",
+        "address": "15 rue Montgolfier, 75003 Paris"
+      },
+      "geometry": { "type": "Point", "coordinates": [2.35728, 48.866886] }
+    }
+  ]
+}

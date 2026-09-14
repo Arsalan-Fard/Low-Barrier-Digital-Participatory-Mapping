@@ -44,9 +44,27 @@ from the Settings page.
 
 [placeholder for image of different tools]
 
-[Why replacing them with one pointer and why not mouse]
+### Why a pointer and not a mouse?
 
-[need a video for this: A conventional mouse is designed for a single user positioned in front of a screen  (its left–right and up–down movements are mapped to the screen’s coordinate system. Around a tabletop, participants view the projected map from different angles, so a movement that feels like “left” to one person may correspond to “down” or “right” on the display.] 
+<table>
+  <tr>
+    <th>Mouse</th>
+    <th>AprilTag pointer</th>
+  </tr>
+  <tr>
+    <td><img src="web/images/mouse-input.gif" alt="A mouse slides across the desk while the cursor on the screen moves by the same relative amount" width="100%"></td>
+    <td><img src="web/images/pointer-input.gif" alt="A cardboard AprilTag pointer is placed directly on the display; the red dot at its tip is the cursor and moves and rotates exactly with the token" width="100%"></td>
+  </tr>
+</table>
 
-## Features
-...
+A mouse is a *relative* device: it reports how far it moved, and the cursor
+moves by that amount in the screen's own coordinate system. The pointer is an
+*absolute* device: the camera sees where the tag is on the table, so the cursor
+is simply the tip of the token. That difference matters for two reasons around
+a tabletop.
+
+1. **The cursor is at a fixed offset from the token, so it behaves well for drawing.**
+
+2. **A mouse only works for the person sitting in front of the screen.**
+
+

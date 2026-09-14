@@ -178,8 +178,7 @@
   }
 
   &__minutes,
-  &__map-id,
-  &__copies {
+  &__map-id {
     height: 24px;
     padding: 2px 5px;
     color: vars.$color-white;
@@ -210,10 +209,6 @@
       border-color: #e2b84f;
       background: color.adjust(#e2b84f, $alpha: -0.84);
     }
-  }
-
-  &__copies {
-    width: 58px;
   }
 
   &__unit {
@@ -532,6 +527,12 @@
     stroke: #ffca28;
     stroke-width: 2;
     stroke-dasharray: 10 7;
+
+    // The width drag snaps here; the colour says the snap has taken.
+    &.is-square {
+      stroke: #63cec5;
+      stroke-dasharray: none;
+    }
   }
 
   &__tag {
@@ -785,5 +786,185 @@
   // clipped by the stage's own stacking context.
   .maputnik-paper-preview {
     z-index: 120;
+  }
+}
+
+// Side margins of the paper sheet. HTML rather than SVG because they hold a
+// live textarea. Same fixed viewport box as the preview,
+// one layer above it so the page shade never covers the text.
+.maputnik-paper-margins {
+  position: fixed;
+  z-index: 91;
+  overflow: visible;
+  pointer-events: none;
+
+  &__add {
+    position: absolute;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    color: #fff;
+    background: rgba(28, 31, 34, 0.92);
+    border: solid 1px rgba(255, 255, 255, 0.72);
+    border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    cursor: pointer;
+    pointer-events: auto;
+
+    svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    &:hover {
+      color: #10201f;
+      background: #63cec5;
+      border-color: #b9f1ec;
+    }
+  }
+}
+
+.maputnik-paper-stage .maputnik-paper-margins {
+  z-index: 121;
+}
+
+.maputnik-paper-panel {
+  position: absolute;
+  box-sizing: border-box;
+  color: #000;
+  // Arial shares Helvetica's metrics, so a line wraps here where it wraps in
+  // the PDF. The font size is set inline: points scaled to the preview.
+  font-family: Arial, Helvetica, sans-serif;
+  line-height: 1.25;
+  background: rgba(255, 255, 255, 0.94);
+  border: dashed 1px rgba(22, 72, 68, 0.82);
+  pointer-events: auto;
+
+  &__body {
+    position: absolute;
+    inset: 0;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6em;
+    overflow: auto;
+  }
+
+  &__text {
+    display: block;
+    flex: 0 0 auto;
+    width: 100%;
+    min-height: 1.25em;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    color: inherit;
+    font: inherit;
+    line-height: inherit;
+    resize: none;
+    background: transparent;
+    border: 0;
+    outline: none;
+
+    &::placeholder {
+      color: rgba(0, 0, 0, 0.45);
+    }
+
+    // _base.scss restyles every focused textarea for the dark editor; this
+    // one is a line on white paper and must not change when the caret lands.
+    &:focus,
+    &:focus-visible {
+      color: inherit;
+      background: transparent;
+      border: 0;
+      outline: none;
+      box-shadow: none;
+    }
+  }
+
+  // The ID plate, when the margin holds it. Same look as the one on the map.
+  &__badge {
+    position: absolute;
+    z-index: 1;
+    box-sizing: border-box;
+    background: #fff;
+    border: solid 0.7px #999;
+    pointer-events: none;
+  }
+
+  // The remove button sits in the OUTER bottom corner: away from the map, and
+  // under the text rather than on top of its first line.
+  &__tools {
+    position: absolute;
+    bottom: 3px;
+    z-index: 2;
+    display: flex;
+    gap: 3px;
+    opacity: 0.55;
+    transition: opacity 0.15s;
+  }
+
+  &.is-left .maputnik-paper-panel__tools {
+    left: 3px;
+  }
+
+  &.is-right .maputnik-paper-panel__tools {
+    right: 3px;
+  }
+
+  &:hover .maputnik-paper-panel__tools,
+  &:focus-within .maputnik-paper-panel__tools {
+    opacity: 1;
+  }
+
+  &__button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    color: #fff;
+    background: rgba(28, 31, 34, 0.85);
+    border: solid 1px rgba(255, 255, 255, 0.6);
+    border-radius: 50%;
+    cursor: pointer;
+
+    svg {
+      width: 13px;
+      height: 13px;
+    }
+
+    &:hover {
+      color: #10201f;
+      background: #63cec5;
+    }
+  }
+
+  // The inner edge -- the one against the map -- is the resize grip.
+  &__handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 3;
+    width: 9px;
+    cursor: ew-resize;
+    touch-action: none;
+
+    &.is-left {
+      right: -5px;
+    }
+
+    &.is-right {
+      left: -5px;
+    }
+
+    &:hover,
+    &:active {
+      background: rgba(255, 202, 40, 0.45);
+    }
   }
 }

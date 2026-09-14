@@ -28,6 +28,7 @@ import urllib.parse
 import urllib.request
 import wave
 import webbrowser
+import zipfile
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -2675,11 +2676,6 @@ def home_page():
     return send_from_directory(WEB_DIR, "home.html")
 
 
-@app.route("/settings")
-def settings_page():
-    return send_from_directory(WEB_DIR, "settings.html")
-
-
 @app.route("/marker")
 def marker_page():
     return send_from_directory(WEB_DIR, "marker.html")
@@ -2692,9 +2688,13 @@ def map_page():
 
 @app.route("/digitize-map")
 def digitize_map_page():
-    # Printable-map experiment: a numeric sheet ID retrieves geographic bounds
-    # and printed AprilTags recover the photographed paper homography.
-    return send_from_directory(WEB_DIR, "paper-test.html")
+    """The digitiser: a numeric sheet ID retrieves geographic bounds and
+    printed AprilTags recover the photographed paper homography.
+
+    Served by imobyl.html, which started as a fork of the original digitise
+    page for the IMOBYL exhibition and has since replaced it outright.
+    """
+    return send_from_directory(WEB_DIR, "imobyl.html")
 
 
 @app.route("/paper-test")
@@ -3015,10 +3015,10 @@ def _save_captures(state):
 def phone_capture_page():
     """Camera page for a phone on the same network (or the quick tunnel).
 
-    Kept deliberately dumb: pick a sheet, take a photo, send. All alignment and
-    detection happens on the laptop that is already holding the reference maps
-    and the session, so the phone needs no state beyond the sheet id it is
-    currently shooting.
+    Kept deliberately dumb: type the map ID, take a photo, send. All alignment
+    and detection happens on the laptop that is already holding the reference
+    maps and the session, so the phone needs no state beyond the map ID it is
+    currently shooting. Each photo is filed as a sheet of its own.
     """
     return send_from_directory(WEB_DIR, "phone_capture.html")
 
@@ -3037,7 +3037,10 @@ def api_capture_target():
     return jsonify({
         "ok": True,
         "tunnel": tunnel.get("url") or "",
+        # "starting" while cloudflared is still connecting: the page waits for
+        # it rather than handing out a Wi-Fi-only address in the meantime.
         "tunnelStatus": tunnel.get("status") or "",
+        "tunnelError": tunnel.get("error") or "",
         "lan": lan,
     })
 
@@ -3054,16 +3057,29 @@ def api_captures():
             since = 0
         with captures_lock:
             state = _load_captures()
+        # A capture queued before sheets were numbered here carries a typed
+        # "7" or "7_3". Only its map is handed on, so the laptop numbers it
+        # like any other page instead of filing it into an existing sheet.
         pending = [
-            {k: item[k] for k in ("seq", "id", "sheetId", "receivedAt", "bytes")}
+            {**{k: item.get(k) for k in ("seq", "id", "receivedAt", "bytes")},
+             "mapId": item.get("mapId") or _map_id_of(item.get("sheetId")),
+             "sheetId": item.get("sheetId") if item.get("mapId") else ""}
             for item in state["items"]
             if item.get("seq", 0) > since and not item.get("consumed")
         ]
         return jsonify({"ok": True, "seq": state["seq"], "captures": pending})
 
-    sheet_id = _clean_map_sheet_id(request.form.get("sheetId"))
-    if not sheet_id:
-        return jsonify({"ok": False, "error": "invalid_sheet_id"}), 400
+    # The phone sends only the map ID. Each photo is a page of its own, so its
+    # sheet ID is handed out here on arrival: the phone can show it at once and
+    # the laptop files the photo under it. An older phone page posting
+    # "sheetId" ("7" or "7_3") names its map the same way.
+    map_id = _map_id_of(_clean_map_sheet_id(request.form.get("mapId") or request.form.get("sheetId")))
+    if not map_id:
+        return jsonify({"ok": False, "error": "invalid_map_id"}), 400
+    # Refused here rather than on the laptop, so the person holding the phone
+    # hears about a mistyped map ID straight away.
+    if not _map_sheet_record_stem(map_id):
+        return jsonify({"ok": False, "error": "map_sheet_not_found"}), 404
     photo = request.files.get("photo")
     if photo is None:
         return jsonify({"ok": False, "error": "no_photo"}), 400
@@ -3079,6 +3095,11 @@ def api_captures():
         (CAPTURES_DIR / f"{capture_id}.jpg").write_bytes(blob)
     except OSError:
         return jsonify({"ok": False, "error": "capture_not_saved"}), 500
+    try:
+        sheet_id = _allocate_digitized_sheet_id(map_id)
+    except OSError:
+        logging.exception("Could not number a sheet of map %s", map_id)
+        return jsonify({"ok": False, "error": "sheet_id_not_saved"}), 500
 
     with captures_lock:
         state = _load_captures()
@@ -3086,6 +3107,7 @@ def api_captures():
         entry = {
             "seq": state["seq"],
             "id": capture_id,
+            "mapId": map_id,
             "sheetId": sheet_id,
             "receivedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "bytes": len(blob),
@@ -3096,7 +3118,8 @@ def api_captures():
         state["items"] = state["items"][-500:]
         _save_captures(state)
     return jsonify({"ok": True, "id": capture_id, "seq": entry["seq"],
-                    "sheetId": sheet_id})
+                    "mapId": map_id, "sheetId": sheet_id,
+                    "sheetNumber": int(sheet_id.split("_")[1])})
 
 
 @app.route("/api/captures/<capture_id>/image", methods=["GET"])
@@ -3124,13 +3147,9 @@ def api_capture_done(capture_id):
 
 
 @app.route("/imobyl")
-def imobyl_page():
-    """Standalone exhibition page, forked from the digitiser.
-
-    Kept as its own file rather than a mode of /digitize-map so the expo can be
-    changed freely mid-event without any risk to the working tool.
-    """
-    return send_from_directory(WEB_DIR, "imobyl.html")
+def legacy_imobyl_page():
+    """The exhibition page is now the digitiser itself; keep old links alive."""
+    return redirect("/digitize-map", code=302)
 
 
 @app.route("/maputnik/")
@@ -3179,15 +3198,118 @@ def maputnik_asset(filename):
 
 
 def _clean_map_sheet_id(raw):
-    """Accept a plain sheet ID ("7") or a batch ID ("7_3").
+    """Accept a map ID ("7") or a digitised sheet ID ("7_3").
 
-    Batch IDs are "<map type>_<participant>": one printed map design can be
-    filled in by several people, and keeping the participant number in the ID is
-    what lets the scans be told apart again afterwards. Both halves reuse the
-    plain-ID rules, so the value stays filename-safe.
+    A map ID names one printed map design, and any number of people may fill
+    in copies of it. Every page digitised from it gets the next sheet number
+    for that map ("7_1", "7_2", ...) from _allocate_digitized_sheet_id, so the
+    scans are told apart without anyone typing a second number. Older data
+    also holds "<map>_<n>" records exported as numbered copies; those keep
+    resolving through _map_sheet_record_stem. Both halves reuse the plain-ID
+    rules, so the value stays filename-safe.
     """
     value = str(raw or "").strip()
     return value if re.fullmatch(r"[1-9][0-9]{0,8}(?:_[1-9][0-9]{0,8})?", value) else ""
+
+
+def _map_id_of(sheet_id):
+    return str(sheet_id or "").split("_", 1)[0]
+
+
+def _map_sheet_record_stem(sheet_id):
+    """The stored record a map or sheet ID aligns against; "" when there is none.
+
+    An exact record wins, so an older "<map>_<n>" copy stays tied to the print
+    it was digitised from. A digitised sheet otherwise uses its map's record,
+    and a map that was only ever exported as numbered copies falls back to the
+    lowest of them -- every copy of a batch was the same map.
+    """
+    clean = _clean_map_sheet_id(sheet_id)
+    if not clean:
+        return ""
+    if (MAP_SHEETS_DIR / f"{clean}.json").exists():
+        return clean
+    map_id = _map_id_of(clean)
+    if (MAP_SHEETS_DIR / f"{map_id}.json").exists():
+        return map_id
+    copies = []
+    for path in MAP_SHEETS_DIR.glob(f"{map_id}_*.json"):
+        match = re.fullmatch(rf"{map_id}_([1-9][0-9]{{0,8}})", path.stem)
+        if match:
+            copies.append((int(match.group(1)), path.stem))
+    return min(copies)[1] if copies else ""
+
+
+# The last sheet number handed out per map. Kept outside both data folders that
+# are read as collections (sessions, map sheets), where a stray JSON file would
+# be listed as an entry.
+DIGITIZED_SHEET_COUNTERS_PATH = ROOT / "data" / "digitized_sheet_counters.json"
+digitized_sheet_lock = threading.Lock()
+
+
+def _highest_sheet_number(map_id, full_scan):
+    """The highest sheet number anything on disk already uses for a map."""
+    pattern = re.compile(rf"{map_id}_([1-9][0-9]{{0,8}})")
+    highest = 0
+
+    def note(value):
+        nonlocal highest
+        match = pattern.fullmatch(str(value or ""))
+        if match:
+            highest = max(highest, int(match.group(1)))
+
+    # Numbered copies from older exports: numbering past them means a new
+    # sheet can never be mistaken for one of those prints.
+    for path in MAP_SHEETS_DIR.glob(f"{map_id}_*.json"):
+        note(path.stem)
+    for path in IMOBYL_SESSIONS_DIR.glob(f"auto-map-{map_id}_*.json"):
+        note(path.stem[len("auto-map-"):])
+    for item in _load_captures().get("items", []):
+        # Only numbers handed out here count. A capture queued before that
+        # carries a typed "7_3" that never named a sheet.
+        if item.get("mapId"):
+            note(item.get("sheetId"))
+    if full_scan:
+        # Hand-saved sessions only name their sheets inside the file. Reading
+        # them all is needed once per map, before its counter exists.
+        for path in IMOBYL_SESSIONS_DIR.glob("*.json"):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            references = record.get("references") if isinstance(record, dict) else None
+            for reference in references if isinstance(references, list) else []:
+                if isinstance(reference, dict):
+                    note(reference.get("id"))
+    return highest
+
+
+def _allocate_digitized_sheet_id(map_id):
+    """Hand out the next sheet ID of a map: "7_1", then "7_2", ...
+
+    Numbers are never reused -- a sheet abandoned before it held any work only
+    leaves a gap -- so two digitisations of one map cannot share an ID, not
+    across page reloads and not with the phone and the laptop working at once.
+    Raises OSError when the counter cannot be saved.
+    """
+    with digitized_sheet_lock:
+        try:
+            counters = json.loads(DIGITIZED_SHEET_COUNTERS_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            counters = {}
+        if not isinstance(counters, dict):
+            counters = {}
+        stored = counters.get(map_id)
+        trusted = isinstance(stored, int) and not isinstance(stored, bool) and stored >= 0
+        number = max(stored if trusted else 0,
+                     _highest_sheet_number(map_id, full_scan=not trusted)) + 1
+        counters[map_id] = number
+        DIGITIZED_SHEET_COUNTERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = DIGITIZED_SHEET_COUNTERS_PATH.with_name(
+            f".{DIGITIZED_SHEET_COUNTERS_PATH.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(counters, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, DIGITIZED_SHEET_COUNTERS_PATH)
+    return f"{map_id}_{number}"
 
 
 def _clean_lnglat_corners(raw_corners):
@@ -3217,6 +3339,11 @@ def _map_sheet_summary(record):
         "theme": record.get("theme") or "",
         "imageUrl": f"/api/map-sheets/{record.get('id')}/image",
         "pdfUrl": f"/api/map-sheets/{record.get('id')}/pdf",
+        # Only while the Word copy exists: older sheets and failed builds have none.
+        "docxUrl": (
+            f"/api/map-sheets/{record.get('id')}/docx"
+            if (MAP_SHEETS_DIR / f"{record.get('id')}.docx").exists() else None
+        ),
     }
 
 
@@ -3260,6 +3387,64 @@ def _clean_map_sheet_frame(raw, page_w, page_h, patch_size):
     return [left, top, width, height]
 
 
+# Side margins ("panels"): optional note columns to the left and/or right of the
+# map frame, holding typed text. The page keeps the same outer margin; the frame
+# gives up width to make room, so the panel geometry is whatever the frame
+# leaves free -- there is no second width to disagree with.
+MAP_SHEET_PAGE_MARGIN = 12.0
+SIDE_PANEL_MIN_WIDTH = 20.0
+SIDE_PANEL_PAD = 6.0
+SIDE_PANEL_TEXT_LIMIT = 4000
+SIDE_PANEL_SIDES = ("left", "right")
+
+
+def _map_sheet_panel_font_size(layout):
+    return 11.0 if layout["pageSize"] == "A4" else 13.0
+
+
+def _map_sheet_panel_regions(layout):
+    """Left/right panel rectangles [x, y, w, h] in points, top-left origin."""
+    page_w, _page_h = layout["page"]
+    map_x, map_y, map_w, map_h = layout["mapFrame"]
+    margin = MAP_SHEET_PAGE_MARGIN
+    return {
+        "left": [margin, map_y, max(0.0, map_x - margin), map_h],
+        "right": [map_x + map_w, map_y, max(0.0, page_w - margin - (map_x + map_w)), map_h],
+    }
+
+
+def _clean_map_sheet_side_panels(raw):
+    """{"left": {"text": ...}|None, "right": {"text": ...}|None}.
+
+    A panel with no text is still a panel: the user asked for a blank margin,
+    and the frame has already been narrowed to leave it.
+    """
+    source = raw if isinstance(raw, dict) else {}
+    panels = {}
+    for side in SIDE_PANEL_SIDES:
+        panel = source.get(side)
+        if not isinstance(panel, dict):
+            panels[side] = None
+            continue
+        text = str(panel.get("text") or "").replace("\x00", "")
+        text = text.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+        panels[side] = {"text": text[:SIDE_PANEL_TEXT_LIMIT]}
+    return panels
+
+
+def _map_sheet_side_panel_summary(layout, side_panels):
+    """What the record keeps about the margins: geometry and text."""
+    regions = _map_sheet_panel_regions(layout)
+    summary = {}
+    for side in SIDE_PANEL_SIDES:
+        panel = side_panels.get(side) if side_panels else None
+        summary[side] = None if not panel else {
+            "regionPoints": [round(value, 3) for value in regions[side]],
+            "text": panel["text"],
+        }
+    return summary
+
+
 def map_sheet_layout(page_size="A4", customization=None):
     """Geometry of a printable sheet, in PDF points, origin at the page's
     TOP-LEFT (image convention — the browser preview and OpenCV both use it).
@@ -3290,12 +3475,29 @@ def map_sheet_layout(page_size="A4", customization=None):
         (map_x + (map_w - patch) * 0.5, map_y + map_h - patch),
         (map_x + map_w - patch, map_y + map_h - patch),
     ]
+    # The ID plate sits in the top-left corner, just right of the first tag and
+    # centred on it. It reads first, the way a sheet number should, and it is
+    # nowhere near the bottom edge a hand rests on while drawing. Its rectangle
+    # is added to mask_rects below, so it stays excluded from drawing detection.
+    # A side margin wide enough to hold it takes it instead -- centred at the
+    # foot of the margin, left before right -- where it covers no map at all.
     badge_w, badge_h = 70.0, 14.0
-    badge_x = min(
-        map_x + map_w - badge_w - 2.0,
-        map_x + map_w * 0.5 + patch * 0.7,
-    )
-    badge_top = map_y + map_h - badge_h - 2.0
+    badge_x = map_x + patch + 4.0
+    badge_top = map_y + (patch - badge_h) * 0.5
+    badge_panel = None
+    side_panels = _clean_map_sheet_side_panels(custom.get("sidePanels"))
+    margin = MAP_SHEET_PAGE_MARGIN
+    spans = {
+        "left": (margin, map_x - margin),
+        "right": (map_x + map_w, page_w - margin - (map_x + map_w)),
+    }
+    for side in SIDE_PANEL_SIDES:
+        span_left, span_width = spans[side]
+        if side_panels[side] and span_width >= badge_w + SIDE_PANEL_PAD * 2.0:
+            badge_panel = side
+            badge_x = span_left + (span_width - badge_w) / 2
+            badge_top = map_y + map_h - SIDE_PANEL_PAD - badge_h
+            break
     return {
         "pageSize": _clean_sheet_page_size(page_size),
         "page": [page_w, page_h],
@@ -3313,6 +3515,12 @@ def map_sheet_layout(page_size="A4", customization=None):
             round(badge_top, 3),
             badge_w, badge_h,
         ],
+        # The side margin holding the ID plate, or None when it is on the map.
+        "badgePanel": badge_panel,
+        # Absent means shown: /api/map-sheet-layout serves layouts with no
+        # customization at all, and an unchecked-by-omission box would silently
+        # drop the ID from every sheet exported by an older client.
+        "showBadge": bool(custom.get("showBadge", True)),
         "header": _clean_map_sheet_text_block(custom.get("header")),
         "footer": _clean_map_sheet_text_block(custom.get("footer")),
     }
@@ -3328,7 +3536,8 @@ def api_map_sheet_layout():
 
 
 def _draw_map_sheet_pdf(
-    png_bytes, record, page_size="A4", customization=None
+    png_bytes, record, page_size="A4", customization=None,
+    layout=None, side_panels=None,
 ):
     """Build an adjustable A4/A3 map with registration tags and text areas."""
     try:
@@ -3337,7 +3546,9 @@ def _draw_map_sheet_pdf(
     except ImportError as exc:
         raise RuntimeError("reportlab_not_installed") from exc
 
-    layout = map_sheet_layout(page_size, customization)
+    if layout is None:
+        layout = map_sheet_layout(page_size, customization)
+    side_panels = side_panels or {side: None for side in SIDE_PANEL_SIDES}
     page_w, page_h = layout["page"]
     map_x, map_y, map_w, map_h = layout["mapFrame"]
     map_pdf_y = page_h - map_y - map_h
@@ -3384,12 +3595,18 @@ def _draw_map_sheet_pdf(
 
     badge_x, badge_top, badge_w, badge_h = layout["badge"]
     badge_y = page_h - badge_top - badge_h
-    mask_rects.append([
-        round((badge_x - map_x) / map_w, 6),
-        round((badge_top - map_y) / map_h, 6),
-        round((badge_x + badge_w - map_x) / map_w, 6),
-        round((badge_top + badge_h - map_y) / map_h, 6),
-    ])
+    show_badge = layout["showBadge"]
+    # Nothing is printed there when the plate is hidden, so nothing needs
+    # excluding from drawing detection -- masking it anyway would blind the
+    # detector to a corner of the map the participant can now draw on. A plate
+    # in a side margin is off the map, so there is nothing to mask either.
+    if show_badge and not layout["badgePanel"]:
+        mask_rects.append([
+            round((badge_x - map_x) / map_w, 6),
+            round((badge_top - map_y) / map_h, 6),
+            round((badge_x + badge_w - map_x) / map_w, 6),
+            round((badge_top + badge_h - map_y) / map_h, 6),
+        ])
 
     record["print"] = {
         "paper": f"{layout['pageSize']} landscape",
@@ -3407,6 +3624,7 @@ def _draw_map_sheet_pdf(
         "maskRectsNormalized": mask_rects,
         "header": layout["header"],
         "footer": layout["footer"],
+        "sidePanels": _map_sheet_side_panel_summary(layout, side_panels),
     }
 
     out = io.BytesIO()
@@ -3440,22 +3658,23 @@ def _draw_map_sheet_pdf(
             preserveAspectRatio=False, mask="auto",
         )
 
-    pdf.setFillColorRGB(1, 1, 1)
-    pdf.rect(badge_x, badge_y, badge_w, badge_h, fill=1, stroke=0)
-    pdf.setFillColorRGB(0, 0, 0)
-    badge_text = f"MAP ID: {record['id']}"
-    badge_font_size = 9.0
-    while (
-        badge_font_size > 5.0
-        and pdf.stringWidth(badge_text, "Helvetica-Bold", badge_font_size) > badge_w - 4.0
-    ):
-        badge_font_size -= 0.5
-    pdf.setFont("Helvetica-Bold", badge_font_size)
-    pdf.drawCentredString(
-        badge_x + badge_w * 0.5,
-        badge_y + max(2.0, (badge_h - badge_font_size) * 0.45),
-        badge_text,
-    )
+    if show_badge:
+        pdf.setFillColorRGB(1, 1, 1)
+        pdf.rect(badge_x, badge_y, badge_w, badge_h, fill=1, stroke=0)
+        pdf.setFillColorRGB(0, 0, 0)
+        badge_text = f"MAP ID: {record['id']}"
+        badge_font_size = 9.0
+        while (
+            badge_font_size > 5.0
+            and pdf.stringWidth(badge_text, "Helvetica-Bold", badge_font_size) > badge_w - 4.0
+        ):
+            badge_font_size -= 0.5
+        pdf.setFont("Helvetica-Bold", badge_font_size)
+        pdf.drawCentredString(
+            badge_x + badge_w * 0.5,
+            badge_y + max(2.0, (badge_h - badge_font_size) * 0.45),
+            badge_text,
+        )
 
     def wrapped_lines(text, font_name, font_size, max_width):
         lines = []
@@ -3531,11 +3750,362 @@ def _draw_map_sheet_pdf(
             pdf.drawString(map_x + horizontal_padding, baseline, line)
             baseline -= leading
 
-    page_margin = 12.0
+    def draw_side_panel(side, panel, region):
+        """Wrap the margin's text into its column, top-down. Lines that do not
+        fit are left off -- the on-screen box is the same size, so the author
+        has already seen it."""
+        if not panel or not panel["text"]:
+            return
+        left, top, width, height = region
+        if width < SIDE_PANEL_MIN_WIDTH or height < 13.0:
+            return
+        font_name = "Helvetica"
+        font_size = _map_sheet_panel_font_size(layout)
+        leading = font_size * 1.25
+        pad = SIDE_PANEL_PAD
+        inner_w = max(1.0, width - pad * 2.0)
+        cursor = top + pad
+        limit = top + height - pad
+        if show_badge and layout["badgePanel"] == side:
+            limit -= badge_h + pad   # the ID plate holds the foot of the column
+        pdf.setFillColorRGB(0, 0, 0)
+        pdf.setFont(font_name, font_size)
+        for line in wrapped_lines(panel["text"], font_name, font_size, inner_w):
+            if cursor + font_size > limit:
+                break
+            pdf.drawString(left + pad, page_h - (cursor + font_size * 0.85), line)
+            cursor += leading
+
+    page_margin = MAP_SHEET_PAGE_MARGIN
     draw_text_area(layout["header"], page_margin, map_y)
     draw_text_area(layout["footer"], map_y + map_h, page_h - page_margin)
+    panel_regions = _map_sheet_panel_regions(layout)
+    for side in SIDE_PANEL_SIDES:
+        draw_side_panel(side, side_panels.get(side), panel_regions[side])
     pdf.showPage()
     pdf.save()
+    return out.getvalue()
+
+
+def _compose_map_sheet_frame_png(png_bytes, layout, sheet_id):
+    """The map frame as ONE picture: map, border, AprilTags and ID plate.
+
+    The .docx cannot place the tags as separately positioned objects with any
+    guarantee of where Word will put them, so they are burnt into the map
+    image at the same relative positions the PDF uses. Registration only ever
+    relates the tags to the frame, so where Word lays the picture on the page
+    does not matter.
+    """
+    image = cv2.imdecode(np.frombuffer(png_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
+    if image is None or image.ndim < 2:
+        raise RuntimeError("invalid_png")
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    elif image.shape[2] == 4:
+        alpha = image[:, :, 3:4].astype(np.float32) / 255.0
+        image = (image[:, :, :3].astype(np.float32) * alpha + 255.0 * (1.0 - alpha)).astype(np.uint8)
+    else:
+        image = np.ascontiguousarray(image[:, :, :3])
+    map_x, map_y, map_w, map_h = layout["mapFrame"]
+    height, width = image.shape[:2]
+    # The capture already has the frame's aspect; resample only if it does not,
+    # so the tags land exactly where the PDF puts them.
+    wanted_h = max(1, int(round(width * map_h / map_w)))
+    if abs(wanted_h - height) > 2:
+        image = cv2.resize(image, (width, wanted_h), interpolation=cv2.INTER_AREA)
+        height = wanted_h
+    scale = width / map_w
+
+    def to_px(value):
+        return int(round(value * scale))
+
+    cv2.rectangle(image, (0, 0), (width - 1, height - 1), (0, 0, 0), max(1, to_px(0.8)))
+
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_16h5)
+    patch_px = max(8, to_px(layout["patchSize"]))
+    for tag_id, (patch_x, patch_y) in zip(layout["tagIds"], layout["patches"]):
+        marker = cv2.aruco.generateImageMarker(dictionary, tag_id, 600, borderBits=1)
+        marker = cv2.copyMakeBorder(
+            marker, 90, 90, 90, 90, cv2.BORDER_CONSTANT, value=255,
+        )
+        marker = cv2.resize(marker, (patch_px, patch_px), interpolation=cv2.INTER_AREA)
+        x0 = min(max(0, to_px(patch_x - map_x)), width - patch_px)
+        y0 = min(max(0, to_px(patch_y - map_y)), height - patch_px)
+        image[y0:y0 + patch_px, x0:x0 + patch_px] = cv2.cvtColor(marker, cv2.COLOR_GRAY2BGR)
+
+    # A plate in a side margin is not on the map; the .docx places it there.
+    if layout["showBadge"] and not layout["badgePanel"]:
+        badge_x, badge_top, badge_w, badge_h = layout["badge"]
+        x0 = to_px(badge_x - map_x)
+        y0 = to_px(badge_top - map_y)
+        x1 = min(width - 1, x0 + to_px(badge_w))
+        y1 = min(height - 1, y0 + to_px(badge_h))
+        _draw_map_sheet_badge(image, (x0, y0, x1, y1), sheet_id, scale)
+
+    ok, encoded = cv2.imencode(".png", image)
+    if not ok:
+        raise RuntimeError("frame_composite_failed")
+    return encoded.tobytes()
+
+
+def _draw_map_sheet_badge(image, box, sheet_id, scale):
+    """Paint the ID plate into box (x0, y0, x1, y1), at `scale` px per point."""
+    x0, y0, x1, y1 = box
+    cv2.rectangle(image, (x0, y0), (x1, y1), (255, 255, 255), -1)
+    text = f"MAP ID: {sheet_id}"
+    font = cv2.FONT_HERSHEY_DUPLEX
+    # Hershey glyphs are ~22px tall at scale 1; aim for the PDF's 9pt bold.
+    font_scale = max(0.2, 9.0 * scale * 0.7 / 22.0)
+    thickness = max(1, int(round(font_scale * 1.6)))
+    while font_scale > 0.2:
+        (text_w, _text_h), _baseline = cv2.getTextSize(text, font, font_scale, thickness)
+        if text_w <= (x1 - x0) - int(round(4.0 * scale)):
+            break
+        font_scale -= 0.05
+    (text_w, text_h), _baseline = cv2.getTextSize(text, font, font_scale, thickness)
+    cv2.putText(
+        image, text,
+        (x0 + ((x1 - x0) - text_w) // 2, y1 - ((y1 - y0) - text_h) // 2),
+        font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA,
+    )
+
+
+def _render_map_sheet_badge_png(sheet_id, width_pt, height_pt, scale=8.0):
+    """The ID plate as a picture of its own, for a plate in a side margin."""
+    width = max(1, int(round(width_pt * scale)))
+    height = max(1, int(round(height_pt * scale)))
+    image = np.full((height, width, 3), 255, np.uint8)
+    _draw_map_sheet_badge(image, (0, 0, width - 1, height - 1), sheet_id, scale)
+    ok, encoded = cv2.imencode(".png", image)
+    if not ok:
+        raise RuntimeError("badge_render_failed")
+    return encoded.tobytes()
+
+
+def _xml_text(value):
+    return (
+        str(value)
+        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _build_map_sheet_docx(frame_png, layout, side_panels, record):
+    """A Word (.docx) version of the sheet, written directly as OOXML.
+
+    One landscape page, a fixed-layout table with the map picture in the
+    middle column and the side margins as editable text in the outer columns.
+    The row is exactly as wide as the printable area, so the map picture keeps
+    its physical size and Word prints the tags at the size the PDF would.
+    """
+    page_w, page_h = layout["page"]
+    _map_x, map_y, map_w, map_h = layout["mapFrame"]
+    regions = _map_sheet_panel_regions(layout)
+    margin = MAP_SHEET_PAGE_MARGIN
+    font_size = _map_sheet_panel_font_size(layout)
+
+    def twips(points):
+        return int(round(points * 20.0))
+
+    def emu(points):
+        return int(round(points * 12700.0))
+
+    media = []          # (file name, bytes)
+    relationships = []  # (rId, file name)
+
+    def picture(data, width_pt, height_pt):
+        """Add a PNG to the package; returns the XML an inline and an anchored
+        drawing share: extent through graphic, less the anchor's wrap element,
+        which goes between effectExtent and docPr."""
+        index = len(media) + 1
+        name = f"image{index}.png"
+        rid = f"rIdImage{index}"
+        media.append((name, data))
+        relationships.append((rid, name))
+        cx, cy = emu(width_pt), emu(height_pt)
+        extent = (
+            f'<wp:extent cx="{cx}" cy="{cy}"/>'
+            '<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+        )
+        graphic = (
+            f'<wp:docPr id="{index}" name="Picture {index}"/>'
+            '<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+            '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            '<pic:pic>'
+            f'<pic:nvPicPr><pic:cNvPr id="{index}" name="{name}"/><pic:cNvPicPr/></pic:nvPicPr>'
+            f'<pic:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+            f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
+            '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+            '</pic:pic></a:graphicData></a:graphic>'
+        )
+        return extent, graphic
+
+    def image_paragraph(data, width_pt, height_pt):
+        extent, graphic = picture(data, width_pt, height_pt)
+        return (
+            '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>'
+            '<w:r><w:drawing>'
+            f'<wp:inline distT="0" distB="0" distL="0" distR="0">{extent}{graphic}</wp:inline>'
+            '</w:drawing></w:r></w:p>'
+        )
+
+    def page_picture_run(data, x_pt, y_pt, width_pt, height_pt):
+        """A picture pinned to page coordinates, floating over the table."""
+        extent, graphic = picture(data, width_pt, height_pt)
+        return (
+            '<w:r><w:drawing>'
+            '<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" '
+            'relativeHeight="251659264" behindDoc="0" locked="1" layoutInCell="1" allowOverlap="1">'
+            '<wp:simplePos x="0" y="0"/>'
+            f'<wp:positionH relativeFrom="page"><wp:posOffset>{emu(x_pt)}</wp:posOffset></wp:positionH>'
+            f'<wp:positionV relativeFrom="page"><wp:posOffset>{emu(y_pt)}</wp:posOffset></wp:positionV>'
+            f'{extent}<wp:wrapNone/>{graphic}'
+            '</wp:anchor></w:drawing></w:r>'
+        )
+
+    def text_paragraphs(text):
+        lines = text.split("\n") or [""]
+        out = []
+        for position, line in enumerate(lines):
+            after = twips(font_size * 0.6) if position == len(lines) - 1 else 0
+            out.append(
+                f'<w:p><w:pPr><w:spacing w:before="0" w:after="{after}" w:line="300" w:lineRule="auto"/></w:pPr>'
+                f'<w:r><w:rPr><w:sz w:val="{int(round(font_size * 2))}"/></w:rPr>'
+                f'<w:t xml:space="preserve">{_xml_text(line)}</w:t></w:r></w:p>'
+            )
+        return "".join(out)
+
+    def cell(width_pt, body, pad_pt):
+        pad = twips(pad_pt)
+        return (
+            f'<w:tc><w:tcPr><w:tcW w:w="{twips(width_pt)}" w:type="dxa"/>'
+            f'<w:tcMar><w:top w:w="{pad}" w:type="dxa"/><w:left w:w="{pad}" w:type="dxa"/>'
+            f'<w:bottom w:w="0" w:type="dxa"/><w:right w:w="{pad}" w:type="dxa"/></w:tcMar>'
+            f'<w:vAlign w:val="top"/></w:tcPr>{body or "<w:p/>"}</w:tc>'
+        )
+
+    def panel_body(panel):
+        return text_paragraphs(panel["text"]) if panel["text"] else ""
+
+    columns = []   # (width in points, body xml, cell padding)
+    left_panel = side_panels.get("left") if side_panels else None
+    right_panel = side_panels.get("right") if side_panels else None
+    if left_panel and regions["left"][2] >= SIDE_PANEL_MIN_WIDTH:
+        columns.append((regions["left"][2], panel_body(left_panel), SIDE_PANEL_PAD))
+    columns.append((map_w, image_paragraph(frame_png, map_w, map_h), 0.0))
+    if right_panel and regions["right"][2] >= SIDE_PANEL_MIN_WIDTH:
+        columns.append((regions["right"][2], panel_body(right_panel), SIDE_PANEL_PAD))
+
+    table_w = sum(width for width, _body, _pad in columns)
+    grid = "".join(f'<w:gridCol w:w="{twips(width)}"/>' for width, _body, _pad in columns)
+    cells = "".join(cell(width, body, pad) for width, body, pad in columns)
+    table = (
+        '<w:tbl><w:tblPr>'
+        f'<w:tblW w:w="{twips(table_w)}" w:type="dxa"/>'
+        '<w:tblInd w:w="0" w:type="dxa"/>'
+        '<w:tblLayout w:type="fixed"/>'
+        '<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>'
+        '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar>'
+        '<w:tblLook w:val="0000"/></w:tblPr>'
+        f'<w:tblGrid>{grid}</w:tblGrid>'
+        f'<w:tr><w:trPr><w:trHeight w:val="{twips(map_h)}" w:hRule="atLeast"/></w:trPr>{cells}</w:tr>'
+        '</w:tbl>'
+    )
+    # An ID plate in a side margin is not part of the map picture. It floats at
+    # the page position the PDF prints it at, anchored to the trailer below.
+    badge_run = ""
+    if layout["showBadge"] and layout["badgePanel"]:
+        badge_x, badge_top, badge_w, badge_h = layout["badge"]
+        badge_run = page_picture_run(
+            _render_map_sheet_badge_png(record["id"], badge_w, badge_h),
+            badge_x, badge_top, badge_w, badge_h,
+        )
+    # Word insists on a paragraph after a table. A 1pt one, with the bottom
+    # margin trimmed to make room, keeps the sheet on a single page.
+    trailer = (
+        '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/>'
+        f'<w:rPr><w:sz w:val="2"/></w:rPr></w:pPr>{badge_run}</w:p>'
+    )
+    section = (
+        f'<w:sectPr><w:pgSz w:w="{twips(page_w)}" w:h="{twips(page_h)}" w:orient="landscape"/>'
+        f'<w:pgMar w:top="{twips(map_y)}" w:right="{twips(margin)}" w:bottom="{twips(4.0)}" '
+        f'w:left="{twips(margin)}" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr>'
+    )
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        f'<w:body>{table}{trailer}{section}</w:body></w:document>'
+    )
+    styles_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:docDefaults><w:rPrDefault><w:rPr>'
+        '<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial" w:eastAsia="Arial"/>'
+        f'<w:sz w:val="{int(round(font_size * 2))}"/><w:szCs w:val="{int(round(font_size * 2))}"/>'
+        '</w:rPr></w:rPrDefault>'
+        '<w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:pPrDefault>'
+        '</w:docDefaults>'
+        '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>'
+        '<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/>'
+        '<w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar>'
+        '<w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>'
+        '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/>'
+        '</w:tblCellMar></w:tblPr></w:style></w:styles>'
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Default Extension="png" ContentType="image/png"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+        '</Types>'
+    )
+    package_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
+        '</Relationships>'
+    )
+    document_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        + "".join(
+            f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/{name}"/>'
+            for rid, name in relationships
+        )
+        + '</Relationships>'
+    )
+    core_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+        'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" '
+        'xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        f'<dc:title>Map sheet {_xml_text(record["id"])}</dc:title>'
+        '<dc:creator>Low-Barrier Digital Participatory Mapping</dc:creator>'
+        '<dc:description>Printable georeferenced reference map</dc:description>'
+        '</cp:coreProperties>'
+    )
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", package_rels)
+        archive.writestr("docProps/core.xml", core_xml)
+        archive.writestr("word/document.xml", document_xml)
+        archive.writestr("word/styles.xml", styles_xml)
+        archive.writestr("word/_rels/document.xml.rels", document_rels)
+        for name, data in media:
+            # Already-compressed pictures: storing beats deflating them again.
+            archive.writestr(f"word/media/{name}", data, compress_type=zipfile.ZIP_STORED)
     return out.getvalue()
 
 
@@ -3605,19 +4175,31 @@ def api_map_sheets():
         "theme": str(payload.get("theme") or "")[:40],
         "imageSize": {"width": int(decoded.shape[1]), "height": int(decoded.shape[0])},
     }
+    customization = payload.get("layout") if isinstance(payload.get("layout"), dict) else {}
     try:
+        layout = map_sheet_layout(payload.get("pageSize"), customization)
+        side_panels = _clean_map_sheet_side_panels(customization.get("sidePanels"))
         pdf_bytes = _draw_map_sheet_pdf(
-            png_bytes,
-            record,
-            payload.get("pageSize"),
-            payload.get("layout"),
+            png_bytes, record, layout=layout, side_panels=side_panels,
         )
+        # The Word file is a convenience copy of the same sheet. Losing it
+        # must not lose the PDF, which is what registration is built around.
+        try:
+            docx_bytes = _build_map_sheet_docx(
+                _compose_map_sheet_frame_png(png_bytes, layout, sheet_id),
+                layout, side_panels, record,
+            )
+        except Exception:  # noqa: BLE001 - any failure here only costs the .docx
+            logging.exception("Could not build the Word copy of map sheet %s", sheet_id)
+            docx_bytes = None
         MAP_SHEETS_DIR.mkdir(parents=True, exist_ok=True)
         targets = {
             "png": MAP_SHEETS_DIR / f"{sheet_id}.png",
             "pdf": MAP_SHEETS_DIR / f"{sheet_id}.pdf",
             "json": MAP_SHEETS_DIR / f"{sheet_id}.json",
         }
+        if docx_bytes:
+            targets["docx"] = MAP_SHEETS_DIR / f"{sheet_id}.docx"
         temporary = {
             key: MAP_SHEETS_DIR / f".{sheet_id}.{os.getpid()}.{threading.get_ident()}.{key}.tmp"
             for key in targets
@@ -3625,6 +4207,13 @@ def api_map_sheets():
         try:
             temporary["png"].write_bytes(png_bytes)
             temporary["pdf"].write_bytes(pdf_bytes)
+            if docx_bytes:
+                temporary["docx"].write_bytes(docx_bytes)
+            else:
+                # A re-export without a Word copy must not leave the previous
+                # sheet's .docx behind under this ID.
+                with contextlib.suppress(OSError):
+                    (MAP_SHEETS_DIR / f"{sheet_id}.docx").unlink()
             temporary["json"].write_text(
                 json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
             )
@@ -3632,6 +4221,8 @@ def api_map_sheets():
             # before its matching image and PDF have reached disk.
             os.replace(temporary["png"], targets["png"])
             os.replace(temporary["pdf"], targets["pdf"])
+            if docx_bytes:
+                os.replace(temporary["docx"], targets["docx"])
             os.replace(temporary["json"], targets["json"])
         finally:
             for path in temporary.values():
@@ -3655,14 +4246,33 @@ def api_map_sheet(sheet_id):
     clean_id = _clean_map_sheet_id(sheet_id)
     if not clean_id:
         return jsonify({"ok": False, "error": "invalid_map_sheet_id"}), 400
-    path = MAP_SHEETS_DIR / f"{clean_id}.json"
-    if not path.exists():
+    stem = _map_sheet_record_stem(clean_id)
+    path = MAP_SHEETS_DIR / f"{stem}.json"
+    if not stem or not path.exists():
         return jsonify({"ok": False, "error": "map_sheet_not_found"}), 404
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return jsonify({"ok": False, "error": "map_sheet_unreadable"}), 500
-    return jsonify({"ok": True, **record, "pdfUrl": f"/api/map-sheets/{clean_id}/pdf"})
+    return jsonify({"ok": True, **record, "mapId": _map_id_of(stem),
+                    "pdfUrl": f"/api/map-sheets/{stem}/pdf"})
+
+
+@app.route("/api/map-sheets/<map_id>/sheets", methods=["POST"])
+def api_new_digitized_sheet(map_id):
+    """Start digitising one more page of a map; returns its new sheet ID."""
+    clean = str(map_id or "") if re.fullmatch(r"[1-9][0-9]{0,8}", str(map_id or "")) else ""
+    if not clean:
+        return jsonify({"ok": False, "error": "invalid_map_id"}), 400
+    if not _map_sheet_record_stem(clean):
+        return jsonify({"ok": False, "error": "map_sheet_not_found"}), 404
+    try:
+        sheet_id = _allocate_digitized_sheet_id(clean)
+    except OSError:
+        logging.exception("Could not number a sheet of map %s", clean)
+        return jsonify({"ok": False, "error": "sheet_id_not_saved"}), 500
+    return jsonify({"ok": True, "mapId": clean, "sheetId": sheet_id,
+                    "sheetNumber": int(sheet_id.split("_")[1])}), 201
 
 
 @app.route("/api/map-sheets/<sheet_id>/pdf", methods=["GET"])
@@ -3673,6 +4283,18 @@ def api_map_sheet_pdf(sheet_id):
     return send_from_directory(
         MAP_SHEETS_DIR, f"{clean_id}.pdf", as_attachment=True,
         download_name=f"map-sheet-{clean_id}.pdf", mimetype="application/pdf"
+    )
+
+
+@app.route("/api/map-sheets/<sheet_id>/docx", methods=["GET"])
+def api_map_sheet_docx(sheet_id):
+    clean_id = _clean_map_sheet_id(sheet_id)
+    if not clean_id or not (MAP_SHEETS_DIR / f"{clean_id}.docx").exists():
+        return jsonify({"ok": False, "error": "map_sheet_docx_not_found"}), 404
+    return send_from_directory(
+        MAP_SHEETS_DIR, f"{clean_id}.docx", as_attachment=True,
+        download_name=f"map-sheet-{clean_id}.docx",
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
 
 
@@ -3785,7 +4407,16 @@ DRAWING_COLOR_PALETTE = (
     {"id": "cyan", "label": "Cyan", "color": "#4acfff"},
     {"id": "blue", "label": "Blue", "color": "#3478d4"},
     {"id": "purple", "label": "Purple", "color": "#8b58bd"},
-    {"id": "pink", "label": "Pink", "color": "#f05c8c"},
+    # The replacement pink sticker stock (2026-09-02) is so pale (#ffb7e0,
+    # measured from a rectified capture) that putting it here as the matching
+    # target poisoned segmentation: pale glare discs that used to be filed as
+    # white surfaced as phantom pinks, components split along new seams (which
+    # moved centroids -- seen as drift), and the extra splitting cost time. So
+    # the SEGMENTATION target stays the old saturated pink via "match", the
+    # displayed colour is the real stock, and the pale discs themselves are
+    # re-labelled after detection in _vectorise_drawing, where changing a label
+    # cannot move or invent geometry.
+    {"id": "pink", "label": "Pink", "color": "#ffb7e0", "match": "#f05c8c"},
     {"id": "black", "label": "Black", "color": "#252525"},
     # White only ever reaches classification through the opaque-disc detector
     # below, since white ink on white paper has no colour difference to find.
@@ -3867,10 +4498,15 @@ def _segment_map_sheet_drawing_colors(alpha, corrected_bgr):
     palette = []
     for item in DRAWING_COLOR_PALETTE:
         bgr = _drawing_hex_to_bgr(item["color"])
+        # "match" lets a class advertise one colour and classify by another:
+        # pink displays the pale replacement stock but keeps matching the old
+        # saturated pink, so pale pixels keep landing in white exactly as they
+        # always did.
+        match = _drawing_hex_to_bgr(item.get("match", item["color"]))
         palette.append({
             **item,
             "bgr": bgr,
-            "lab": _drawing_bgr_to_lab(bgr),
+            "lab": _drawing_bgr_to_lab(match),
             "named": True,
         })
 
@@ -3996,8 +4632,10 @@ def _segment_map_sheet_drawing_colors(alpha, corrected_bgr):
     # when no pixel was classified into them — a red path whose ink drifted into
     # the pink bin still has to come out labelled red.
     present = {item["id"] for item in public_classes}
+    # Pink joins red and black: the sticker pass re-labels pale warm discs into
+    # it after the fact, so the class has to exist even with zero ink pixels.
     for index, item in enumerate(palette):
-        if item["id"] in ("red", "black") and item["id"] not in present:
+        if item["id"] in ("red", "black", "pink") and item["id"] not in present:
             public_classes.append({
                 "id": item["id"],
                 "label": item["label"],
@@ -4365,8 +5003,9 @@ def api_map_sheet_registration():
     sheet_id = _clean_map_sheet_id(payload.get("id"))
     if not sheet_id:
         return jsonify({"ok": False, "error": "invalid_map_sheet_id"}), 400
-    record_path = MAP_SHEETS_DIR / f"{sheet_id}.json"
-    if not record_path.exists():
+    stem = _map_sheet_record_stem(sheet_id)
+    record_path = MAP_SHEETS_DIR / f"{stem}.json"
+    if not stem or not record_path.exists():
         return jsonify({"ok": False, "error": "map_sheet_reference_not_found"}), 404
     try:
         frame = _decode_map_sheet_camera_image(payload.get("image"))
@@ -4462,9 +5101,10 @@ def api_map_sheet_drawing():
     sheet_id = _clean_map_sheet_id(payload.get("id"))
     if not sheet_id:
         return jsonify({"ok": False, "error": "invalid_map_sheet_id"}), 400
-    record_path = MAP_SHEETS_DIR / f"{sheet_id}.json"
-    image_path = MAP_SHEETS_DIR / f"{sheet_id}.png"
-    if not record_path.exists() or not image_path.exists():
+    stem = _map_sheet_record_stem(sheet_id)
+    record_path = MAP_SHEETS_DIR / f"{stem}.json"
+    image_path = MAP_SHEETS_DIR / f"{stem}.png"
+    if not stem or not record_path.exists() or not image_path.exists():
         return jsonify({"ok": False, "error": "map_sheet_reference_not_found"}), 404
     try:
         frame = _decode_map_sheet_camera_image(payload.get("image"))
@@ -5280,6 +5920,33 @@ def _vectorise_drawing(
         return class_by_index.get(int(np.bincount(votes).argmax()))
 
     # ---- pass one: stickers, split by colour so overlaps come apart ----------
+    # The pale pink sticker stock classifies as white (it is nearly white); a
+    # disc that made it through detection as "white" but carries a clearly warm
+    # cast is one of them. Re-labelling here touches nothing but the class on an
+    # already-measured blob: positions, splitting and timing stay exactly as
+    # they were. Measured stock reads Lab a+30 b-10 (chroma ~32); true white
+    # discs measure chroma <= ~3, so the gate sits well clear of both.
+    pink_class = None
+    if segmentation:
+        pink_class = next(
+            (c for c in segmentation["classes"] if c["id"] == "pink"), None
+        )
+
+    def resolve_sticker_class(color_class, selected, x0, y0, x1, y1):
+        if color_class["id"] != "white" or pink_class is None or corrected_bgr is None:
+            return color_class
+        pixels = corrected_bgr[y0:y1, x0:x1][selected]
+        if not pixels.size:
+            return color_class
+        lab = _drawing_bgr_to_lab(
+            np.clip(pixels.mean(axis=0), 0, 255).astype(np.uint8)
+        )
+        a_shift = float(lab[1]) - 128.0
+        b_shift = float(lab[2]) - 128.0
+        if math.hypot(a_shift, b_shift) >= 12.0 and a_shift >= 8.0:
+            return pink_class
+        return color_class
+
     claimed = np.zeros((height, width), dtype=bool)
     sticker_jobs = []
     if label_map is not None:
@@ -5299,7 +5966,10 @@ def _vectorise_drawing(
                 if _classify_component(metrics, sticker_diameter) != "sticker":
                     continue
                 claimed[y0:y1, x0:x1] |= selected
-                sticker_jobs.append((x0, y0, x1, y1, selected, component, metrics, item))
+                sticker_jobs.append((
+                    x0, y0, x1, y1, selected, component, metrics,
+                    resolve_sticker_class(item, selected, x0, y0, x1, y1),
+                ))
 
     # ---- pass two: paths over the ink no sticker claimed ---------------------
     # The path channel is detected at its own, lower threshold, so a thin or
@@ -5510,9 +6180,10 @@ def api_map_sheet_geojson():
     sheet_id = _clean_map_sheet_id(payload.get("id"))
     if not sheet_id:
         return jsonify({"ok": False, "error": "invalid_map_sheet_id"}), 400
-    record_path = MAP_SHEETS_DIR / f"{sheet_id}.json"
-    image_path = MAP_SHEETS_DIR / f"{sheet_id}.png"
-    if not record_path.exists() or not image_path.exists():
+    stem = _map_sheet_record_stem(sheet_id)
+    record_path = MAP_SHEETS_DIR / f"{stem}.json"
+    image_path = MAP_SHEETS_DIR / f"{stem}.png"
+    if not stem or not record_path.exists() or not image_path.exists():
         return jsonify({"ok": False, "error": "map_sheet_reference_not_found"}), 404
     try:
         frame = _decode_map_sheet_camera_image(payload.get("image"))
@@ -6784,7 +7455,10 @@ CAMERA_MANUAL_ISO = 100                      # ISO pinned during manual exposure
 CAMERA_FOCUS_AF_MODE = "continuous-video"    # focusmode value that restores autofocus
 CAMERA_CONTROLS = {
     "exposureAuto": {"label": "Auto exposure", "type": "toggle", "default": 1},
-    "exposure":     {"label": "Exposure (ms)", "type": "range", "min": 5, "max": 300, "step": 5, "default": 50, "uvc": "CAP_PROP_EXPOSURE"},
+    # step 1 / min 1 so the short exposures the tag detector likes are reachable:
+    # 8 ms looks near-black to the eye but gives the decoder crisp, motion-free
+    # tag edges under a projector, which is why it's the default.
+    "exposure":     {"label": "Exposure (ms)", "type": "range", "min": 1, "max": 300, "step": 1, "default": 8, "uvc": "CAP_PROP_EXPOSURE"},
     "focusAuto":    {"label": "Autofocus",     "type": "toggle", "default": 1},
     "focus":        {"label": "Focus", "type": "range", "min": 0.5, "max": 3, "step": 0.1, "default": 1, "ip": "focus_distance", "uvc": "CAP_PROP_FOCUS"},
     "resolution":   {"label": "Resolution",    "type": "select", "default": "1920x1080",
@@ -6960,7 +7634,7 @@ def api_camera_controls_get():
         if cur:
             try:
                 if "exposure_ns" in cur:
-                    camera_control_values["exposure"] = max(5, min(300, int(round(float(cur["exposure_ns"]) / 1e6))))
+                    camera_control_values["exposure"] = max(1, min(300, int(round(float(cur["exposure_ns"]) / 1e6))))
                 if "manual_sensor" in cur:
                     camera_control_values["exposureAuto"] = 0 if str(cur["manual_sensor"]).lower() == "on" else 1
                 if "focus_distance" in cur:
@@ -8219,6 +8893,379 @@ def api_marker_settings_save():
         return jsonify({"ok": False, "error": "write_failed", "detail": str(_e)}), 500
 
 
+# ==================== IMOBYL paper window ====================
+# A sheet of A3 with AprilTags in its border, laid on the projected table, is
+# a window onto the street: the exhibition page fits the sheet's pose from the
+# tags the camera sees and projects a street-level view into the white inside.
+# The layout is served as JSON and drawn into the PDF from the SAME numbers,
+# so what the page fits against cannot drift from what was printed.
+#
+# Seven tags by default, the top-centre slot left free, and all of them in a
+# contiguous run of tag16h5 ids the workshop does not use: 0-1 and 9-14 are
+# the marker slots, 19-23 the selectors, pans and its own street view, 25-28
+# the surface corners, 0-15 the calibration grid while it runs. The pointer
+# that says WHERE to look is 24, the one id left free between them, so it
+# cannot be confused with the workshop's street-view tag (23).
+IMOBYL_FRAME_PAGE_MM = (420.0, 297.0)          # A3 landscape
+IMOBYL_FRAME_SLOT_IDS = {
+    "tl": 2, "tr": 3, "br": 4, "bl": 5,          # corners, clockwise from top-left
+    "rm": 6, "bm": 7, "lm": 8,                   # middles of the right, bottom, left edges
+    "tm": 16,                                    # top middle, only with topCentre=1
+}
+IMOBYL_POINTER_TAG_ID = 24
+IMOBYL_FRAME_EDGE_MM = 3.0     # left unprinted: most printers cannot reach the edge
+IMOBYL_FRAME_QUIET_MM = 3.0    # white kept round the black square inside its cell
+IMOBYL_FRAME_LABEL = "VUE DE LA RUE"   # what the window shows, said on its top edge
+
+# The second window: the same A3 sheet, showing the hexagon the pointer is
+# standing in rather than the street at its feet. It needs its own border ids,
+# or the two sheets on the table cannot be told apart.
+#
+# It needs seven of them, the same ring the street window gets. The pose is
+# fitted from tag CORNERS, so two tags already over-determine a homography and
+# three would function -- but a full ring is what survives a sheet being half
+# covered by a hand, and keeps the fit from leaning on one end of the page.
+# See IMOBYL_ZOOM_ID_POOL for which ids are free and why.
+IMOBYL_ZOOM_LABEL = "VUE RAPPROCHEE"
+IMOBYL_ZOOM_SLOT_ORDER = ("tl", "tr", "bl", "br", "rm", "lm", "bm")
+# Seven ids, so this sheet gets the same full ring as the street window.
+#
+# An earlier pool reached past 29 for the larger families, but tag16h5 -- what
+# the workshop actually runs -- stops at 29, so those ids were filtered out and
+# the sheet printed with three tags. Every id below exists in all four
+# families, so the ring is complete whichever one is selected.
+#
+# What the ids avoid, in the order it matters:
+#   11-14  the drawing pointers -- the one range that must stay clear
+#   2-8    the street window's own ring (16 is its optional top-middle)
+#   0, 1   post-it and keyboard location      9, 10  route start and end
+#   19, 20 the draw-1 selectors               21, 22 map pan
+#   23     street-view trigger                24     this scenario's pointer
+# That leaves 15, 17, 18 and 29 genuinely unassigned. The last three come from
+# the surface corner tags, which are PROJECTED during calibration and never
+# printed, so a sheet carrying them collides only if someone re-runs the corner
+# calibration with the sheet on the table. 25 is kept out of the pool even so:
+# driftMonitor.js reads it as its reference tag.
+IMOBYL_ZOOM_ID_POOL = (17, 18, 29, 15, 26, 27, 28)
+IMOBYL_ZOOM_MIN_TAGS = 3
+
+
+def imobyl_zoom_slot_ids(family):
+    """As many of the zoom window's ids as this family actually has, paired
+    with corners first so a three-tag sheet still pins all four of position,
+    scale, rotation and shear."""
+    have = marker_family_ids(family)
+    usable = [tag_id for tag_id in IMOBYL_ZOOM_ID_POOL if tag_id in have]
+    return dict(zip(IMOBYL_ZOOM_SLOT_ORDER, usable))
+
+
+IMOBYL_FRAME_KINDS = ("street", "zoom")
+
+
+def imobyl_frame_layout(border_mm=24.0, tag_mm=32.0, top_centre=False, kind="street"):
+    """The tag cells are bigger than the band and stand proud of it into the
+    white inside, like rivets on a frame: their outer edge sits on the page
+    margin and the band runs behind them. The inside the page projects into
+    is the rectangle the band leaves, and the page masks the cells that
+    intrude on it so no projected light lands on a tag.
+
+    kind picks which window this sheet is: "street" shows the view from the
+    pointer, "zoom" the hexagon it is standing in. They differ only in their
+    border ids and the word on the top edge -- everything a sheet needs to be
+    told apart by the camera and by the person carrying it."""
+    if kind not in IMOBYL_FRAME_KINDS:
+        raise ValueError("invalid_kind")
+    family = marker_settings_family()
+    if kind == "zoom":
+        slot_ids = imobyl_zoom_slot_ids(family)
+        if len(slot_ids) < IMOBYL_ZOOM_MIN_TAGS:
+            # Better to say so than to print tags this family cannot encode.
+            raise ValueError("zoom_ids_unavailable")
+        label_text = IMOBYL_ZOOM_LABEL
+        top_centre = False          # the pool never reaches a top-middle tag
+    else:
+        slot_ids = dict(IMOBYL_FRAME_SLOT_IDS)
+        label_text = IMOBYL_FRAME_LABEL
+    width, height = IMOBYL_FRAME_PAGE_MM
+    edge = IMOBYL_FRAME_EDGE_MM
+    cell = tag_mm + 2.0 * IMOBYL_FRAME_QUIET_MM
+    near = edge + cell / 2.0                  # a cell centre's distance from the page edge
+    every = [
+        ("tl", near, near), ("tr", width - near, near),
+        ("br", width - near, height - near), ("bl", near, height - near),
+        ("rm", width - near, height / 2.0), ("bm", width / 2.0, height - near),
+        ("lm", near, height / 2.0),
+    ]
+    if top_centre:
+        every.append(("tm", width / 2.0, near))
+    slots = [item for item in every if item[0] in slot_ids]
+    # The label sits in the top band, centred when that slot is free and
+    # pulled to the left-hand stretch when a tag takes the centre.
+    label_w = 120.0 if top_centre else 150.0
+    label_cx = width * 0.27 if top_centre else width / 2.0
+    label = [label_cx - label_w / 2.0, edge + 2.0, label_cx + label_w / 2.0, edge + border_mm - 2.0]
+    tags = []
+    for slot, cx, cy in slots:
+        s = tag_mm / 2.0
+        tags.append({
+            "id": slot_ids[slot], "slot": slot, "cx": cx, "cy": cy,
+            # The black square's corners in the order OpenCV reports a marker
+            # printed upright: clockwise from its top-left, y down the page.
+            "corners": [[cx - s, cy - s], [cx + s, cy - s], [cx + s, cy + s], [cx - s, cy + s]],
+        })
+    return {
+        "pageMm": [width, height],
+        "edgeMm": edge,
+        "borderMm": border_mm,
+        "tagMm": tag_mm,
+        "quietMm": IMOBYL_FRAME_QUIET_MM,
+        "cellMm": cell,
+        "topCentre": bool(top_centre),
+        "interiorMm": [edge + border_mm, edge + border_mm,
+                       width - edge - border_mm, height - edge - border_mm],
+        "labelMm": label,
+        "labelText": label_text,
+        "kind": kind,
+        "tags": tags,
+        # Both sheets read the same pointer: one hand moves it, and each
+        # window answers about wherever it was put.
+        "pointerTagId": IMOBYL_POINTER_TAG_ID,
+        "family": family,
+    }
+
+
+def _imobyl_frame_args():
+    """Border and tag sizes from the query string, bounded to what can print
+    and still decode. The tag may be bigger than the band -- its cell then
+    stands proud of it -- but two cells must still leave the middle of the
+    short side free."""
+    try:
+        border = float(request.args.get("borderMm", 24.0))
+        tag = float(request.args.get("tagMm", 32.0))
+        seed = int(request.args.get("seed", 7))
+    except (TypeError, ValueError):
+        raise ValueError("invalid_size")
+    if not (10.0 <= border <= 60.0) or not (8.0 <= tag <= 60.0):
+        raise ValueError("invalid_size")
+    top_centre = str(request.args.get("topCentre", "0")).lower() in ("1", "true", "yes")
+    kind = str(request.args.get("kind", "street")).strip().lower() or "street"
+    if kind not in IMOBYL_FRAME_KINDS:
+        raise ValueError("invalid_kind")
+    return border, tag, top_centre, seed, kind
+
+
+def _marker_bitmap(family, tag_id):
+    """The marker's cells, black border included, as a 0/255 array."""
+    dictionary = cv2.aruco.getPredefinedDictionary(APRILTAG_GENERATOR_FAMILY_MAP[family])
+    cells = int(getattr(dictionary, "markerSize", 4)) + 2
+    return cv2.aruco.generateImageMarker(dictionary, int(tag_id), cells), cells
+
+
+def imobyl_frame_mosaic(layout, seed=7, density=0.5, moat_modules=1):
+    """The border as a scatter of black squares on the tags' own module grid,
+    so the whole band reads as one big AprilTag. Returned as rectangles in
+    millimetres, clipped to the band, so the PDF and any test draw the same
+    thing.
+
+    Around every real tag a moat of one module is left white beyond its cell:
+    the detector needs the tag's black border to sit in white, and a black
+    square landing against the cell would fuse with it in the camera.
+
+    Deliberately random rather than a repeat. A regular pattern lines up with
+    the detector's grid sampling and can fake a code; noise does not."""
+    import random
+
+    width, height = layout["pageMm"]
+    edge = layout.get("edgeMm", 0.0)
+    border = layout["borderMm"]
+    tag_mm = layout["tagMm"]
+    cell_mm = layout.get("cellMm", border)
+    cells = _marker_bitmap(layout["family"], layout["tags"][0]["id"])[1]
+    module = tag_mm / cells
+    rng = random.Random(int(seed))
+    keep_out = []
+    half = cell_mm / 2.0 + moat_modules * module
+    for tag in layout["tags"]:
+        keep_out.append((tag["cx"] - half, tag["cy"] - half, tag["cx"] + half, tag["cy"] + half))
+    label = layout.get("labelMm")
+    if label:
+        pad = moat_modules * module
+        keep_out.append((label[0] - pad, label[1] - pad, label[2] + pad, label[3] + pad))
+    bands = [
+        (edge, edge, width - edge, edge + border),
+        (edge, height - edge - border, width - edge, height - edge),
+        (edge, edge, edge + border, height - edge),
+        (width - edge - border, edge, width - edge, height - edge),
+    ]
+    squares = []
+    columns = int((width - 2 * edge) / module) + 1
+    rows = int((height - 2 * edge) / module) + 1
+    for row in range(rows):
+        for column in range(columns):
+            x0, y0 = edge + column * module, edge + row * module
+            x1, y1 = x0 + module, y0 + module
+            # The draw is taken for every module whether or not it lands, so
+            # the pattern for a given seed does not shift with the tag layout.
+            black = rng.random() < density
+            if not black:
+                continue
+            for bx0, by0, bx1, by1 in bands:
+                cx0, cy0 = max(x0, bx0), max(y0, by0)
+                cx1, cy1 = min(x1, bx1), min(y1, by1)
+                if cx1 - cx0 < 0.05 or cy1 - cy0 < 0.05:
+                    continue
+                if any(cx0 < k[2] and cx1 > k[0] and cy0 < k[3] and cy1 > k[1] for k in keep_out):
+                    continue
+                squares.append((cx0, cy0, cx1 - cx0, cy1 - cy0))
+                break
+    return squares
+
+
+def _draw_imobyl_frame_pdf(layout, pointer_size_cm, seed=7):
+    try:
+        from reportlab.lib.pagesizes import A3, landscape
+        from reportlab.lib.units import mm
+        from reportlab.pdfgen import canvas
+    except ImportError as exc:
+        raise RuntimeError("reportlab_not_installed") from exc
+
+    page = landscape(A3)
+    page_w, page_h = page
+    width, height = layout["pageMm"]
+    border = layout["borderMm"]
+    tag_mm = layout["tagMm"]
+    family = layout["family"]
+
+    # Layout coordinates are millimetres from the top-left corner, y down;
+    # reportlab's are points from the bottom-left, y up.
+    def px(x_mm):
+        return x_mm * mm
+
+    def py(y_mm):
+        return page_h - y_mm * mm
+
+    out = io.BytesIO()
+    pdf = canvas.Canvas(out, pagesize=page, pageCompression=1)
+    zoom = layout.get("kind") == "zoom"
+    pdf.setTitle("IMOBYL paper window - "
+                 + ("close-up view" if zoom else "street view"))
+    pdf.setAuthor("Low-Barrier Digital Participatory Mapping")
+
+    def draw_marker(cx, cy, size_mm, tag_id):
+        bitmap, cells = _marker_bitmap(family, tag_id)
+        cell = size_mm / cells
+        left = cx - size_mm / 2.0
+        top = cy - size_mm / 2.0
+        pdf.setFillColorRGB(0, 0, 0)
+        for row in range(cells):
+            for column in range(cells):
+                if int(bitmap[row, column]) < 128:
+                    pdf.rect(px(left + column * cell), py(top + (row + 1) * cell),
+                             cell * mm, cell * mm, fill=1, stroke=0)
+
+    # ---- page 1: the frame ---------------------------------------------
+    pdf.setFillColorRGB(0, 0, 0)
+    for x, y, w, h in imobyl_frame_mosaic(layout, seed):
+        pdf.rect(px(x), py(y + h), w * mm, h * mm, fill=1, stroke=0)
+    cell = layout.get("cellMm", border)
+    for tag in layout["tags"]:
+        cx, cy = tag["cx"], tag["cy"]
+        pdf.setFillColorRGB(1, 1, 1)
+        pdf.rect(px(cx - cell / 2.0), py(cy + cell / 2.0), cell * mm, cell * mm, fill=1, stroke=0)
+        draw_marker(cx, cy, tag_mm, tag["id"])
+
+    label = layout.get("labelMm")
+    text = layout.get("labelText") or ""
+    if label and text:
+        x0, y0, x1, y1 = label
+        pdf.setFillColorRGB(1, 1, 1)
+        pdf.roundRect(px(x0), py(y1), (x1 - x0) * mm, (y1 - y0) * mm, 2.5 * mm, fill=1, stroke=0)
+        # As large as fits the plate with a margin, whichever of width and
+        # height binds first; Helvetica's capitals stand about 0.72 em.
+        font = "Helvetica-Bold"
+        size = min(((y1 - y0) - 6.0) * mm / 0.72, 200.0)
+        while size > 6 and pdf.stringWidth(text, font, size) > (x1 - x0 - 16.0) * mm:
+            size -= 0.5
+        pdf.setFillColorRGB(0, 0, 0)
+        pdf.setFont(font, size)
+        baseline = (y0 + y1) / 2.0 + (size * 0.72 / mm) / 2.0
+        pdf.drawCentredString(px((x0 + x1) / 2.0), py(baseline), text)
+    pdf.showPage()
+
+    # ---- page 2: the pointer, twice, at the workshop's own tag size ------
+    pointer = float(pointer_size_cm) * 10.0
+    card_w, card_h = pointer + 40.0, pointer + 58.0
+    gap = 24.0
+    left0 = (width - 2 * card_w - gap) / 2.0
+    top0 = (height - card_h) / 2.0
+    bitmap_cells = _marker_bitmap(family, layout["pointerTagId"])[1]
+    for k in range(2):
+        left = left0 + k * (card_w + gap)
+        pdf.setStrokeColorRGB(0.5, 0.5, 0.5)
+        pdf.setLineWidth(0.5)
+        pdf.setDash(3, 3)
+        pdf.rect(px(left), py(top0 + card_h), card_w * mm, card_h * mm, fill=0, stroke=1)
+        pdf.setDash()
+        cx = left + card_w / 2.0
+        cy = top0 + 24.0 + pointer / 2.0
+        draw_marker(cx, cy, pointer, layout["pointerTagId"])
+        # The tag's up is where the view looks. Drawn as an arrow so the
+        # direction survives being cut out and handed round.
+        pdf.setStrokeColorRGB(0.1, 0.1, 0.1)
+        pdf.setFillColorRGB(0.1, 0.1, 0.1)
+        pdf.setLineWidth(1.2)
+        ay = top0 + 20.0 - pointer / 2.0 + pointer / 2.0
+        pdf.line(px(cx), py(ay), px(cx), py(ay - 11.0))
+        pdf.line(px(cx), py(ay - 11.0), px(cx - 3.0), py(ay - 7.5))
+        pdf.line(px(cx), py(ay - 11.0), px(cx + 3.0), py(ay - 7.5))
+        pdf.setFont("Helvetica-Bold", 10)
+        pdf.drawCentredString(px(cx), py(cy + pointer / 2.0 + 9.0),
+                              ("Vue rapprochee" if zoom else "Vue de rue")
+                              + "  -  ID " + str(layout["pointerTagId"]))
+        pdf.setFont("Helvetica", 7.5)
+        pdf.drawCentredString(px(cx), py(cy + pointer / 2.0 + 15.0),
+                              "Poser sur la carte ; la case sous le pointeur est agrandie"
+                              if zoom else
+                              "Poser sur la carte ; la fleche est la direction du regard")
+        pdf.drawCentredString(px(cx), py(cy + pointer / 2.0 + 20.5),
+                              "%s, %d modules, %.0f mm" % (family, bitmap_cells, pointer))
+    pdf.showPage()
+    pdf.save()
+    return out.getvalue()
+
+
+@app.route("/api/imobyl/frame", methods=["GET"])
+def api_imobyl_frame():
+    try:
+        border, tag, top_centre, _seed, kind = _imobyl_frame_args()
+        layout = imobyl_frame_layout(border, tag, top_centre, kind)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify({"ok": True, **layout})
+
+
+@app.route("/api/imobyl/frame.pdf", methods=["GET"])
+def api_imobyl_frame_pdf():
+    try:
+        border, tag, top_centre, seed, kind = _imobyl_frame_args()
+        layout = imobyl_frame_layout(border, tag, top_centre, kind)
+        pointer_cm = float(load_marker_settings().get("tagSizeCm") or 3.0)
+        pdf_bytes = _draw_imobyl_frame_pdf(layout, pointer_cm, seed)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    except Exception:
+        logging.exception("Failed to create the IMOBYL frame PDF")
+        return jsonify({"ok": False, "error": "frame_export_failed"}), 500
+    name = "imobyl-zoom-frame-A3.pdf" if kind == "zoom" else "imobyl-frame-A3.pdf"
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="%s"' % name},
+    )
+
+
 @app.route("/api/marker-sheet.pdf", methods=["GET"])
 def api_marker_sheet_pdf():
     family = str(request.args.get("family") or "").strip()
@@ -9173,12 +10220,15 @@ def main():
     print(f"[Backend] http://{display_host}:{selected_port}")
     print(f"[Camera] source: {source if source is not None else '(none)'}")
 
-    if not args.no_browser:
-        open_browser_when_ready(args.host, selected_port, kiosk=args.kiosk)
+    # The tunnel is started before any page can open, so a page that asks
+    # straight away sees "starting" and waits, never a "disabled" that is
+    # about to stop being true.
     if args.cloudflare_tunnel:
         start_quick_tunnel(selected_port)
     else:
         update_quick_tunnel_state(status="disabled", enabled=False)
+    if not args.no_browser:
+        open_browser_when_ready(args.host, selected_port, kiosk=args.kiosk)
 
     # Silence per-request access logs from the Flask dev server.
     logging.getLogger("werkzeug").setLevel(logging.ERROR)

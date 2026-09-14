@@ -18,11 +18,13 @@
     {
       "id": "education",
       "label": "Education",
+      "visible": false,
       "classes": ["school", "college", "university", "library", "kindergarten"]
     },
     {
       "id": "health",
       "label": "Health",
+      "visible": false,
       "classes": ["pharmacy", "doctors", "dentist", "hospital", "veterinary", "clinic"]
     },
     {

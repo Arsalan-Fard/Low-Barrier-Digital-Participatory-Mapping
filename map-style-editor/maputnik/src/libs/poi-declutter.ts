@@ -16,18 +16,14 @@ import type {
  * un-offset anchors, so a second pass reproduces the same expressions and the
  * change guard leaves the style alone.
  *
- * The category bucket layers and curated workshop POIs move; curated icons on
- * a tighter leash, because hand-picked places deserve the least distortion.
- * Curated labels live on their own variable-anchor layer, so their whole
- * anchor system shifts along via text-variable-anchor-offset. Transit markers
- * (bus, metro, air/rail) stay put -- infrastructure must stay geographically
- * true on a paper map -- but they still take part as immovable obstacles the
- * other icons shuffle around. Curated features get their ids from the
- * source's generateId; without it they degrade to immovable obstacles.
+ * The category bucket layers move. Transit markers (bus, metro, air/rail)
+ * stay put -- infrastructure must stay geographically true on a paper map --
+ * but they still take part as immovable obstacles the other icons shuffle
+ * around. So do the workshop schools: they are what the sheet is oriented by.
  */
 
 const MOVABLE_METADATA_KEY = "paper:poi-category";
-const CURATED_SOURCE = "curated-poi";
+const SCHOOL_SOURCE = "workshop-schools";
 
 // Fallback when neither sprite has the image yet (sprites load late).
 const DEFAULT_ICON_PX = 24;
@@ -37,9 +33,6 @@ const PASSES = 60;
 // An icon may travel at most this many of its own diameters. Past that the
 // map starts lying about where the place is; residual overlap is preferable.
 const MAX_SHIFT_DIAMETERS = 1.25;
-// Curated icons move just far enough to resolve a coincident pair; their
-// variable-anchor labels keep pointing at the true location.
-const CURATED_MAX_SHIFT_DIAMETERS = 0.5;
 // Below this the offset is noise and not worth a re-layout.
 const APPLY_THRESHOLD_PX = 0.3;
 // A view this crowded cannot be decluttered meaningfully.
@@ -62,17 +55,14 @@ function symbolLayer(layer: unknown): SymbolLayerSpecification | null {
   return candidate?.type === "symbol" ? candidate : null;
 }
 
-function isCuratedIconLayer(layer: SymbolLayerSpecification) {
-  return layer.source === CURATED_SOURCE && Boolean(layer.layout?.["icon-image"]);
-}
-
 function isMovableLayer(layer: SymbolLayerSpecification) {
   const metadata = layer.metadata as Record<string, unknown> | undefined;
-  return Boolean(metadata?.[MOVABLE_METADATA_KEY]) || isCuratedIconLayer(layer);
+  return Boolean(metadata?.[MOVABLE_METADATA_KEY]);
 }
 
 function isObstacleLayer(layer: SymbolLayerSpecification) {
   if (!layer.layout?.["icon-image"]) return false;
+  if (layer.source === SCHOOL_SOURCE) return true;
   return layer["source-layer"] === "poi" && !isMovableLayer(layer);
 }
 
@@ -110,11 +100,9 @@ function iconImageCandidates(
   feature: MapGeoJSONFeature,
 ): string[] {
   const image = layer.layout?.["icon-image"];
-  // Literal images (bus, the runtime metro marker) name themselves.
+  // Literal images (bus, the runtime metro marker, the school star) name
+  // themselves.
   if (typeof image === "string") return [image];
-  if (layer.source === CURATED_SOURCE) {
-    return [`curated:${String(feature.properties?.icon || "civic")}`];
-  }
   // The buckets' coalesce(curated:X, X) with X = subclass override or class.
   const subclass = String(feature.properties?.subclass || "");
   const name = subclass === "florist" || subclass === "furniture"
@@ -178,9 +166,6 @@ function collectNodes(map: Map, layers: SymbolLayerSpecification[]): Node[] | nu
     seen.add(key);
     const point = map.project([lng, lat]);
     const r = displayedIconPx(map, layer, feature) / 2 + PAD_PX;
-    const shiftDiameters = isCuratedIconLayer(layer)
-      ? CURATED_MAX_SHIFT_DIAMETERS
-      : MAX_SHIFT_DIAMETERS;
     nodes.push({
       layerId: layer.id,
       featureId: feature.id,
@@ -189,7 +174,7 @@ function collectNodes(map: Map, layers: SymbolLayerSpecification[]): Node[] | nu
       r,
       // A feature without an id cannot be addressed by the offset expression.
       movable: isMovableLayer(layer) && feature.id !== undefined,
-      cap: shiftDiameters * 2 * r,
+      cap: MAX_SHIFT_DIAMETERS * 2 * r,
       dx: 0,
       dy: 0,
     });
@@ -288,77 +273,6 @@ function setIfChanged(map: Map, layerId: string, name: string, value: unknown) {
 
 const round = (value: number) => Math.round(value * 100) / 100;
 
-/** MapLibre's text-radial-offset geometry in em space. The renderer's ±7px
- *  baseline shift is applied identically on the radial and the
- *  anchor-offset code paths, so it cancels and does not appear here. */
-function radialAnchorOffsetEm(anchor: string, radial: number): [number, number] {
-  const diagonal = radial / Math.SQRT2;
-  switch (anchor) {
-  case "top": return [0, radial];
-  case "bottom": return [0, -radial];
-  case "left": return [radial, 0];
-  case "right": return [-radial, 0];
-  case "top-left": return [diagonal, diagonal];
-  case "top-right": return [-diagonal, diagonal];
-  case "bottom-left": return [diagonal, -diagonal];
-  case "bottom-right": return [-diagonal, -diagonal];
-  default: return [0, 0];
-  }
-}
-
-function shiftedAnchorCollection(
-  anchors: string[], radial: number, dx: number, dy: number,
-): (string | [number, number])[] {
-  const collection: (string | [number, number])[] = [];
-  for (const anchor of anchors) {
-    const [x, y] = radialAnchorOffsetEm(anchor, radial);
-    collection.push(anchor, [round(x + dx), round(y + dy)]);
-  }
-  return collection;
-}
-
-/** Shift a curated label's whole variable-anchor system by its icon's
- *  displacement. text-variable-anchor-offset takes priority over the layer's
- *  untouched text-variable-anchor, and removing it restores the original
- *  behaviour, so undisplaced views stay byte-identical to the style. */
-function applyCuratedLabelOffsets(
-  map: Map,
-  layer: SymbolLayerSpecification,
-  displacedById: globalThis.Map<string | number, [number, number]>,
-) {
-  let anchors: unknown;
-  try {
-    anchors = map.getLayoutProperty(layer.id, "text-variable-anchor" as never);
-  } catch (_error) {
-    return false;
-  }
-  if (!Array.isArray(anchors) || !anchors.length) return false;
-  const radial = numericLayoutValue(map, layer.id, "text-radial-offset", 0);
-  const textSize = numericLayoutValue(map, layer.id, "text-size", 16) || 16;
-
-  const pairs = [...displacedById.entries()]
-    .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-  let value: unknown;
-  if (pairs.length) {
-    const expression: unknown[] = ["match", ["id"]];
-    for (const [id, [dx, dy]] of pairs) {
-      expression.push(id, ["literal", shiftedAnchorCollection(
-        anchors as string[], radial, dx / textSize, dy / textSize)]);
-    }
-    expression.push(["literal", shiftedAnchorCollection(anchors as string[], radial, 0, 0)]);
-    value = expression;
-  }
-  try {
-    const current = map.getLayoutProperty(layer.id, "text-variable-anchor-offset" as never);
-    if (current === undefined && value === undefined) return false;
-    if (JSON.stringify(current ?? null) === JSON.stringify(value ?? null)) return false;
-    map.setLayoutProperty(layer.id, "text-variable-anchor-offset" as never, value);
-    return true;
-  } catch (_error) {
-    return false;
-  }
-}
-
 /** One declutter pass. Returns true when layout properties changed, in which
  *  case the caller should wait for the next idle before capturing. */
 export function declutterPoiIcons(map: Map) {
@@ -408,8 +322,6 @@ export function declutterPoiIcons(map: Map) {
     ));
     changed = setIfChanged(map, layer.id, "icon-offset",
       offsetExpression(iconPairs, iconBase)) || changed;
-    // Curated icons carry no text of their own; their separate label layer is
-    // handled below via applyCuratedLabelOffsets.
     if (layer.layout?.["text-field"]) {
       const textPairs = pairs.map(([id, [dx, dy]]): [string | number, [number, number]] => (
         [id, [round(textBase[0] + dx / textSize), round(textBase[1] + dy / textSize)]]
@@ -417,22 +329,6 @@ export function declutterPoiIcons(map: Map) {
       changed = setIfChanged(map, layer.id, "text-offset",
         offsetExpression(textPairs, textBase)) || changed;
     }
-  }
-
-  // The curated labels live on their own layer; move each label's anchor
-  // system with its icon so the pair stays visually attached.
-  const curatedDisplaced = new globalThis.Map<string | number, [number, number]>();
-  for (const layer of movableLayers) {
-    if (!isCuratedIconLayer(layer)) continue;
-    for (const [id, shift] of displaced.get(layer.id) || []) {
-      curatedDisplaced.set(id, shift);
-    }
-  }
-  for (const layer of symbols) {
-    if (layer.source !== CURATED_SOURCE) continue;
-    if (layer.layout?.["icon-image"] || !layer.layout?.["text-field"]) continue;
-    if (!map.getLayer(layer.id)) continue;
-    changed = applyCuratedLabelOffsets(map, layer, curatedDisplaced) || changed;
   }
   return changed;
 }
