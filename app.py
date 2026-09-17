@@ -4390,34 +4390,41 @@ def _fit_reference_colors(reference, observed, valid):
     return np.clip(full_design @ coefficients, 0, 255), coefficients
 
 
-# Calibrated against the sticker stock actually used in the workshops, by
-# clustering the ink of a photographed sheet. The printed stickers are much
-# lighter than ink-pen equivalents: the yellow measured L=242 against this
-# table's former mustard at L=183, which put it 60 Lab units away and let it
-# drift to white. Cyan had no entry at all and matched "white" from 58 away.
+# Calibrated against the sticker stock and the two pens actually used in the
+# workshops, measured in the pipeline's colour-corrected space: sample a
+# rectified capture (see _extract_map_sheet_drawing's corrected_bgr), never the
+# raw photo, and never pick a colour by eye. The stock changed on 2026-09-16:
+# the questions are answered in blue, pink, red, yellow and green, "home" is a
+# gold star, black discs mark known places, and routes are drawn with a red
+# and a blue pen. Orange, cyan and purple went with the old stock; keeping
+# them only gave the blue sticker (36 from blue, 47 from cyan) and the gold
+# star a rival to drift to.
 DRAWING_COLOR_PALETTE = (
-    # Calibrated to the red marker, not to a saturated printer's red. Measured
-    # against the old #d3302f the marker sat 45 Lab units away but only 22 from
-    # pink, so the red path was filed as pink ink — and any pink sticker it ran
-    # under merged into it and was lost.
-    {"id": "red", "label": "Red", "color": "#eb6f73"},
-    {"id": "orange", "label": "Orange", "color": "#f59a4a"},
-    {"id": "yellow", "label": "Yellow", "color": "#f7ea55"},
-    {"id": "green", "label": "Green", "color": "#5ba24f"},
-    {"id": "cyan", "label": "Cyan", "color": "#4acfff"},
-    {"id": "blue", "label": "Blue", "color": "#3478d4"},
-    {"id": "purple", "label": "Purple", "color": "#8b58bd"},
-    # The replacement pink sticker stock (2026-09-02) is so pale (#ffb7e0,
-    # measured from a rectified capture) that putting it here as the matching
-    # target poisoned segmentation: pale glare discs that used to be filed as
-    # white surfaced as phantom pinks, components split along new seams (which
-    # moved centroids -- seen as drift), and the extra splitting cost time. So
-    # the SEGMENTATION target stays the old saturated pink via "match", the
-    # displayed colour is the real stock, and the pale discs themselves are
-    # re-labelled after detection in _vectorise_drawing, where changing a label
-    # cannot move or invent geometry.
-    {"id": "pink", "label": "Pink", "color": "#ffb7e0", "match": "#f05c8c"},
+    # One class for the red pen and the red sticker. The target sits nearer the
+    # pen (9 Lab units, against the sticker's 29): a route drifting into pink
+    # would be lost as a path, whereas a sticker only has to beat pink, which
+    # it does from 51 away.
+    {"id": "red", "label": "Red", "color": "#e5635b"},
+    {"id": "yellow", "label": "Yellow", "color": "#fff55a"},
+    {"id": "green", "label": "Green", "color": "#5bd58e"},
+    # The blue sticker measures #639ef6. Routes are drawn with a blue pen that
+    # photographs as neutral dark grey and is filed under blue by the path
+    # pass, not by colour. Shown a shade darker so a route stays legible.
+    {"id": "blue", "label": "Blue", "color": "#3b78e0", "match": "#639ef6"},
+    # The pink sticker stock is pale (#ffb4d6 measured). Putting that pale
+    # value here as the target poisoned segmentation: glare discs that used to
+    # be filed as white surfaced as phantom pinks, and components split along
+    # new seams (which moved centroids -- seen as drift). So the SEGMENTATION
+    # target stays a saturated pink via "match", the displayed colour is the
+    # real stock, and the pale discs themselves are re-labelled after detection
+    # in _vectorise_drawing, where changing a label cannot move or invent
+    # geometry.
+    {"id": "pink", "label": "Pink", "color": "#ffb4d6", "match": "#f05c8c"},
     {"id": "black", "label": "Black", "color": "#252525"},
+    # The metallic gold star ("home"). Its foil photographs as a dull khaki,
+    # #beaa79 measured, with brighter sheen that lands in white; segmentation
+    # folds the sheen back into the star rather than splitting it.
+    {"id": "gold", "label": "Gold", "color": "#d9a92a", "match": "#beaa79"},
     # White only ever reaches classification through the opaque-disc detector
     # below, since white ink on white paper has no colour difference to find.
     {"id": "white", "label": "White", "color": "#f0f0f0"},
@@ -4522,6 +4529,16 @@ def _segment_map_sheet_drawing_colors(alpha, corrected_bgr):
     named_limit = 58.0
     other_merge_limit = 28.0
 
+    def palette_index(wanted):
+        return next(
+            (index for index, item in enumerate(palette) if item["id"] == wanted),
+            None,
+        )
+
+    black_index = palette_index("black")
+    gold_index = palette_index("gold")
+    white_index = palette_index("white")
+
     def add_or_find_other(representative_bgr, representative_lab):
         for index in range(len(palette), len(classes)):
             distance = float(np.linalg.norm(classes[index]["lab"] - representative_lab))
@@ -4556,17 +4573,25 @@ def _segment_map_sheet_drawing_colors(alpha, corrected_bgr):
         distances = np.linalg.norm(
             core_labs[:, None, :] - named_labs[None, :, :], axis=2
         )
+        # Gold is yellowish by definition (b* +24 to +31 across the star's
+        # foil). The pale pink stock sits 48 from white and 54 from gold, near
+        # enough that some of its pixels tipped into gold and split the disc
+        # along a seam; a pixel that is not yellow at all cannot be gold.
+        if gold_index is not None:
+            distances[core_labs[:, 2] < 128.0 + 12.0, gold_index] = np.inf
         nearest = np.argmin(distances, axis=1)
         nearest_distance = distances[np.arange(len(nearest)), nearest]
         confident = nearest_distance <= named_limit
 
         # Dark, nearly neutral ink is reliably black even when its Lab distance
-        # is enlarged by paper glare or JPEG compression.
-        black_index = next(
-            index for index, item in enumerate(palette) if item["id"] == "black"
-        )
-        dark = (core_labs[:, 0] <= 108) & (
-            np.linalg.norm(core_labs[:, 1:] - 128.0, axis=1) <= 38
+        # is enlarged by paper glare or JPEG compression. The blue route pen
+        # photographs as a neutral mid grey as well (L 90-170, chroma 2
+        # measured), too far from every colour to be confident of anything; it
+        # is filed with the black discs here and handed to blue by the path
+        # pass, which is what knows it is a stroke and not a sticker.
+        chroma = np.linalg.norm(core_labs[:, 1:] - 128.0, axis=1)
+        dark = ((core_labs[:, 0] <= 108) & (chroma <= 38)) | (
+            (core_labs[:, 0] <= 190) & (chroma <= 14)
         )
         nearest[dark] = black_index
         confident[dark] = True
@@ -4580,6 +4605,18 @@ def _segment_map_sheet_drawing_colors(alpha, corrected_bgr):
         # reference to colour at all, so there is nothing left to protect.
         significant_minimum = max(10, int(round(len(core_labs) * 0.10)))
         significant = np.flatnonzero(counts >= significant_minimum)
+        # The star's foil throws highlights that read as white. Splitting it
+        # along them would break the one outline the star is recognised by, so
+        # wherever gold is present in earnest its highlights go with it. (A
+        # white disc is never placed touching the star; gold is only the star.)
+        if (
+            gold_index is not None and white_index is not None
+            and gold_index in significant and white_index in significant
+        ):
+            significant = significant[significant != white_index]
+            if len(significant) == 1:
+                label_map[component_mask] = gold_index
+                continue
 
         if len(significant) >= 2:
             # Two distinct colours meet here. Split every component
@@ -4591,6 +4628,17 @@ def _segment_map_sheet_drawing_colors(alpha, corrected_bgr):
                 axis=2,
             )
             split_labels = significant[np.argmin(split_distances, axis=1)]
+            # The same neutral rule as above, per pixel. Where the blue pen
+            # meets the red one their grey and red ink form one component, and
+            # by plain distance a mid grey lies nearer red (58) than black
+            # (83): the blue route was being handed to red at every junction,
+            # then dropped by the path pass as another pen's ink.
+            component_chroma = np.linalg.norm(component_labs[:, 1:] - 128.0, axis=1)
+            component_dark = (
+                (component_labs[:, 0] <= 108) & (component_chroma <= 38)
+            ) | ((component_labs[:, 0] <= 190) & (component_chroma <= 14))
+            if black_index is not None:
+                split_labels[component_dark] = black_index
             label_map[component_mask] = split_labels.astype(np.int16)
             continue
 
@@ -4627,15 +4675,16 @@ def _segment_map_sheet_drawing_colors(alpha, corrected_bgr):
             "_index": index,
         })
 
-    # Paths are only ever red or black, and are snapped to one of the two later.
-    # Both entries have to exist for that snap to have somewhere to land, even
-    # when no pixel was classified into them — a red path whose ink drifted into
-    # the pink bin still has to come out labelled red.
+    # Paths are only ever red or blue, and the path pass labels each route with
+    # its pen. Both entries have to exist for that to have somewhere to land,
+    # even when no pixel was classified into them: the blue pen's grey ink is
+    # filed here as black, and a faintly drawn red route may have no pixel above
+    # the sticker threshold at all.
     present = {item["id"] for item in public_classes}
-    # Pink joins red and black: the sticker pass re-labels pale warm discs into
-    # it after the fact, so the class has to exist even with zero ink pixels.
+    # Pink joins them: the sticker pass re-labels pale warm discs into it after
+    # the fact, so the class has to exist even with zero ink pixels.
     for index, item in enumerate(palette):
-        if item["id"] in ("red", "black", "pink") and item["id"] not in present:
+        if item["id"] in ("red", "blue", "pink") and item["id"] not in present:
             public_classes.append({
                 "id": item["id"],
                 "label": item["label"],
@@ -4668,9 +4717,30 @@ MAP_SHEET_RECTIFIED_MAX_PX = 2400
 MAP_SHEET_LUMINANCE_WEIGHT = 0.42
 MAP_SHEET_CHROMA_WEIGHT = 1.25
 
-# Printed sticker diameter as a fraction of the sheet width. Used as a size
-# prior when telling a filled disc apart from a pen stroke.
+# Printed sticker diameter as a fraction of the map's width. Used as a size
+# prior when telling a filled disc apart from a pen stroke. The stickers are
+# one physical stock on every sheet, so the prior is really a length, and the
+# fraction follows from how wide the printed map is: _map_sheet_sticker_fraction
+# reads that off the sheet record. This constant is the fallback for a record
+# saved before the print layout was recorded, and it was measured on those.
 MAP_SHEET_STICKER_DIAMETER_FRACTION = 0.019
+# The round stickers measure 11 mm as detected (91-94 px on a 288 mm map
+# rendered 2400 px wide, blur included). The triangles are cut to the same
+# circumscribed size; the gold star is about 1.4 times it, point to point.
+MAP_SHEET_STICKER_DIAMETER_MM = 11.0
+
+
+def _map_sheet_sticker_fraction(record):
+    """Sticker diameter as a fraction of the map width, from the print layout."""
+    frame = ((record or {}).get("print") or {}).get("mapFramePoints")
+    try:
+        width_points = float(frame[2])
+    except (TypeError, ValueError, IndexError):
+        return MAP_SHEET_STICKER_DIAMETER_FRACTION
+    if not math.isfinite(width_points) or width_points <= 0:
+        return MAP_SHEET_STICKER_DIAMETER_FRACTION
+    width_mm = width_points * 25.4 / 72.0
+    return min(0.12, max(0.002, MAP_SHEET_STICKER_DIAMETER_MM / width_mm))
 
 # Kinds a blob of ink can be, and the value each one is stamped with in the
 # per-pixel class mask the page uses to filter the overlay.
@@ -4820,26 +4890,87 @@ def _opaque_disc_mask(observed, predicted, valid, sticker_radius):
 # are not equally visible against the printed map.
 MAP_SHEET_PATH_THRESHOLD_RATIO = 0.62
 
+# Which colour classes each pen's ink may have been filed under by the colour
+# pass. Ink filed under any other named class is a sticker's, however close its
+# hue: a pale pink disc that fell below the sticker threshold, or one whose
+# outline detection broke, used to be traced as a red route.
+MAP_SHEET_PEN_CLASSES = {"red": ("red",), "blue": ("blue", "black")}
 
-def _path_ink_masks(corrected_bgr, score, valid, threshold, speckle_area):
-    """One mask per pen colour: the black paths, and the red paths.
 
-    Kept apart rather than merged. Where a red route and a black route run
-    alongside each other — which participants do constantly — a single combined
-    mask joins them into one blob, and whichever colour has fewer pixels loses
-    its identity to a majority vote. Traced separately, each is simply itself,
-    and no vote is needed at all.
-
-    Splitting also lets the threshold drop below the sticker-grade one: a path
-    is only ever black or red, so the extra sensitivity cannot pull in ink of
-    any other hue.
-    """
+def _ink_lab_polar(corrected_bgr):
+    """Lightness, chroma and hue (degrees) of every pixel, in OpenCV Lab."""
     lab = cv2.cvtColor(corrected_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
-    lightness = lab[:, :, 0]
     green_red = lab[:, :, 1] - 128.0
     blue_yellow = lab[:, :, 2] - 128.0
     chroma = np.sqrt(green_red * green_red + blue_yellow * blue_yellow)
     hue = (np.degrees(np.arctan2(blue_yellow, green_red)) + 360.0) % 360.0
+    return lab[:, :, 0], chroma, hue
+
+
+def _keep_connected_ink(alpha, speckle_area):
+    """Drop blobs under the speckle floor from a 0..255 mask, in place."""
+    binary = np.where(alpha > 0, 255, 0).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+    if count <= 1:
+        alpha[:] = 0
+        return alpha
+    keep = np.flatnonzero(stats[1:, cv2.CC_STAT_AREA] >= speckle_area) + 1
+    alpha[~np.isin(labels, keep)] = 0
+    return alpha
+
+
+# The gold star is metallic foil. Its dull side measures a khaki 46 weighted Lab
+# units from the paper and detects like any sticker; the side catching the
+# light climbs to L 215 and 24 from the paper, under the sticker threshold, so
+# half the star was missing and its three surviving points read as a shape
+# with three notches, not five. Foil is accepted at this fraction of the
+# threshold, on the same terms as the pens: only pixels in its own hue band.
+MAP_SHEET_FOIL_THRESHOLD_RATIO = 0.5
+
+
+def _foil_ink_mask(corrected_bgr, score, valid, threshold, speckle_area):
+    """Graded alpha for the gold foil's pale side, to union into the ink mask."""
+    lightness, chroma, hue = _ink_lab_polar(corrected_bgr)
+    foil_threshold = max(6.0, float(threshold) * MAP_SHEET_FOIL_THRESHOLD_RATIO)
+    # Gold measures hue 86-98 across the foil, chroma 15 on its brightest sheen
+    # and 30 on the dull side; the paper is chroma 0-2 and never enters.
+    golden = (
+        (chroma >= 10.0) & (hue >= 65.0) & (hue <= 115.0)
+        & (lightness >= 120.0) & (lightness <= 235.0) & (valid > 0)
+    )
+    graded = np.clip(
+        (score.astype(np.float32) - foil_threshold) * (255.0 / 18.0), 0, 255
+    ).astype(np.uint8)
+    graded[~golden] = 0
+    return _keep_connected_ink(graded, speckle_area)
+
+
+def _path_ink_masks(corrected_bgr, score, valid, threshold, speckle_area):
+    """One mask per pen colour: the red routes, and the blue routes.
+
+    Kept apart rather than merged. Where a red route and a blue route run
+    alongside each other -- which participants do constantly -- a single
+    combined mask joins them into one blob, and whichever colour has fewer
+    pixels loses its identity to a majority vote. Traced separately, each is
+    simply itself, and no vote is needed at all.
+
+    Splitting also lets the threshold drop below the sticker-grade one: a path
+    is only ever red or blue, so the extra sensitivity cannot pull in ink of
+    any other hue.
+
+    The red band is measured, not nominal: the red pen sits at hue 22-33 (its
+    10th to 90th percentiles in corrected space) and the red sticker at 41,
+    while the pink stock sits at 345-352. The old band reached round to 340 and
+    swept the pink stickers in as route.
+
+    The blue pen photographs as neutral grey -- L 90-170, chroma about 2, with
+    no blue cast left after colour correction -- so "blue" here is any dark,
+    near-neutral ink, plus anything with a genuine blue hue for the day a
+    brighter blue pen is handed out. No black pen is issued, so nothing is lost
+    by reading dark grey as the blue pen; the black stickers are claimed by the
+    sticker pass before any route is traced.
+    """
+    lightness, chroma, hue = _ink_lab_polar(corrected_bgr)
 
     path_threshold = max(6.0, float(threshold) * MAP_SHEET_PATH_THRESHOLD_RATIO)
     strong = (score.astype(np.float32) >= path_threshold) & (valid > 0)
@@ -4853,9 +4984,14 @@ def _path_ink_masks(corrected_bgr, score, valid, threshold, speckle_area):
         alpha[~np.isin(labels, keep)] = 0
         return alpha
 
+    neutral = (chroma < 26.0) & (lightness < 190.0)
+    bluish = (
+        (chroma >= 14.0) & (hue >= 220.0) & (hue <= 300.0) & (lightness < 215.0)
+    )
+    reddish = (chroma >= 26.0) & (hue >= 8.0) & (hue <= 60.0)
     return {
-        "black": cleaned((chroma < 26.0) & (lightness < 170.0)),
-        "red": cleaned((chroma >= 26.0) & ((hue >= 340.0) | (hue <= 45.0))),
+        "red": cleaned(reddish),
+        "blue": cleaned(neutral | bluish),
     }
 
 
@@ -4978,11 +5114,19 @@ def _extract_map_sheet_drawing(
     # badly: set for stickers it clips the faint end of every stroke.
     #
     # Paths get their own, lower threshold, made safe by the fact that only two
-    # pen colours exist. Requiring a pixel to be near-neutral dark or in the red
-    # band keeps the extra sensitivity from turning into map noise.
+    # pen colours exist. Requiring a pixel to be near-neutral dark, blue, or in
+    # the red band keeps the extra sensitivity from turning into map noise.
     path_masks = _path_ink_masks(
         corrected_bgr, score, valid, threshold, speckle_area
     )
+    # The gold star's pale side joins the ink here, so segmentation and the
+    # sticker pass see the whole star and not the three points its dull side
+    # amounts to. Graded like the rest of alpha, so its core is still its
+    # strongest pixels.
+    foil = _foil_ink_mask(corrected_bgr, score, valid, threshold, speckle_area)
+    foil_pixels = int(np.count_nonzero(foil))
+    if foil_pixels:
+        alpha = np.maximum(alpha, foil)
 
     info = {
         "width": output_width,
@@ -4993,6 +5137,7 @@ def _extract_map_sheet_drawing(
         "occludedPixels": int(np.count_nonzero(occluded)),
         "pathThreshold": round(max(6.0, threshold * MAP_SHEET_PATH_THRESHOLD_RATIO), 1),
         "pathPixels": {k: int(np.count_nonzero(v)) for k, v in path_masks.items()},
+        "foilPixels": foil_pixels,
     }
     return alpha, corrected_bgr, path_masks, info
 
@@ -5125,6 +5270,8 @@ def api_map_sheet_drawing():
         return jsonify({"ok": False, "error": "map_sheet_reference_unreadable"}), 500
     if reference is None:
         return jsonify({"ok": False, "error": "map_sheet_reference_unreadable"}), 500
+    if sticker_fraction is None:
+        sticker_fraction = _map_sheet_sticker_fraction(record)
     semantics = None
     try:
         alpha, corrected_bgr, path_masks, info = _extract_map_sheet_drawing(
@@ -5667,6 +5814,7 @@ def _component_metrics(component, sticker_diameter, minimum_branch=None):
 
     height, width = component.shape[:2]
     diagonal = math.hypot(width, height)
+    enclosing_radius = float(cv2.minEnclosingCircle(contour)[1])
 
     return {
         "area": area,
@@ -5686,6 +5834,8 @@ def _component_metrics(component, sticker_diameter, minimum_branch=None):
         "bboxMax": float(max(width, height)),
         "contour": contour,
         "stickerShape": _sticker_shape(contour, area),
+        "enclosingRadius": enclosing_radius,
+        "notches": _deep_notches(contour, enclosing_radius * 0.18),
         "skeleton": skeleton,
         "chains": chains,
         "longestChain": longest,
@@ -5693,21 +5843,38 @@ def _component_metrics(component, sticker_diameter, minimum_branch=None):
     }
 
 
+def _deep_notches(contour, minimum_depth):
+    """How many concavities at least `minimum_depth` deep the outline has."""
+    if len(contour) < 4:
+        return 0
+    try:
+        hull = cv2.convexHull(contour, returnPoints=False)
+        defects = cv2.convexityDefects(contour, hull)
+    except cv2.error:
+        # A self-touching outline has no monotonic hull; it is no star either.
+        return 0
+    if defects is None:
+        return 0
+    return int(np.count_nonzero(defects[:, 0, 3] / 256.0 >= minimum_depth))
+
+
 def _sticker_shape(contour, area):
     """Name a solid blob's shape, or return None if it is not a sticker shape.
 
-    The stickers are printed circles and triangles, so shape alone decides what
-    counts — colour cannot, because a path and a sticker may well be the same
-    colour. Comparing the blob's area against its minimum-area rectangle
-    separates the three cases without reference to anything else: a triangle
-    covers about half of that rectangle, a disc covers pi/4 of it, and a
-    rectangle covers nearly all of it.
+    The stickers are printed circles and triangles, and one gold star for
+    "home", so shape alone decides what counts -- colour cannot, because a path
+    and a sticker may well be the same colour. Three tests, in order: the star
+    by the deep notches between its points; a disc by how much of its outline
+    lies on its enclosing circle; a triangle by how much of its minimum
+    enclosing triangle it fills. Each is measured on the convex hull (the star
+    aside), because stickers are placed in overlapping clusters and a
+    neighbour's bite is filled back in by the hull.
 
-    The bands are measured, not derived. Smoothing the blob rounds a triangle's
-    corners and lifts it from a theoretical 0.50 to about 0.63, so the windows
-    sit where the real values fall: triangles 0.63, round stickers 0.82-0.86,
-    and ruled highlighter blocks 0.90-1.02, which no longer pass as stickers
-    however neatly they fill their own hull.
+    The bands are measured, not derived. The triangles on these sheets fill
+    0.90-0.97 of their enclosing triangle, a disc 0.61-0.67 and a ruled block
+    0.50, so the gate sits between; the old test compared the hull with its
+    enclosing circle instead, and a triangle whose corners the splitter had
+    rounded drifted out of that band into nothing.
     """
     # Measure the convex hull rather than the blob. Stickers are placed in
     # overlapping clusters, so many are only partly visible; what a neighbour
@@ -5724,6 +5891,23 @@ def _sticker_shape(contour, area):
     enclosing = math.pi * radius ** 2
     if enclosing <= 0 or radius <= 0:
         return None
+
+    # A star first. It is the one concave sticker, so the hull tests below,
+    # which see only its pentagonal outline, would call it a disc (a pentagon
+    # keeps 62% of its perimeter within the circle band). What nothing else on
+    # the sheet has is five notches cut deep between the points: 0.43 of the
+    # enclosing radius on a regular star, a little less once smoothing rounds
+    # the inner corners. A disc with a neighbour on it has one bite, a stroke
+    # crossing a disc makes two, and the count stays well short of four even
+    # when a point of the star is torn or hidden.
+    if (
+        4 <= _deep_notches(contour, radius * 0.18) <= 7
+        and 0.30 <= area / hull_area <= 0.80
+        # A regular pentagon fills 0.76 of its circle; a star short of one
+        # point measured 0.55. Anything long and thin sits under 0.45.
+        and hull_area / enclosing >= 0.45
+    ):
+        return "star"
 
     # Does the outline actually lie on a circle? A whole disc puts all of its
     # boundary on one, and a disc with a neighbour sitting on top still puts the
@@ -5754,48 +5938,96 @@ def _sticker_shape(contour, area):
     if on_circle >= 0.55:
         return "circle"
 
-    # Otherwise fall back on how much of that enclosing circle the outline
-    # fills. The values are fixed by geometry — a square covers 2/pi = 0.64, an
-    # equilateral triangle 0.41 — so a block lands above the triangle band and
-    # is rejected rather than being read as a sticker.
+    # Otherwise: a triangle fills almost all of its own minimum enclosing
+    # triangle, a disc only pi/(3*sqrt(3)) = 0.60 of one, and a square half.
+    # The measure survives rounded corners, which the enclosing-circle ratio
+    # used before did not. The circle band above keeps anything long and thin
+    # or nearly round out of here.
     filled = hull_area / enclosing
-    if 0.30 <= filled <= 0.56:
+    if not 0.30 <= filled <= 0.75:
+        return None
+    try:
+        triangle_area, _ = cv2.minEnclosingTriangle(polygon.reshape(-1, 1, 2))
+    except cv2.error:
+        return None
+    if triangle_area > 0 and hull_area / float(triangle_area) >= 0.78:
         return "triangle"
     return None
 
 
-def _classify_component(metrics, sticker_diameter):
+def _classify_component(metrics, sticker_diameter, touching_sticker=False):
     """Decide which kind of map feature a measured blob represents.
 
     Only two things are looked for: the drawn path, and the stickers placed on
-    it. Pen annotations are deliberately not classified — they are too thin to
-    separate from the printed map with any confidence, so anything that is not a
-    solid sticker-sized blob is treated as drawing.
+    it. Pen annotations are deliberately not classified -- they are too thin to
+    separate from the printed map with any confidence. Anything solid that is
+    not a recognisable sticker is left off the map rather than guessed at: on
+    these sheets a solid blob that is no sticker shape is a sticker whose
+    outline was lost, not a drawing.
+
+    `touching_sticker` says the blob abuts ink already claimed as a sticker,
+    which relaxes how much pen travel a route fragment must show: a route
+    running under a sticker leaves stubs either side of it that are short by
+    construction, and the bridge across the sticker needs both to survive.
     """
     sticker_radius = sticker_diameter / 2.0
+    shape = metrics["stickerShape"]
 
     # A sticker is a solid blob of about the printed size whose outline is a
-    # circle or a triangle. Both conditions are needed: convexity alone lets a
-    # ruled-in block through, and the printed stickers only come in those two
-    # shapes, so anything else solid is part of the drawing.
-    if (
+    # circle, a triangle or the star. Both conditions are needed: convexity
+    # alone lets a ruled-in block through, and the printed stickers only come
+    # in those shapes, so anything else solid is not a sticker.
+    if shape == "star":
+        # The one concave sticker: bigger than the discs (about 1.4 sticker
+        # diameters point to point) and filling only about half its hull, with
+        # a skeleton that runs out along five arms -- so the gates the convex
+        # stickers pass would throw it out.
+        if (
+            metrics["fill"] >= 0.30
+            and sticker_radius * 0.7 <= metrics["enclosingRadius"] <= sticker_radius * 2.6
+        ):
+            return "sticker"
+    elif (
         # How much of its own hull the blob fills. A whole sticker is near 1.0;
         # one with a neighbour sitting on it measured 0.63, so the old 0.80 gate
         # threw away exactly the crowded ones this is meant to recover. A stroke
-        # stays far below — the traced paths on these sheets sit around 0.15.
+        # stays far below -- the traced paths on these sheets sit around 0.15.
         metrics["fill"] >= 0.58
-        and metrics["stickerShape"] is not None
+        and shape is not None
         and metrics["inscribedRadius"] >= sticker_radius * 0.55
-        and metrics["elongation"] <= 8.0
+        # Thinning a disc leaves spurs wherever its edge is not perfectly
+        # round, and a whole disc measures 8.5-9 by this; a stroke is far
+        # longer than it is wide, in the tens and hundreds.
+        and metrics["elongation"] <= 12.0
+        # Two stickers of one colour touching make one blob whose hull passes
+        # every test above, as a triangle or a disc, with the seam between
+        # them cut in as a notch either side. One notch is a neighbour of
+        # another colour sitting on the sticker; two is two stickers, and the
+        # splitter below is what takes those apart.
+        and metrics["notches"] <= 1
     ):
         return "sticker"
 
+    # Solid and wide, yet no sticker shape: a sticker whose outline was lost --
+    # torn, half hidden, or fused with a neighbour the splitter could not part.
+    # A pen stroke is never this deep. Leaving it out beats exporting it as a
+    # route or an area, which is what the pink discs became when their shape
+    # test failed.
+    if metrics["inscribedRadius"] >= sticker_radius * 0.55 and metrics["fill"] >= 0.40:
+        return None
+
     # Anything that is not a sticker has to hold a deliberate amount of pen
-    # travel. A printed map icon that survives subtraction — a metro roundel, a
-    # pin — is a stubby ring a few pixels across, and used to fall through to
+    # travel. A printed map icon that survives subtraction -- a metro roundel, a
+    # pin -- is a stubby ring a few pixels across, and used to fall through to
     # "line" and land in the exported paths, where averaging many sheets would
     # quietly turn printed furniture into drawn routes.
-    if metrics["skeletonLength"] < sticker_diameter * 2.0:
+    minimum_travel = sticker_diameter * 2.0
+    if touching_sticker and not metrics["closedLoop"]:
+        # A route stub against a sticker is short by construction and is kept
+        # so the bridge across the sticker has both ends to join. A printed
+        # ring echoing next to a sticker stays out: it is closed, a stub is not.
+        minimum_travel = sticker_diameter * 0.6
+    if metrics["skeletonLength"] < minimum_travel:
         return None
 
     # A closed loop with empty paper inside is an area the participant ringed;
@@ -5811,6 +6043,50 @@ def _classify_component(metrics, sticker_diameter):
         return "line"
 
     return "area"
+
+
+def _split_touching_stickers(component, sticker_diameter, minimum_area):
+    """Part a one-colour blob into the stickers that make it up.
+
+    Two stickers of one colour placed touching or overlapping -- the circle and
+    the triangle answering the two poles of one question, say, or a disc put
+    down on a route drawn in the same pen -- arrive as one blob whose outline
+    is neither shape, and the colour split has nothing to work with. Each
+    sticker still has a solid core that no pen stroke has: the distance to the
+    blob's edge peaks near half a sticker radius inside it, while a stroke is
+    never more than a few pixels deep. Every pixel is handed to the nearest
+    such core, and the stroke tails that reach into a core's share are opened
+    away, leaving the sticker itself to be measured. Whatever is not then
+    claimed as a sticker stays in the blob for the path pass.
+    """
+    radius = sticker_diameter / 2.0
+    bridge = max(3, int(round(sticker_diameter * 0.12)) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bridge, bridge))
+    solid = cv2.morphologyEx(component, cv2.MORPH_CLOSE, kernel)
+    distance = cv2.distanceTransform(solid, cv2.DIST_L2, 5)
+    # Half a radius: a triangle's inradius is about half its circumradius, so
+    # this still finds a triangle's core, while a marker stroke -- a fifth of a
+    # sticker wide at most -- never reaches it.
+    cores = np.where(distance >= radius * 0.5, 0, 255).astype(np.uint8)
+    if not np.count_nonzero(cores == 0):
+        return []
+    _, nearest = cv2.distanceTransformWithLabels(
+        cores, cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_CCOMP
+    )
+    # Wider than either pen (the red felt tip is 14 px here, the blue 7), and
+    # well under the thinnest sticker: a triangle's inradius is about 33.
+    opening = max(3, int(round(radius * 0.35)) | 1)
+    open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (opening, opening))
+    pieces = []
+    for label in np.unique(nearest[cores == 0]):
+        piece = np.where(
+            (nearest == label) & (component > 0), 255, 0
+        ).astype(np.uint8)
+        piece = cv2.morphologyEx(piece, cv2.MORPH_OPEN, open_kernel)
+        if float(np.count_nonzero(piece)) < minimum_area:
+            continue
+        pieces.append(piece)
+    return pieces
 
 
 def _vectorise_drawing(
@@ -5832,12 +6108,14 @@ def _vectorise_drawing(
         sticker_diameter = MAP_SHEET_STICKER_DIAMETER_FRACTION * width
 
     resolution_scale = width / 1000.0
-    # The floor is a physical size, not a pixel count: a quarter of a sticker's
-    # area is a mark about 4mm across, and nobody draws smaller than that on
-    # purpose. A fixed pixel floor let every misregistered printed metro icon
-    # through as its own "area" feature.
+    # The floor is a physical size, not a pixel count: six percent of a
+    # sticker's area is a mark about 2.5mm across, and nobody draws smaller than
+    # that on purpose. A fixed pixel floor let every misregistered printed
+    # metro icon through as its own "area" feature. It stays well under a
+    # sticker's own size because a route cut by the stickers placed on it
+    # survives only as short pieces, and every piece has to reach the bridge.
     sticker_area = math.pi * (sticker_diameter / 2.0) ** 2
-    minimum_area = max(24.0 * resolution_scale * resolution_scale, sticker_area * 0.25)
+    minimum_area = max(24.0 * resolution_scale * resolution_scale, sticker_area * 0.06)
     minimum_branch = max(4.0, sticker_diameter * 0.45)
 
     # Stickers and paths want opposite treatment, so they get a pass each.
@@ -5879,6 +6157,12 @@ def _vectorise_drawing(
             min(255, int(color_class["index"]) + 1) if color_class else 0
         )
         region[..., 3][selected] = alpha[y0:y1, x0:x1][selected]
+        # The colour pass files the blue pen's grey ink under black; once the
+        # blob is known to be a route it is the pen's, so the colour overlay the
+        # page shows is repainted to match the vector drawn over it.
+        if kind == "line" and color_class is not None and segmentation is not None:
+            paint = segmentation["mask"][y0:y1, x0:x1]
+            paint[..., :3][selected] = _drawing_hex_to_bgr(color_class["color"])
 
     def base_properties(color_class, kind, metrics):
         properties = {
@@ -5963,13 +6247,33 @@ def _vectorise_drawing(
                 )
                 if metrics is None or metrics["area"] < minimum_area:
                     continue
-                if _classify_component(metrics, sticker_diameter) != "sticker":
+                if _classify_component(metrics, sticker_diameter) == "sticker":
+                    claimed[y0:y1, x0:x1] |= selected
+                    sticker_jobs.append((
+                        x0, y0, x1, y1, selected, component, metrics,
+                        resolve_sticker_class(item, selected, x0, y0, x1, y1),
+                    ))
                     continue
-                claimed[y0:y1, x0:x1] |= selected
-                sticker_jobs.append((
-                    x0, y0, x1, y1, selected, component, metrics,
-                    resolve_sticker_class(item, selected, x0, y0, x1, y1),
-                ))
+                # Not one sticker. It may be several of this colour touching --
+                # the circle and the triangle of one question, say -- or one
+                # put down on a route drawn in the same pen. Colour cannot part
+                # those; the solid core each sticker has can.
+                for piece in _split_touching_stickers(
+                    component, sticker_diameter, minimum_area
+                ):
+                    piece_metrics = _component_metrics(
+                        piece, sticker_diameter, minimum_branch
+                    )
+                    if piece_metrics is None or piece_metrics["area"] < minimum_area:
+                        continue
+                    if _classify_component(piece_metrics, sticker_diameter) != "sticker":
+                        continue
+                    piece_selected = piece > 0
+                    claimed[y0:y1, x0:x1] |= piece_selected
+                    sticker_jobs.append((
+                        x0, y0, x1, y1, piece_selected, piece, piece_metrics,
+                        resolve_sticker_class(item, piece_selected, x0, y0, x1, y1),
+                    ))
 
     # ---- pass two: paths over the ink no sticker claimed ---------------------
     # The path channel is detected at its own, lower threshold, so a thin or
@@ -5979,12 +6283,43 @@ def _vectorise_drawing(
     channels = path_masks or {}
     if not channels:
         channels = {None: np.where(ink, 255, 0).astype(np.uint8)}
+    # Ink the colour pass filed under another sticker colour is no pen's,
+    # however close its hue sits to the pen's band.
+    foreign_by_pen = {}
+    if label_map is not None:
+        for pen in channels:
+            allowed = MAP_SHEET_PEN_CLASSES.get(pen)
+            if allowed is None:
+                continue
+            foreign = np.zeros(label_map.shape, dtype=bool)
+            for index, item in class_by_index.items():
+                if item["named"] and item["id"] not in allowed:
+                    foreign |= label_map == index
+            # Opened so that a few pixels filed under another colour where two
+            # strokes cross -- blended ink is anybody's -- cannot sever a route.
+            # A sticker's worth of foreign ink is far wider and stays out.
+            speck = max(3, int(round(sticker_diameter * 0.1)) | 1)
+            foreign = cv2.morphologyEx(
+                foreign.astype(np.uint8), cv2.MORPH_OPEN,
+                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (speck, speck)),
+            ) > 0
+            foreign_by_pen[pen] = foreign
+    # Where a route runs under a sticker its stubs stop against the claimed
+    # disc; that contact is what tells them from stray short marks.
+    reach = max(3, int(round(sticker_diameter * 0.25)) | 1)
+    claimed_near = cv2.dilate(
+        claimed.astype(np.uint8),
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach)),
+    ) > 0
     path_jobs = []
     for pen, pen_mask in channels.items():
         pen_class = next(
             (item for item in class_by_index.values() if item["id"] == pen), None
         )
-        residual = np.where((pen_mask >= 24) & ~claimed, 255, 0).astype(np.uint8)
+        residual = (pen_mask >= 24) & ~claimed
+        if pen in foreign_by_pen:
+            residual &= ~foreign_by_pen[pen]
+        residual = np.where(residual, 255, 0).astype(np.uint8)
         for x0, y0, x1, y1, selected in components_of(residual):
             component = np.where(selected, 255, 0).astype(np.uint8)
             metrics = _component_metrics(component, sticker_diameter, minimum_branch)
@@ -5992,7 +6327,10 @@ def _vectorise_drawing(
             # against what actually survived rather than the raw blob.
             if metrics is None or metrics["area"] < minimum_area:
                 continue
-            kind = _classify_component(metrics, sticker_diameter)
+            kind = _classify_component(
+                metrics, sticker_diameter,
+                touching_sticker=bool(np.any(claimed_near[y0:y1, x0:x1] & selected)),
+            )
             if kind is None:        # not a deliberate mark; leave it off the map
                 continue
             path_jobs.append(
@@ -6107,7 +6445,7 @@ def _vectorise_drawing(
 
     # ---- rejoin and emit the routes -----------------------------------------
     # Bridging happens across the whole sheet and only between chains of the
-    # same pen colour, so a red route is never stapled onto a black one.
+    # same pen colour, so a red route is never stapled onto a blue one.
     by_colour = {}
     for entry in path_chains:
         key = (entry["color"] or {}).get("id", "ink")
@@ -6221,6 +6559,8 @@ def api_map_sheet_geojson():
         return jsonify({"ok": False, "error": "map_sheet_reference_unreadable"}), 500
     if reference is None:
         return jsonify({"ok": False, "error": "map_sheet_reference_unreadable"}), 500
+    if sticker_fraction is None:
+        sticker_fraction = _map_sheet_sticker_fraction(record)
     try:
         alpha, corrected_bgr, path_masks, info = _extract_map_sheet_drawing(
             frame, reference, paper_corners, normalized_rects, threshold,

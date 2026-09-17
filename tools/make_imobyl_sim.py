@@ -48,33 +48,37 @@ CURATED = ROOT / "data" / "custom_layers" / "poi-jean-baptiste-clement.geojson"
 # The page's hidden ink canvas; every manual x/y lives in this pixel space.
 INK_W, INK_H = 1000, 707
 
-# web/imobyl.html MANUAL_STICKER_COLORS / MANUAL_PATH_COLORS.
+# web/imobyl.html MANUAL_STICKER_COLORS / MANUAL_STAR_STICKER / MANUAL_PATH_COLORS
+# (and DRAWING_COLOR_PALETTE in app.py): keep all of them in step.
 STICKER_COLORS = {
-    "yellow": ("Yellow", "#f7ea55"),
-    "green": ("Green", "#5ba24f"),
-    "orange": ("Orange", "#f59a4a"),
-    "cyan": ("Cyan", "#4acfff"),
-    "pink": ("Pink", "#ffb7e0"),
+    "blue": ("Blue", "#3b78e0"),
+    "pink": ("Pink", "#ffb4d6"),
+    "red": ("Red", "#e5635b"),
+    "yellow": ("Yellow", "#fff55a"),
+    "green": ("Green", "#5bd58e"),
 }
-PATH_COLORS = {"black": ("Black", "#252525"), "red": ("Red", "#eb6f73")}
+# Where the participant lives: one gold star, outside the five questions.
+STAR_STICKER = ("Gold", "#d9a92a")
+ALL_STICKER_COLORS = dict(STICKER_COLORS, gold=STAR_STICKER)
+PATH_COLORS = {"red": ("Red", "#e5635b"), "blue": ("Blue", "#3b78e0")}
 
-# The workshop asks ten questions: every colour/shape pair is one of them, and
-# every participant answers all ten with one or two stickers.  Colour carries
-# the theme, shape splits it into the place itself (circle) and the thing on
-# the way to it or around it (triangle).  Placement per question is resolved in
-# place_sticker(); the file itself stores only colour and shape, so this table
-# is the assumption to edit when the real questions differ.
+# The workshop asks five questions, each with a positive pole (circle) and a
+# negative one (triangle), plus the gold star for home: eleven stickers per
+# participant, one or two of each.  The third field names the placement rule
+# in place_sticker(), which is a claim about where that kind of answer lands;
+# the file itself stores only colour and shape.
 STICKER_QUESTIONS = [
-    ("cyan", "circle", "home"),             # where I live
-    ("cyan", "triangle", "stop"),           # the stop I use on the way in
-    ("green", "circle", "liked"),           # a place I like
-    ("green", "triangle", "improve"),       # a place worth improving
-    ("orange", "circle", "avoided"),        # a place I avoid
-    ("orange", "triangle", "crossing"),     # a crossing that scares me
-    ("pink", "circle", "friends"),          # where I meet friends
-    ("pink", "triangle", "activity"),       # sport / club / activity
-    ("yellow", "circle", "errands"),        # everyday shopping
-    ("yellow", "triangle", "weekend"),      # where I go at the weekend
+    ("gold", "star", "home"),               # where I live
+    ("blue", "circle", "liked"),            # calm, restful: parks and squares
+    ("blue", "triangle", "avoided"),        # noisy, stressful: the junctions
+    ("pink", "circle", "stop"),             # safe: the familiar way in
+    ("pink", "triangle", "crossing"),       # dangerous: a crossing on the way
+    ("red", "circle", "activity"),          # interesting: clubs, sport, culture
+    ("red", "triangle", "improve"),         # uninteresting: places to fix
+    ("yellow", "circle", "friends"),        # busy with friends
+    ("yellow", "triangle", "weekend"),      # not frequented: further afield
+    ("green", "circle", "liked"),           # beautiful
+    ("green", "triangle", "improve"),       # ugly
 ]
 CATEGORIES = STICKER_QUESTIONS
 
@@ -364,7 +368,7 @@ def build(args):
             for _ in range(count):
                 lng, lat = place_sticker(rng, sheet, question, context)
                 x, y = sheet.to_pixel(lng, lat)
-                label, hex_colour = STICKER_COLORS[colour]
+                label, hex_colour = ALL_STICKER_COLORS[colour]
                 markers.append({
                     "x": round(x, 2), "y": round(y, 2), "shape": shape,
                     "color": hex_colour, "colorClass": colour,
@@ -388,7 +392,7 @@ def build(args):
         })
         walks.append(length)
 
-        # --- cycling (black): fewer students, and they go further ----------
+        # --- cycling (blue): fewer students, and they go further -----------
         if rng.random() < args.cycle_share:
             far = max(args.far_m, args.near_m * 2)
             dest_lng, dest_lat, _ = sample_point(
@@ -397,9 +401,9 @@ def build(args):
             points, length = draw_route(rng, sheet, ride_start,
                                         (dest_lng, dest_lat),
                                         step_m=70, bend=0.16)
-            label, hex_colour = PATH_COLORS["black"]
+            label, hex_colour = PATH_COLORS["blue"]
             strokes.append({
-                "points": points, "color": hex_colour, "colorClass": "black",
+                "points": points, "color": hex_colour, "colorClass": "blue",
                 "colorLabel": label, "width": rng.choice([5, 6, 6, 7, 8]),
                 "participant": participant, "mode": "cycling",
             })

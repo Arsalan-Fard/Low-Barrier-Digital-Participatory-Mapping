@@ -713,6 +713,7 @@
         <h2>Stickers</h2>
         <div class="tool-grid" id="toolStickerCircle" aria-label="Add round sticker"></div>
         <div class="tool-grid" id="toolStickerTriangle" aria-label="Add triangular sticker"></div>
+        <div class="tool-grid" id="toolStickerStar" aria-label="Add home star"></div>
       </section>
 
       <section>
@@ -1023,6 +1024,10 @@
       // panel has left it; and the panel must come home when the window
       // closes, or reopening would adopt a node that no longer exists.
       var panelWindows = {};        // panel id -> window
+      // The panel node itself, held while it lives in a popup. A closed
+      // window's document dies with it, so the node has to be reachable
+      // without going through the window to bring it back.
+      var panelElements = {};       // panel id -> element
 
       function panelDocuments() {
         var docs = [document];
@@ -1071,21 +1076,26 @@
 
       function closePanelWindow(id) {
         var win = panelWindows[id];
-        delete panelWindows[id];
+        // Home first, close second. Closing first killed the popup's document
+        // with the panel still inside it, and the panel was gone for good:
+        // that is how IMOBYL vanished whenever Fix by Hand opened.
+        reclaimPanel(id);
         if (win && !win.closed) win.close();
       }
 
       // Bring the panel back into this document, hidden, so the next open can
       // adopt it again from a known place.
       function reclaimPanel(id) {
-        var win = panelWindows[id];
         delete panelWindows[id];
-        var element = win && win.document
-          ? win.document.getElementById(id)
-          : null;
-        if (element) {
+        var element = panelElements[id] || null;
+        delete panelElements[id];
+        if (element && element.ownerDocument !== document) {
           element.classList.add('collapsed');
-          document.body.appendChild(document.adoptNode(element));
+          try {
+            document.body.appendChild(document.adoptNode(element));
+          } catch (_error) {
+            // The popup's document is already torn down; nothing to bring back.
+          }
         }
         var here = document.getElementById(id);
         if (here) here.classList.add('collapsed');
@@ -1117,6 +1127,7 @@
         win.document.body.appendChild(win.document.adoptNode(element));
         element.classList.remove('collapsed');
         panelWindows[id] = win;
+        panelElements[id] = element;
 
         // A closed window must not leave the panel stranded in a dead
         // document; pagehide fires on close, and the poll covers the cases
@@ -2532,13 +2543,15 @@
         $('sideDock').hidden = overlaid;
       }
 
+      // IMOBYL and Fix by Hand are independent: one lives in its own window
+      // (or on the right edge when popups are blocked), the other on the left
+      // edge, and correcting a sheet by hand while the panel shows what
+      // detection found is the normal way of working.
       function setPanel(open) {
         if (!open) {
           closePanelWindow('panel');
-          reclaimPanel('panel');
           return;
         }
-        setEditPanel(false);
         if (!openPanelWindow('panel', 'IMOBYL', 400)) {
           // Popup blocked: the overlay is still a working panel.
           var element = document.getElementById('panel');
@@ -2557,7 +2570,6 @@
           syncLaunchers();
           return;
         }
-        setPanel(false);
         if (element) element.classList.remove('collapsed');
         syncLaunchers();
       }
@@ -3624,9 +3636,9 @@
         try { style = map.getStyle(); } catch (_e) { return undefined; }
         var layers = (style && style.layers) || [];
         for (var i = 0; i < layers.length; i += 1) {
-          // The sticker marks are a symbol layer of ours sitting just under the
-          // labels; treating it as the floor would stack everything else on top
-          // of it and, on a re-raise, ask it to move before itself.
+          // The sticker marks are a symbol layer of ours, kept above the
+          // labels; it is never the floor, or every other overlay would be
+          // stacked on top of the names along with it.
           if (layers[i].type === 'symbol' && layers[i].id !== STICKER_MARK_LAYER) {
             return layers[i].id;
           }
@@ -4013,7 +4025,8 @@
             stickerById[marker.colorClass] = {
               id: marker.colorClass, label: marker.colorLabel, color: marker.color,
               count: 1, circle: marker.shape === 'circle' ? 1 : 0,
-              triangle: marker.shape === 'triangle' ? 1 : 0
+              triangle: marker.shape === 'triangle' ? 1 : 0,
+              star: marker.shape === 'star' ? 1 : 0
             };
           } else {
             running.count += 1;
@@ -4030,12 +4043,14 @@
             if (!running) {
               stickerById[item.id] = {
                 id: item.id, label: item.label, color: item.color,
-                count: item.count, circle: item.circle || 0, triangle: item.triangle || 0
+                count: item.count, circle: item.circle || 0, triangle: item.triangle || 0,
+                star: item.star || 0
               };
             } else {
               running.count += item.count;
               running.circle += item.circle || 0;
               running.triangle += item.triangle || 0;
+              running.star = (running.star || 0) + (item.star || 0);
             }
           });
         });
@@ -5338,6 +5353,16 @@
       // there are a dozen such paths. Wrapping the ink keeps the two in step
       // without threading a call through all of them.
       function paintReference(reference) {
+        // A sheet that exists only through hand edits has never been through
+        // paintDrawingMask, which is what puts a sheet's canvas on the map. Its
+        // strokes were being painted into a canvas nothing was showing, so on
+        // a map with no photo the pen looked like it did not work at all.
+        try {
+          if (reference && reference.corners && reference.corners.length === 4
+              && !map.getSource(reference.sourceId)) {
+            ensureReferenceLayer(reference);
+          }
+        } catch (_error) { /* mid style swap: reAddInkLayer brings it back */ }
         paintReferenceInk(reference);
         refreshStickerMarks();
         refreshManualPins();
@@ -5528,6 +5553,68 @@
       // instead of burying it.
       var STICKER_MARK_SOURCE = 'sticker-marks';
       var STICKER_MARK_LAYER = 'sticker-marks-layer';
+      // Screen pixels, the same at every zoom. Doubled from 23 so a mark reads
+      // from across the table now that it sits over the street names.
+      var STICKER_MARK_SIZE = 46;
+
+      // The home star is drawn as an image rather than a glyph: the label font
+      // has no star in it. One image per colour, named after the colour so the
+      // map can ask for it by id when a style swap has dropped it.
+      var STAR_IMAGE_PREFIX = 'sticker-star-';
+      var stickerStarImagesHooked = false;
+
+      function starImageId(colour) {
+        return STAR_IMAGE_PREFIX + String(colour || '').replace('#', '').toLowerCase();
+      }
+
+      function starImageColour(id) {
+        if (typeof id !== 'string' || id.indexOf(STAR_IMAGE_PREFIX) !== 0) return null;
+        var hex = id.slice(STAR_IMAGE_PREFIX.length);
+        return /^[0-9a-f]{6}$/.test(hex) ? '#' + hex : null;
+      }
+
+      // A five-point star `size` CSS pixels across, drawn at twice the density
+      // so it stays crisp, with the white halo and dark rim the other marks
+      // carry so it reads over pale ground and over the tilted close-up alike.
+      function starImage(colour, size) {
+        var scale = 2, px = size * scale, canvas = document.createElement('canvas');
+        canvas.width = px; canvas.height = px;
+        var ctx = canvas.getContext('2d');
+        // Halo and rim grow with the star, so a big one is not left with a
+        // hairline round it.
+        var halo = Math.max(3.4, size * 0.13) * scale;
+        var rim = Math.max(1.2, size * 0.05) * scale;
+        var cx = px / 2, cy = px / 2, outer = px / 2 - halo / 2 - scale, inner = outer * 0.45;
+        ctx.beginPath();
+        for (var i = 0; i < 10; i += 1) {
+          var angle = -Math.PI / 2 + i * Math.PI / 5;
+          var radius = i % 2 === 0 ? outer : inner;
+          ctx.lineTo(cx + radius * Math.cos(angle), cy + radius * Math.sin(angle));
+        }
+        ctx.closePath();
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+        ctx.lineWidth = halo;
+        ctx.stroke();
+        ctx.fillStyle = colour;
+        ctx.fill();
+        ctx.strokeStyle = '#111';
+        ctx.lineWidth = rim;
+        ctx.stroke();
+        return { width: px, height: px, data: ctx.getImageData(0, 0, px, px).data };
+      }
+
+      function hookStarImages(target) {
+        target.on('styleimagemissing', function (event) {
+          var colour = starImageColour(event && event.id);
+          if (!colour) return;
+          try {
+            target.addImage(event.id, starImage(colour, Math.round(STICKER_MARK_SIZE * 0.95)),
+              { pixelRatio: 2 });
+          }
+          catch (_error) { /* already added by a racing request */ }
+        });
+      }
 
       function stickerMarkFeatures() {
         var features = [];
@@ -5546,7 +5633,8 @@
               geometry: { type: 'Point', coordinates: lngLat },
               properties: {
                 colour: marker.color,
-                mark: marker.shape === 'circle' ? '+' : '−'
+                mark: marker.shape === 'star' ? '' : stickerMark(marker.shape),
+                icon: marker.shape === 'star' ? starImageId(marker.color) : ''
               }
             });
           }
@@ -5558,12 +5646,14 @@
         return features;
       }
 
-      // Above the ink and the heatmap, below the street names -- the same
-      // storey the sheets themselves sit on.
+      // On top of everything, the street names included. A sticker is one
+      // person's answer about one spot, and a label drawn across it hides the
+      // very thing the map is being read for. The routes and the heat stay
+      // under the names, where sixty of them cannot bury a street.
       function raiseStickerMarks() {
         if (!map.getLayer(STICKER_MARK_LAYER)) return;
-        try { map.moveLayer(STICKER_MARK_LAYER, labelFloorId()); }
-        catch (_error) { try { map.moveLayer(STICKER_MARK_LAYER); } catch (_ignored) {} }
+        try { map.moveLayer(STICKER_MARK_LAYER); }
+        catch (_error) { /* mid style swap: the next paint retries */ }
       }
 
       function refreshStickerMarks() {
@@ -5578,6 +5668,10 @@
           try { map.addSource(STICKER_MARK_SOURCE, { type: 'geojson', data: data }); }
           catch (_error) { return; }
         }
+        if (!stickerStarImagesHooked) {
+          stickerStarImagesHooked = true;
+          hookStarImages(map);
+        }
         if (!map.getLayer(STICKER_MARK_LAYER)) {
           addLayerUnderLabels({
             id: STICKER_MARK_LAYER,
@@ -5585,12 +5679,17 @@
             source: STICKER_MARK_SOURCE,
             layout: {
               'text-field': ['get', 'mark'],
+              // The home star; an empty id draws no icon at all.
+              'icon-image': ['get', 'icon'],
+              'icon-size': 1,
+              'icon-allow-overlap': true,
+              'icon-ignore-placement': true,
               'text-font': ['Noto Sans Bold'],
               // One size in screen pixels, at every zoom. A mark is one
               // person's answer, not an area, so it has no size on the ground
               // to represent: it should read the same close in as far out, and
               // the map is what grows underneath it.
-              'text-size': 23,
+              'text-size': STICKER_MARK_SIZE,
               // Every mark is a person's answer, so none of them is dropped
               // for colliding with another.
               'text-allow-overlap': true,
@@ -5601,7 +5700,7 @@
               // The white underlay the canvas version painted by hand: it is
               // what keeps a yellow mark readable over pale ground.
               'text-halo-color': 'rgba(255,255,255,0.92)',
-              'text-halo-width': 1.7
+              'text-halo-width': 2.6
             }
           });
         }
@@ -5906,10 +6005,13 @@
             if (!entry) {
               entry = byColour[marker.colorClass] = {
                 id: marker.colorClass, label: marker.colorLabel,
-                color: marker.color, plus: 0, minus: 0, points: []
+                color: marker.color, plus: 0, minus: 0, star: 0, points: []
               };
             }
-            var sign = marker.shape === 'circle' ? 'plus' : 'minus';
+            // The home star answers no question: it is shown on the close-up
+            // but never counts towards a surface's plus or minus.
+            var sign = marker.shape === 'star' ? 'star'
+              : marker.shape === 'circle' ? 'plus' : 'minus';
             entry[sign] += 1;
             entry.points.push({
               lng: c[0][0] + spanLng * u,
@@ -6067,7 +6169,7 @@
       // the most negative, the most contested. Read the way the colours
       // themselves are -- blue and red on which sign is ahead, purple on the
       function bivFeatures(entry, settings) {
-        var points = entry.points;
+        var points = entry.points.filter(function (point) { return point.sign !== 'star'; });
         if (!points.length) return { type: 'FeatureCollection', features: [] };
         var size = Math.max(10, settings.binMetres) / Math.sqrt(3);
         var frame = bivFrame(points[0].lng, points[0].lat);
@@ -6400,6 +6502,18 @@
       // without the green minuses coming with it.
       function stickerKey(colorClass, shape) { return colorClass + ':' + shape; }
 
+      var STICKER_SHAPES = ['circle', 'triangle', 'star'];
+
+      // The mark a sticker is drawn as: + for a circle, − for a triangle, and
+      // a star for the gold "home" star.
+      function stickerMark(shape) {
+        return shape === 'circle' ? '+' : shape === 'star' ? '★' : '−';
+      }
+
+      function stickerShapeWord(shape) {
+        return shape === 'circle' ? 'round' : shape === 'star' ? 'star' : 'triangular';
+      }
+
       function stickerAllowed(marker) {
         return enabledStickerColors.has(stickerKey(marker.colorClass, marker.shape));
       }
@@ -6412,7 +6526,7 @@
 
         var combos = [];
         lastStickerColors.forEach(function (item) {
-          ['circle', 'triangle'].forEach(function (shape) {
+          STICKER_SHAPES.forEach(function (shape) {
             var total = Number(item[shape] || 0);
             if (total > 0) {
               combos.push({
@@ -6440,7 +6554,7 @@
           return;
         }
         combos.forEach(function (combo) {
-          var shapeWord = combo.shape === 'circle' ? 'round' : 'triangular';
+          var shapeWord = stickerShapeWord(combo.shape);
           var chip = document.createElement('label');
           chip.className = 'color-chip';
           chip.title = combo.count + ' ' + shapeWord + ' ' +
@@ -6465,7 +6579,7 @@
           // − for triangular.
           var sign = document.createElement('span');
           sign.className = 'sign';
-          sign.textContent = combo.shape === 'circle' ? '+' : '–';
+          sign.textContent = stickerMark(combo.shape);
           var text = document.createElement('span');
           text.textContent = combo.label + ' ' + combo.count;
           chip.appendChild(checkbox);
@@ -6661,26 +6775,31 @@
       // export next to what was found automatically.
       //
       // The five sticker colours below are the palette the backend classifies
-      // into; black and red are the two colours a path is ever drawn in.
+      // into (DRAWING_COLOR_PALETTE in app.py; keep the two in step), plus the
+      // gold star for "home"; red and blue are the two pens a path is ever
+      // drawn with. Black discs mark places the participant knows and are
+      // detected, but not offered as a hand tool.
       // `question` is what the colour asked on the workshop sheet, written as
       // "positive // negative". A slideshow scene puts the whole question up;
       // the transport button under it carries the positive half alone, which
       // is enough to name the view without a line of prose on a button.
       var MANUAL_STICKER_COLORS = [
-        { id: 'yellow', label: 'Yellow', color: '#f7ea55',
-          question: 'Lieu de sociabilité // lieu de non-regroupement' },
-        { id: 'green', label: 'Green', color: '#5ba24f',
-          question: 'Lieu esthétique // inesthétique' },
-        { id: 'orange', label: 'Orange', color: '#f59a4a',
-          question: 'Intéressant // inintéressant '},
-        { id: 'cyan', label: 'Cyan', color: '#4acfff',
-          question: 'Calme et tranquille // bruyant et stressant' },
-        { id: 'pink', label: 'Pink', color: '#ffb7e0',
-          question: 'Sécurisant // dangereux' }
+        { id: 'blue', label: 'Blue', color: '#3b78e0',
+          question: 'Calme ou reposant // Bruyant ou stressant' },
+        { id: 'pink', label: 'Pink', color: '#ffb4d6',
+          question: 'Sécurisant // Dangereux' },
+        { id: 'red', label: 'Red', color: '#e5635b',
+          question: 'Intéressant // Inintéressant' },
+        { id: 'yellow', label: 'Yellow', color: '#fff55a',
+          question: 'Fréquenté avec tes amis // Non-fréquenté' },
+        { id: 'green', label: 'Green', color: '#5bd58e',
+          question: 'Beau // Laid' }
       ];
+      // Where the participant lives: one gold star, no question attached.
+      var MANUAL_STAR_STICKER = { id: 'gold', label: 'Gold', color: '#d9a92a' };
       var MANUAL_PATH_COLORS = [
-        { id: 'black', label: 'Black', color: '#252525' },
-        { id: 'red', label: 'Red', color: '#eb6f73' }
+        { id: 'red', label: 'Red', color: '#e5635b' },
+        { id: 'blue', label: 'Blue', color: '#3b78e0' }
       ];
 
       var activeTool = null;      // { kind:'sticker'|'path'|'eraser', ... }
@@ -6780,6 +6899,11 @@
 
       function stickerGlyph(color, shape) {
         var stroke = 'stroke="' + color + '" stroke-width="4" stroke-linecap="round"';
+        if (shape === 'star') {
+          return '<svg width="20" height="20" viewBox="0 0 20 20">' +
+            '<polygon points="10,1.5 12.2,6.9 18.1,7.4 13.6,11.2 15,16.9 10,13.8 5,16.9 6.4,11.2 1.9,7.4 7.8,6.9" ' +
+            'fill="' + color + '" stroke="#111" stroke-width="1" stroke-linejoin="round" /></svg>';
+        }
         var bars = shape === 'circle'
           ? '<line x1="10" y1="4" x2="10" y2="16" ' + stroke + ' />'
           : '';
@@ -6811,6 +6935,18 @@
           }
         );
       });
+
+      buildToolButton(
+        $('toolStickerStar'), 'star-' + MANUAL_STAR_STICKER.id, 'Gold star: home',
+        stickerGlyph(MANUAL_STAR_STICKER.color, 'star'),
+        function () {
+          return {
+            key: 'star-' + MANUAL_STAR_STICKER.id, kind: 'sticker', shape: 'star',
+            color: MANUAL_STAR_STICKER.color, colorClass: MANUAL_STAR_STICKER.id,
+            colorLabel: MANUAL_STAR_STICKER.label, label: 'Gold star: home'
+          };
+        }
+      );
 
       MANUAL_PATH_COLORS.forEach(function (entry) {
         buildToolButton(
@@ -7025,7 +7161,7 @@
         (previous || []).forEach(function (item) {
           byId[item.id] = {
             id: item.id, label: item.label, color: item.color,
-            count: 0, circle: 0, triangle: 0
+            count: 0, circle: 0, triangle: 0, star: 0
           };
         });
         markers.forEach(function (marker) {
@@ -7033,7 +7169,7 @@
           if (!entry) {
             entry = {
               id: marker.colorClass, label: marker.colorLabel || marker.colorClass,
-              color: marker.color, count: 0, circle: 0, triangle: 0
+              color: marker.color, count: 0, circle: 0, triangle: 0, star: 0
             };
             byId[marker.colorClass] = entry;
           }
@@ -7111,15 +7247,26 @@
         }
         event.preventDefault();
         var point = lngLatToSheetPixel(target, event.lngLat);
-        if (!point) return;
+        if (!point) {
+          setStatus($('editStatus'), 'Click inside the map area of ' + sheetLabel(target.id) + '.', 'err');
+          return;
+        }
         if (activeTool.kind === 'sticker') {
           manualStore(target).markers.push({
             x: point.x, y: point.y, shape: activeTool.shape,
             color: activeTool.color, colorClass: activeTool.colorClass,
             colorLabel: activeTool.colorLabel, manual: true
           });
-          paintReference(target);
+          // The marks are painted through the legend's filters, so the legend
+          // has to be armed first: it is what switches the "sticker" kind on
+          // (nothing has it on before the first result) and what lists this
+          // colour and shape. Painting first left the first sticker of a
+          // colour invisible until the next repaint, which read as the click
+          // having done nothing. And a sticker just placed by hand is wanted
+          // on screen even if its chip had been unticked earlier.
+          enabledStickerColors.add(stickerKey(activeTool.colorClass, activeTool.shape));
           refreshLegends();
+          paintReference(target);
           refreshStickerHeatmap();
           setStatus($('editStatus'), 'Added a ' + activeTool.label.toLowerCase() + '.', 'ok');
           return;
@@ -7172,8 +7319,8 @@
         if (!drawingStroke) return;
         var target = drawingStroke.reference;
         drawingStroke = null;
-        paintReference(target);
         refreshLegends();
+        paintReference(target);
         refreshStickerHeatmap();
         setStatus($('editStatus'), 'Edit saved on map ' + target.id + '.', 'ok');
       }
@@ -7861,6 +8008,62 @@
           .catch(function () { pwNote('Pas d\u2019image de rue ici'); });
       }
 
+      // OUTDOOR keeps Google's own indoor collections out of a search, but not
+      // the 360-degree photos people upload of a bar or a hall: Google files
+      // those as outdoor whenever it cannot tell, and one of them at the kerb
+      // is exactly what a probe finds first. Google's own street imagery is
+      // the only kind that is street-level by construction, and it is told
+      // apart by its panorama id -- 22 characters, where a contributed photo
+      // carries a long "CAoS..." id -- and by its copyright line naming Google.
+      function pwOfficialPano(data) {
+        var pano = data && data.location ? String(data.location.pano || '') : '';
+        if (pano.length !== 22) return false;
+        var copyright = String(data.copyright || '');
+        return !copyright || /google/i.test(copyright);
+      }
+
+      // The nearest panorama, official imagery only. When the closest thing
+      // is somebody's interior the search cannot be told to skip it, so the
+      // same question is asked a step away in four directions and the closest
+      // official answer wins. Nothing official within reach resolves to null.
+      function pwFindStreet(maps, at, radius) {
+        var service = new maps.StreetViewService();
+        function ask(point) {
+          return new Promise(function (resolve) {
+            service.getPanorama({
+              location: { lat: point.lat, lng: point.lng }, radius: radius,
+              source: maps.StreetViewSource.OUTDOOR
+            }, function (data, status) {
+              resolve(status === 'OK' && data && data.location && data.location.pano ? data : null);
+            });
+          });
+        }
+        return ask(at).then(function (data) {
+          if (data && pwOfficialPano(data)) return data;
+          var step = radius * 0.6;
+          var dLat = step / 111320;
+          var dLng = step / (111320 * Math.cos(at.lat * Math.PI / 180));
+          var around = [
+            { lng: at.lng, lat: at.lat + dLat }, { lng: at.lng + dLng, lat: at.lat },
+            { lng: at.lng, lat: at.lat - dLat }, { lng: at.lng - dLng, lat: at.lat }
+          ];
+          return Promise.all(around.map(ask)).then(function (found) {
+            var best = null, bestAway = Infinity;
+            found.forEach(function (item) {
+              if (!item || !pwOfficialPano(item)) return;
+              var loc = item.location.latLng;
+              var where = loc
+                ? { lng: typeof loc.lng === 'function' ? loc.lng() : loc.lng,
+                    lat: typeof loc.lat === 'function' ? loc.lat() : loc.lat }
+                : null;
+              var away = where ? pwMetres(at, where) : radius;
+              if (away < bestAway) { best = item; bestAway = away; }
+            });
+            return best;
+          });
+        });
+      }
+
       // Asks before showing: dropping a panorama on a spot with no imagery
       // renders Google's grey "no imagery" screen, which reads as a broken
       // window rather than as an honest absence.
@@ -7877,14 +8080,9 @@
             pwAsking = false;
             return pwMapillary(at);
           }
-          var service = new maps.StreetViewService();
-          var ask = {
-            location: { lat: at.lat, lng: at.lng }, radius: PW_SEARCH_M,
-            source: maps.StreetViewSource.OUTDOOR
-          };
-          service.getPanorama(ask, function (data, status) {
+          pwFindStreet(maps, at, PW_SEARCH_M).then(function (data) {
             pwAsking = false;
-            if (status !== 'OK' || !data || !data.location || !data.location.pano) {
+            if (!data) {
               pwMapillary(at);
               return;
             }
@@ -7907,6 +8105,9 @@
             pwPano.setPov({ heading: heading, pitch: 0 });
             pwShowMode('pano');
             pwCaption(data.location.shortDescription || data.location.description || '');
+          }).catch(function () {
+            pwAsking = false;
+            pwMapillary(at);
           });
         });
       }
@@ -7973,6 +8174,8 @@
                 if (status !== 'OK' || !data || !data.location || !data.location.pano) {
                   return resolve(null);
                 }
+                // Somebody's interior is not "another view of this hexagon".
+                if (!pwOfficialPano(data)) return resolve(null);
                 var loc = data.location.latLng;
                 var at2 = loc
                   ? { lng: typeof loc.lng === 'function' ? loc.lng() : loc.lng,
@@ -8519,6 +8722,17 @@
               }
             });
           }
+          if (!zwMap.getLayer('zw-sticker-star')) {
+            zwMap.addLayer({
+              id: 'zw-sticker-star', type: 'symbol', source: ZW_STICKER_SOURCE,
+              filter: ['==', ['get', 'sign'], 'star'],
+              layout: {
+                'icon-image': ['concat', 'zw-star-', ['get', 'id']],
+                'icon-size': 1, 'icon-allow-overlap': true,
+                'icon-ignore-placement': true, 'icon-pitch-alignment': 'map'
+              }
+            });
+          }
         } catch (_error) { /* mid style swap: the next style.load retries */ }
       }
 
@@ -8536,6 +8750,12 @@
             try {
               if (!zwMap.hasImage(image)) {
                 zwMap.addImage(image, zwTriangleImage(entry.color), { pixelRatio: 2 });
+              }
+            } catch (_error) { /* the circles still draw */ }
+            var star = 'zw-star-' + entry.id;
+            try {
+              if (entry.star && !zwMap.hasImage(star)) {
+                zwMap.addImage(star, starImage(entry.color, 18), { pixelRatio: 2 });
               }
             } catch (_error) { /* the circles still draw */ }
             entry.points.forEach(function (point) {
@@ -8602,7 +8822,8 @@
           var xy = frame.toMetres(point.lng, point.lat);
           var at = bivHexAt(xy[0], xy[1], size);
           if (at[0] !== cell[0] || at[1] !== cell[1]) return;
-          if (point.sign === 'plus') plus += 1; else minus += 1;
+          if (point.sign === 'plus') plus += 1;
+          else if (point.sign === 'minus') minus += 1;
         });
         var ring = bivHexRing(cell[0], cell[1], size, frame);
         var cx = 0, cy = 0;
