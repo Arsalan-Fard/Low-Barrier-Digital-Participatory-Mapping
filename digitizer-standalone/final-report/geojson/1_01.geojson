@@ -1,0 +1,438 @@
+{
+    "type": "FeatureCollection",
+    "properties": {
+        "mapId": "1",
+        "runId": "1_01",
+        "questionnaire": {
+            "transport": {
+                "marche": "empty",
+                "velo": "empty",
+                "trottinette": "empty",
+                "moto_scooter": "empty",
+                "bus": "checked",
+                "tram": "checked",
+                "metro": "checked",
+                "train": "checked",
+                "rer": "empty",
+                "voiture": "empty",
+                "autre": "empty"
+            },
+            "transport_other": ""
+        },
+        "comments": []
+    },
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 1,
+                "shape": "circle",
+                "color": "#262626",
+                "colorLabel": "Black",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.33252843,
+                    48.83424614
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 2,
+                "shape": "star",
+                "color": "#d9a92a",
+                "colorLabel": "Gold",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.31924069,
+                    48.83315885
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 3,
+                "shape": "circle",
+                "color": "#262626",
+                "colorLabel": "Black",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.31406236,
+                    48.83173478
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 4,
+                "shape": "circle",
+                "color": "#262626",
+                "colorLabel": "Black",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.32989866,
+                    48.83117065
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 5,
+                "shape": "circle",
+                "color": "#262626",
+                "colorLabel": "Black",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.32215279,
+                    48.8294333
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 6,
+                "shape": "circle",
+                "color": "#d93a2f",
+                "colorLabel": "Red",
+                "confidence": 0.993,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.32533584,
+                    48.82834501
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 7,
+                "shape": "circle",
+                "color": "#e8508a",
+                "colorLabel": "Pink",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.32535026,
+                    48.8280557
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 8,
+                "shape": "triangle",
+                "color": "#2e9e4f",
+                "colorLabel": "Green",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.32540566,
+                    48.8282011
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 9,
+                "shape": "circle",
+                "color": "#262626",
+                "colorLabel": "Black",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.32695089,
+                    48.82792229
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 10,
+                "shape": "circle",
+                "color": "#262626",
+                "colorLabel": "Black",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.3183808,
+                    48.82518009
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 11,
+                "shape": "circle",
+                "color": "#262626",
+                "colorLabel": "Black",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.32569103,
+                    48.82375403
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 12,
+                "shape": "circle",
+                "color": "#d93a2f",
+                "colorLabel": "Red",
+                "confidence": 0.93,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.31441072,
+                    48.8234917
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 13,
+                "shape": "circle",
+                "color": "#262626",
+                "colorLabel": "Black",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.32315157,
+                    48.82332631
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 14,
+                "shape": "star",
+                "color": "#d9a92a",
+                "colorLabel": "Gold",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.32620408,
+                    48.82187876
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 15,
+                "shape": "circle",
+                "color": "#262626",
+                "colorLabel": "Black",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.32567357,
+                    48.82132012
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 16,
+                "shape": "circle",
+                "color": "#f2c919",
+                "colorLabel": "Yellow",
+                "confidence": 1.0,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.32722866,
+                    48.82061858
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "sticker",
+                "id": 17,
+                "shape": "circle",
+                "color": "#d93a2f",
+                "colorLabel": "Red",
+                "confidence": 0.964,
+                "source": "auto"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    2.33091869,
+                    48.81989206
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "kind": "line",
+                "color": "#e0301e",
+                "colorLabel": "Red felt pen"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        2.32587318,
+                        48.82801223
+                    ],
+                    [
+                        2.32601131,
+                        48.82808918
+                    ],
+                    [
+                        2.32637257,
+                        48.82796326
+                    ],
+                    [
+                        2.32681883,
+                        48.82762049
+                    ],
+                    [
+                        2.32674445,
+                        48.8275925
+                    ],
+                    [
+                        2.32640444,
+                        48.82667611
+                    ],
+                    [
+                        2.32631944,
+                        48.82602553
+                    ],
+                    [
+                        2.32623444,
+                        48.82589962
+                    ],
+                    [
+                        2.32614943,
+                        48.8254659
+                    ],
+                    [
+                        2.32593693,
+                        48.82494125
+                    ],
+                    [
+                        2.32585193,
+                        48.82452152
+                    ],
+                    [
+                        2.3257138,
+                        48.82411579
+                    ],
+                    [
+                        2.3257563,
+                        48.82405283
+                    ],
+                    [
+                        2.32569255,
+                        48.82344423
+                    ],
+                    [
+                        2.32557567,
+                        48.82339526
+                    ],
+                    [
+                        2.32545879,
+                        48.82277967
+                    ],
+                    [
+                        2.32524628,
+                        48.8221221
+                    ],
+                    [
+                        2.32523566,
+                        48.82200318
+                    ],
+                    [
+                        2.32528878,
+                        48.82192623
+                    ]
+                ]
+            }
+        }
+    ]
+}

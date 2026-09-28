@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Digitizer</title>
+  <!-- Relative URLs only: the page is served at /digitizer/ by the workshop app
+       and at / by `python -m digitizer serve`. -->
+  <link rel="stylesheet" href="static/review.css">
+</head>
+<body data-home="">
+  <header class="bar">
+    <a id="homeLink" class="home" href="/home" hidden title="Back to the main menu">&lsaquo; Menu</a>
+    <h1>Digitizer</h1>
+    <label class="run-picker">Sheet
+      <select id="runSelect" aria-label="Digitised sheet"></select>
+    </label>
+    <button id="newRunButton" class="primary" type="button">New sheet</button>
+    <span class="sep"></span>
+    <div class="tools" role="toolbar" aria-label="Map tools">
+      <button type="button" data-mode="select" class="mode active" title="Select and inspect (S)">Select</button>
+      <button type="button" data-mode="sticker" class="mode" title="Click the map where a sticker was missed (A)">Add sticker</button>
+      <button type="button" data-mode="route" class="mode" title="Click points along a missed route, double-click to finish (R)">Draw route</button>
+      <span class="sep"></span>
+      <button type="button" id="fitButton" title="Show the whole map or page (F)">Fit</button>
+      <label class="inline">Overlay <input id="overlayOpacity" type="range" min="0" max="100" value="80"></label>
+      <label class="inline" title="Also show pen lines too short to be a route (under 25 mm on paper): ticks, crosses, arrows, underlines. Hidden by default; a short stroke that really is part of a route can be turned into one.">
+        <input id="showMarks" type="checkbox"> Short strokes</label>
+    </div>
+    <span id="runStatus" class="status" role="status"></span>
+  </header>
+
+  <main class="layout">
+    <section class="viewer-wrap" aria-label="Map">
+      <div id="viewer" class="viewer">
+        <svg id="map" xmlns="http://www.w3.org/2000/svg">
+          <image id="mapImage" x="0" y="0"></image>
+          <g id="routesLayer"></g>
+          <g id="stickersLayer"></g>
+          <g id="draftLayer"></g>
+        </svg>
+        <div id="empty" class="empty">No sheet yet. Use <b>New sheet</b> to digitise a photo.</div>
+      </div>
+      <!-- The Answers tab shows the photographed checkbox side here instead of the map. -->
+      <div id="docs" class="docs" hidden></div>
+    </section>
+
+    <aside class="side">
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="check" class="tab active">To check <span id="checkCount" class="count"></span></button>
+        <button role="tab" data-tab="stickers" class="tab">Stickers</button>
+        <button role="tab" data-tab="routes" class="tab">Routes</button>
+        <button role="tab" data-tab="answers" class="tab">Answers</button>
+        <button role="tab" data-tab="export" class="tab">Export</button>
+      </nav>
+      <div class="tab-body">
+        <div data-panel="check" class="panel active"><ul id="checkList" class="items"></ul></div>
+        <div data-panel="stickers" class="panel"><ul id="stickerList" class="items"></ul></div>
+        <div data-panel="routes" class="panel"><ul id="routeList" class="items"></ul></div>
+        <div data-panel="answers" class="panel" id="answersPanel"></div>
+        <div data-panel="export" class="panel" id="exportPanel"></div>
+      </div>
+      <section id="inspector" class="inspector" aria-live="polite"></section>
+    </aside>
+  </main>
+
+  <dialog id="newRunDialog">
+    <form id="newRunForm" method="dialog">
+      <h2>Digitise a sheet</h2>
+      <label>Map ID <input name="mapId" required placeholder="e.g. 2"></label>
+      <label>Sheet number <small>(optional — next free number if empty)</small> <input name="sheetNumber" inputmode="numeric" placeholder="e.g. 5"></label>
+      <label>Map photo <input name="mapPhoto" type="file" accept="image/*" required></label>
+      <label>Session <input name="session" value="default"></label>
+      <label class="check"><input name="vlm" type="checkbox" checked> Read the questionnaire checkboxes with the VLM</label>
+      <p class="hint" id="vlmHint">Takes about a minute on the laptop GPU with the VLM, about 20 s without.</p>
+      <div class="actions">
+        <button type="button" id="cancelNewRun">Cancel</button>
+        <button type="submit" class="primary" id="submitNewRun">Start</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="static/review.js"></script>
+</body>
+</html>

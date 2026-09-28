@@ -1,58 +1,33 @@
 (function () {
   function createAnnotationPlacement(options) {
     var map = options.map;
-    // Fired when an annotation is finalized (Enter / Place / external commit)
-    // with the source tag id. Lets the caller propagate the placement back to
-    // a paired phone controller so its textarea closes in sync.
-    var onPlaced = typeof options.onPlaced === 'function' ? options.onPlaced : function () {};
     var moveThresholdPx = Number(options.moveThresholdPx || 14);
     var lostHoldMs = Number(options.lostHoldMs || 500);
     var rearmThresholdPx = Number(options.rearmThresholdPx || Math.max(moveThresholdPx, 18));
-    var projectLngLatToPx = typeof options.projectLngLatToPx === 'function'
-      ? options.projectLngLatToPx
-      : function (lng, lat) {
-        var point = map.project([lng, lat]);
-        return { x: Number(point.x), y: Number(point.y) };
-      };
+    var projectLngLatToPx = options.projectLngLatToPx;
+    var distanceSq = window.CompactUtil.distanceSq;
 
     var enabled = false;
-    // Map of tagId → active entry. Each entry: { sourceTagId, editIndex, inputEl,
-    // marker, boxEl, angleDeg, lng, lat, tagSizePx, lastSeenMs }.
-    var activeByTagId = {};
-    var placed = []; // [{ tagId, text, lng, lat, angleDeg, marker, step }]
+    var activeByTagId = {}; // tagId -> the open textbox of that tag
+    var placed = [];
     var lastPlacedPxByTag = {};
     var currentStep = 0;
     var visibleSteps = null;
-    var recolorByStep = null;
-
-    var distanceSq = window.CompactUtil.distanceSq;   // shared helper (src/util.js)
 
     function parsePoint(raw) {
-      if (!raw) return null;
       var lng = Number(raw.lng);
       var lat = Number(raw.lat);
       if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
       var angleDeg = Number(raw.angleDeg);
-      if (!Number.isFinite(angleDeg)) angleDeg = 0;
-      var tagSizePx = Number(raw.tagSizePx) || 28;
-      return {
-        lng: lng,
-        lat: lat,
-        angleDeg: angleDeg,
-        tagSizePx: tagSizePx
-      };
+      return { lng: lng, lat: lat, angleDeg: Number.isFinite(angleDeg) ? angleDeg : 0 };
     }
 
     function setBoxRotation(boxEl, angleDeg) {
-      if (!boxEl || !boxEl.style) return;
-      boxEl.style.transform = 'rotate(' + String(Number(angleDeg) + 180) + 'deg)';
+      boxEl.style.transform = 'rotate(' + (angleDeg + 180) + 'deg)';
     }
 
     function tagAccentColor(tagId) {
-      var assignments = window.CompactTagAssignments;
-      if (!assignments || typeof assignments.getDrawColor !== 'function') return null;
-      var color = assignments.getDrawColor(tagId);
-      return color ? String(color) : null;
+      return window.CompactTagAssignments.getDrawColor(tagId);
     }
 
     function textColorForBackground(hex) {
@@ -68,68 +43,27 @@
       return luma < 0.5 ? '#ffffff' : '#111111';
     }
 
-    function focusInput(inputEl) {
-      if (!inputEl) return;
-      try {
-        inputEl.focus({ preventScroll: true });
-      } catch (_err) {
-        try { inputEl.focus(); } catch (_err2) {}
-      }
-    }
-
-    function activeKeysSnapshot() {
-      var keys = [];
-      for (var k in activeByTagId) {
-        if (Object.prototype.hasOwnProperty.call(activeByTagId, k)) keys.push(k);
-      }
-      return keys;
-    }
-
     function removeActiveForTag(tagId) {
       var key = String(tagId);
       var entry = activeByTagId[key];
       if (!entry) return;
-      if (entry.marker) entry.marker.remove();
+      entry.marker.remove();
       delete activeByTagId[key];
     }
 
     function removeAllActive() {
-      var keys = activeKeysSnapshot();
-      for (var i = 0; i < keys.length; i++) removeActiveForTag(keys[i]);
-    }
-
-    function setInputValue(inputEl, nextValue) {
-      if (!inputEl) return;
-      var value = String(nextValue || '');
-      if (inputEl.value === value) return;
-      var selectionStart = inputEl.selectionStart;
-      var selectionEnd = inputEl.selectionEnd;
-      inputEl.value = value;
-      if (typeof inputEl.setSelectionRange === 'function' &&
-          Number.isFinite(selectionStart) && Number.isFinite(selectionEnd)) {
-        try {
-          var maxLen = inputEl.value.length;
-          inputEl.setSelectionRange(
-            Math.min(selectionStart, maxLen),
-            Math.min(selectionEnd, maxLen)
-          );
-        } catch (_err) {}
-      }
-      resizeAnnotationInput(inputEl);
+      Object.keys(activeByTagId).forEach(removeActiveForTag);
     }
 
     function resizeAnnotationInput(inputEl) {
-      if (!inputEl || !inputEl.style) return;
       var text = String(inputEl.value || inputEl.placeholder || '');
       var px = Math.max(160, Math.min(520, (text.length + 2) * 12 + 32));
-      inputEl.style.width = String(px) + 'px';
+      inputEl.style.width = px + 'px';
     }
 
-    // Drop the font size as text gets longer so the chip stays compact on a
-    // transparent map background. Bucketed (not continuous) so chips don't
-    // visually jitter while the user is editing the text live.
-    function fontSizePxForAnnotation(rawText) {
-      var len = String(rawText || '').length;
+    // Bucketed, so a chip does not jitter in size while its text is edited live.
+    function fontSizePxForAnnotation(text) {
+      var len = text.length;
       if (len <= 30) return 20;
       if (len <= 60) return 16;
       if (len <= 120) return 14;
@@ -137,23 +71,16 @@
     }
 
     function applyAnnotationTextStyling(el, text) {
-      if (!el) return;
-      var rotor = el.querySelector('.tag-annotation-chip__rotor');
-      var textEl = el.querySelector('.tag-annotation-chip__text');
-      if (textEl) textEl.textContent = String(text || '');
-      if (rotor) rotor.style.fontSize = String(fontSizePxForAnnotation(text)) + 'px';
-      el.title = String(text || '');
+      el.querySelector('.tag-annotation-chip__text').textContent = text;
+      el.querySelector('.tag-annotation-chip__rotor').style.fontSize = fontSizePxForAnnotation(text) + 'px';
+      el.title = text;
     }
 
     function updatePlacedMarker(item) {
-      if (!item || !item.marker) return;
       item.marker.setLngLat([item.lng, item.lat]);
-      var el = item.marker.getElement ? item.marker.getElement() : null;
-      if (el) {
-        applyAnnotationTextStyling(el, String(item.text || ''));
-        var rotor = el.querySelector('.tag-annotation-chip__rotor');
-        setBoxRotation(rotor || el, Number(item.angleDeg || 0));
-      }
+      var el = item.marker.getElement();
+      applyAnnotationTextStyling(el, item.text);
+      setBoxRotation(el.querySelector('.tag-annotation-chip__rotor'), item.angleDeg);
     }
 
     function createPlacedAnnotationEl(text) {
@@ -173,72 +100,49 @@
       var key = String(tagId);
       var entry = activeByTagId[key];
       if (!entry) return false;
-      var text = String(entry.inputEl.value || '').trim();
+      var text = String(entry.inputEl.value || '').trim().slice(0, 220);
       if (!text) return false;
-      if (text.length > 220) text = text.slice(0, 220);
 
-      if (Number.isInteger(entry.editIndex) && entry.editIndex >= 0) {
+      if (entry.editIndex !== null) {
         var existing = placed[entry.editIndex];
         if (!existing) return false;
         existing.text = text;
         existing.angleDeg = Number(entry.angleDeg || existing.angleDeg || 0);
         updatePlacedMarker(existing);
-        var editSourceTagId = entry.sourceTagId;
-        removeActiveForTag(key);
-        onPlaced(editSourceTagId);
-        return true;
+      } else {
+        // Like the live textbox, the chip's bottom centre sits on the tag.
+        var el = createPlacedAnnotationEl(text);
+        setBoxRotation(el.querySelector('.tag-annotation-chip__rotor'), entry.angleDeg);
+        var marker = new mapboxgl.Marker({ element: el, anchor: 'bottom', offset: [0, 0] })
+          .setLngLat([entry.lng, entry.lat])
+          .addTo(map);
+        var sourcePx = projectLngLatToPx(entry.lng, entry.lat);
+        lastPlacedPxByTag[entry.sourceTagId] = { x: sourcePx.x, y: sourcePx.y };
+        var item = {
+          tagId: entry.sourceTagId,
+          text: text,
+          lng: entry.lng,
+          lat: entry.lat,
+          angleDeg: entry.angleDeg,
+          marker: marker,
+          step: currentStep
+        };
+        applyItemAppearance(item);
+        placed.push(item);
       }
-
-      var lng = Number(entry.lng);
-      var lat = Number(entry.lat);
-      if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
-        var markerLngLat = entry.marker.getLngLat();
-        lng = Number(markerLngLat.lng);
-        lat = Number(markerLngLat.lat);
-      }
-      // Placed chip shares the same anchor rule as the live textbox:
-      // center-bottom of the element sits on the detected tag point.
-      var placedLngLat = [lng, lat];
-      var el = createPlacedAnnotationEl(text);
-      var rotor = el.querySelector('.tag-annotation-chip__rotor');
-      setBoxRotation(rotor || el, Number(entry.angleDeg || 0));
-
-      var placedMarker = new mapboxgl.Marker({ element: el, anchor: 'bottom', offset: [0, 0] })
-        .setLngLat(placedLngLat)
-        .addTo(map);
-
-      var sourcePx = projectLngLatToPx(lng, lat);
-      lastPlacedPxByTag[String(entry.sourceTagId)] = { x: sourcePx.x, y: sourcePx.y };
-      var stepForItem = Number(currentStep) || 0;
-      var item = {
-        tagId: String(entry.sourceTagId),
-        text: text,
-        lng: Number(placedLngLat[0]),
-        lat: Number(placedLngLat[1]),
-        angleDeg: Number(entry.angleDeg || 0),
-        marker: placedMarker,
-        step: stepForItem
-      };
-      applyItemAppearance(item);
-      placed.push(item);
-
-      var newSourceTagId = entry.sourceTagId;
       removeActiveForTag(key);
-      onPlaced(newSourceTagId);
       return true;
     }
 
-    function shouldArm(tagId, point) {
-      var last = lastPlacedPxByTag[String(tagId)];
+    function shouldArm(key, point) {
+      var last = lastPlacedPxByTag[key];
       if (!last) return true;
-      var px = projectLngLatToPx(point.lng, point.lat);
-      return distanceSq(last, px) >= (rearmThresholdPx * rearmThresholdPx);
+      return distanceSq(last, projectLngLatToPx(point.lng, point.lat)) >= (rearmThresholdPx * rearmThresholdPx);
     }
 
-    function createActive(tagId, point, nowMs, initialText, editIndex, markerLngLatOverride) {
+    function createActive(tagId, point, nowMs, initialText, editIndex) {
       var key = String(tagId);
-      // If one already exists for this tag, remove it first.
-      if (activeByTagId[key]) removeActiveForTag(key);
+      removeActiveForTag(key);
 
       var wrap = document.createElement('div');
       wrap.className = 'tag-annotation-live';
@@ -262,16 +166,14 @@
       }
       resizeAnnotationInput(input);
       box.appendChild(input);
-      setBoxRotation(box, Number(point.angleDeg || 0));
-      // Center-bottom of the textbox sits on the detected tag point.
-      // No sideways offset — the tag is visually under the textarea's bottom edge.
-      var markerLngLat = markerLngLatOverride || [Number(point.lng), Number(point.lat)];
+      setBoxRotation(box, point.angleDeg);
 
+      // The textbox's bottom centre sits on the tag.
       var marker = new mapboxgl.Marker({ element: wrap, anchor: 'bottom', offset: [0, 0] })
-        .setLngLat(markerLngLat)
+        .setLngLat([point.lng, point.lat])
         .addTo(map);
 
-      var entry = {
+      activeByTagId[key] = {
         sourceTagId: key,
         marker: marker,
         lng: point.lng,
@@ -279,11 +181,9 @@
         inputEl: input,
         boxEl: box,
         editIndex: Number.isInteger(editIndex) ? editIndex : null,
-        angleDeg: Number(point.angleDeg || 0),
-        tagSizePx: Number(point.tagSizePx || 28),
+        angleDeg: point.angleDeg,
         lastSeenMs: nowMs
       };
-      activeByTagId[key] = entry;
 
       input.addEventListener('input', function () {
         resizeAnnotationInput(input);
@@ -300,16 +200,13 @@
           removeActiveForTag(key);
           return;
         }
-        // Don't let global shortcuts fire while typing.
+        // Keep the page's keyboard shortcuts from firing while typing.
         e.stopPropagation();
       });
 
-      // Focus the most recently created input. Other inputs retain their own
-      // state — if the user had focus elsewhere, they keep it (we don't steal).
+      // Focus the newest textbox, unless another has replaced it meanwhile.
       setTimeout(function () {
-        if (activeByTagId[key] && activeByTagId[key].inputEl === input) {
-          focusInput(input);
-        }
+        if (activeByTagId[key] && activeByTagId[key].inputEl === input) input.focus({ preventScroll: true });
       }, 0);
     }
 
@@ -317,73 +214,23 @@
       var item = placed[index];
       if (!item) return null;
       var key = String(sourceTagId);
-      var existingEntry = activeByTagId[key];
-
-      if (existingEntry &&
-          Number.isInteger(existingEntry.editIndex) &&
-          existingEntry.editIndex === index) {
-        existingEntry.lastSeenMs = Number(nowMs) || Date.now();
-        existingEntry.lng = Number(item.lng);
-        existingEntry.lat = Number(item.lat);
-        existingEntry.angleDeg = Number(item.angleDeg || 0);
-        existingEntry.marker.setLngLat([item.lng, item.lat]);
-        setBoxRotation(existingEntry.boxEl, existingEntry.angleDeg);
-        return {
-          index: index,
-          tagId: String(item.tagId || sourceTagId),
-          text: String(item.text || ''),
-          lng: Number(item.lng),
-          lat: Number(item.lat)
-        };
+      var entry = activeByTagId[key];
+      if (entry && entry.editIndex === index) {
+        entry.lastSeenMs = Number(nowMs) || Date.now();
+        entry.lng = item.lng;
+        entry.lat = item.lat;
+        entry.angleDeg = Number(item.angleDeg || 0);
+        entry.marker.setLngLat([item.lng, item.lat]);
+        setBoxRotation(entry.boxEl, entry.angleDeg);
+      } else {
+        createActive(key, { lng: item.lng, lat: item.lat, angleDeg: Number(item.angleDeg || 0) }, nowMs, item.text, index);
       }
-
-      // Replace only this tag's active entry (others keep typing).
-      removeActiveForTag(key);
-      createActive(
-        sourceTagId,
-        {
-          lng: Number(item.lng),
-          lat: Number(item.lat),
-          angleDeg: Number(item.angleDeg || 0),
-          tagSizePx: 28
-        },
-        nowMs,
-        item.text || '',
-        index,
-        [Number(item.lng), Number(item.lat)]
-      );
-      return {
-        index: index,
-        tagId: String(item.tagId || sourceTagId),
-        text: String(item.text || ''),
-        lng: Number(item.lng),
-        lat: Number(item.lat)
-      };
+      return { index: index, tagId: item.tagId, text: item.text, lng: item.lng, lat: item.lat };
     }
 
-    function syncExternalText(sourceTagId, text) {
-      var entry = activeByTagId[String(sourceTagId)];
-      if (!entry) return false;
-      setInputValue(entry.inputEl, String(text || ''));
-      return true;
-    }
-
-    function commitExternal(sourceTagId) {
-      var key = String(sourceTagId);
-      if (!activeByTagId[key]) return false;
-      return placeActiveForTag(key);
-    }
-
-    // Commit every active textarea that has text. Used before saving so
-    // in-progress annotations (not yet confirmed with Enter / Place) still
-    // land in the exported GeoJSON.
+    // Saving places every textbox that holds text, so notes not yet confirmed are kept.
     function commitAllActive() {
-      var keys = activeKeysSnapshot();
-      var placedCount = 0;
-      for (var i = 0; i < keys.length; i++) {
-        if (placeActiveForTag(keys[i])) placedCount++;
-      }
-      return placedCount;
+      Object.keys(activeByTagId).forEach(placeActiveForTag);
     }
 
     function setEnabled(nextEnabled) {
@@ -395,249 +242,79 @@
       if (typeof maybeEnabled === 'boolean') setEnabled(maybeEnabled);
       if (!enabled) return;
 
-      var points = pointsByTagId || {};
-
-      // Per-tag: track each tag independently. Spawn an active for any tag
-      // whose point we see (and it's armed + not already active). Refresh
-      // position for any already-active tag we see this frame.
-      var seenThisFrame = {};
-      for (var key in points) {
-        if (!Object.prototype.hasOwnProperty.call(points, key)) continue;
-        var parsed = parsePoint(points[key]);
+      var seen = {};
+      for (var key in pointsByTagId) {
+        var parsed = parsePoint(pointsByTagId[key]);
         if (!parsed) continue;
-        seenThisFrame[String(key)] = parsed;
-
-        var entry = activeByTagId[String(key)];
-        if (entry) {
-          // Don't move in edit mode (we're editing an existing placed marker).
-          if (Number.isInteger(entry.editIndex) && entry.editIndex >= 0) {
-            entry.lastSeenMs = nowMs;
-            continue;
-          }
-          entry.lastSeenMs = nowMs;
-          entry.lng = parsed.lng;
-          entry.lat = parsed.lat;
-          entry.angleDeg = Number(parsed.angleDeg || 0);
-          entry.tagSizePx = Number(parsed.tagSizePx || 28);
-          setBoxRotation(entry.boxEl, entry.angleDeg);
-          entry.marker.setLngLat([parsed.lng, parsed.lat]);
+        seen[key] = true;
+        var entry = activeByTagId[key];
+        if (!entry) {
+          if (shouldArm(key, parsed)) createActive(key, parsed, nowMs);
           continue;
         }
-
-        if (!shouldArm(key, parsed)) continue;
-        createActive(key, parsed, nowMs);
+        entry.lastSeenMs = nowMs;
+        // A textbox editing a placed chip stays on the chip.
+        if (entry.editIndex !== null) continue;
+        entry.lng = parsed.lng;
+        entry.lat = parsed.lat;
+        entry.angleDeg = parsed.angleDeg;
+        setBoxRotation(entry.boxEl, entry.angleDeg);
+        entry.marker.setLngLat([parsed.lng, parsed.lat]);
       }
 
-      // Expire entries whose tag hasn't been seen this frame AND input is empty
-      // AND lostHoldMs elapsed. Tags in edit mode persist indefinitely.
-      var keys = activeKeysSnapshot();
-      for (var i = 0; i < keys.length; i++) {
-        var k = keys[i];
-        if (seenThisFrame[k]) continue;
-        var e = activeByTagId[k];
-        if (!e) continue;
-        if (Number.isInteger(e.editIndex) && e.editIndex >= 0) continue;
-        var hasText = String(e.inputEl.value || '').trim().length > 0;
-        if (hasText) continue;
-        if ((nowMs - Number(e.lastSeenMs || 0)) > lostHoldMs) {
-          removeActiveForTag(k);
-        }
+      // An unseen textbox closes after lostHoldMs, unless it holds text or edits a chip.
+      for (var openKey in activeByTagId) {
+        var open = activeByTagId[openKey];
+        if (seen[openKey] || open.editIndex !== null || open.inputEl.value.trim()) continue;
+        if ((nowMs - open.lastSeenMs) > lostHoldMs) removeActiveForTag(openKey);
       }
-    }
-
-    function effectiveAccentForItem(item) {
-      if (!item) return null;
-      if (recolorByStep) {
-        var key = String(Number(item.step) || 0);
-        if (Object.prototype.hasOwnProperty.call(recolorByStep, key)) {
-          return String(recolorByStep[key]);
-        }
-      }
-      return tagAccentColor(item.tagId);
     }
 
     function applyChipAccent(el, accent) {
-      if (!el) return;
-      var icon = el.querySelector('.tag-annotation-chip__icon');
-      var textEl = el.querySelector('.tag-annotation-chip__text');
-      if (accent) {
-        el.style.color = accent;
-        el.style.background = 'transparent';
-        if (textEl) textEl.style.color = accent;
-        if (icon) {
-          icon.style.background = accent;
-          icon.style.borderColor = textColorForBackground(accent);
-          icon.style.color = textColorForBackground(accent);
-        }
-      } else {
-        el.style.color = '';
-        el.style.background = '';
-        if (textEl) textEl.style.color = '';
-        if (icon) {
-          icon.style.background = '';
-          icon.style.borderColor = '';
-          icon.style.color = '';
-        }
-      }
+      el.style.color = accent || '';
+      el.style.background = accent ? 'transparent' : '';
+      el.querySelector('.tag-annotation-chip__text').style.color = accent || '';
+    }
+
+    function isItemVisible(item) {
+      if (!item) return false;
+      return !visibleSteps || visibleSteps.has(item.step);
     }
 
     function applyItemAppearance(item) {
-      if (!item || !item.marker) return;
-      var el = item.marker.getElement ? item.marker.getElement() : null;
-      if (!el) return;
-      var shouldShow = !visibleSteps || visibleSteps.has(Number(item.step) || 0);
-      el.style.display = shouldShow ? '' : 'none';
-      applyChipAccent(el, effectiveAccentForItem(item));
-    }
-
-    function refreshAllVisibility() {
-      for (var i = 0; i < placed.length; i++) applyItemAppearance(placed[i]);
+      var el = item.marker.getElement();
+      el.style.display = isItemVisible(item) ? '' : 'none';
+      applyChipAccent(el, tagAccentColor(item.tagId));
     }
 
     function setCurrentStep(stepNumber) {
       currentStep = Number(stepNumber) || 0;
     }
 
+    // steps: a Set of step numbers, or null for all.
     function setVisibleSteps(steps) {
-      if (!steps) {
-        visibleSteps = null;
-      } else if (steps instanceof Set) {
-        visibleSteps = steps;
-      } else if (Array.isArray(steps)) {
-        visibleSteps = new Set(steps.map(function (n) { return Number(n) || 0; }));
-      } else {
-        visibleSteps = null;
-      }
-      refreshAllVisibility();
-    }
-
-    function setRecolorByStep(stepColorMap) {
-      if (!stepColorMap || typeof stepColorMap !== 'object') {
-        recolorByStep = null;
-      } else {
-        var clean = {};
-        for (var key in stepColorMap) {
-          if (!Object.prototype.hasOwnProperty.call(stepColorMap, key)) continue;
-          var stepNum = Number(key);
-          if (!Number.isFinite(stepNum)) continue;
-          clean[String(stepNum)] = String(stepColorMap[key]);
-        }
-        recolorByStep = clean;
-      }
-      refreshAllVisibility();
-    }
-
-    function setPlacedVisible(visible) {
-      if (visible) {
-        visibleSteps = null;
-      } else {
-        visibleSteps = new Set();
-      }
-      refreshAllVisibility();
-    }
-
-    function getPlacedByStep(stepNumber) {
-      var target = Number(stepNumber) || 0;
-      var results = [];
-      for (var i = 0; i < placed.length; i++) {
-        var p = placed[i];
-        if (!p) continue;
-        if ((Number(p.step) || 0) === target) {
-          results.push({
-            tagId: String(p.tagId),
-            text: String(p.text || ''),
-            lng: Number(p.lng),
-            lat: Number(p.lat),
-            step: Number(p.step) || 0
-          });
-        }
-      }
-      return results;
+      visibleSteps = steps || null;
+      placed.forEach(applyItemAppearance);
     }
 
     function getPlacedGeoJSON() {
-      var features = [];
-      for (var i = 0; i < placed.length; i++) {
-        var p = placed[i];
-        features.push({
-          type: 'Feature',
-          properties: {
-            sourceType: 'annotation',
-            tagId: p.tagId,
-            text: p.text,
-            step: Number(p.step) || 0
-          },
-          geometry: {
-            type: 'Point',
-            coordinates: [p.lng, p.lat]
-          }
-        });
-      }
-      return { type: 'FeatureCollection', features: features };
+      return {
+        type: 'FeatureCollection',
+        features: placed.map(function (p) {
+          return {
+            type: 'Feature',
+            properties: { sourceType: 'annotation', tagId: p.tagId, text: p.text, step: p.step },
+            geometry: { type: 'Point', coordinates: [p.lng, p.lat] }
+          };
+        })
+      };
     }
 
     function clearAll() {
       removeAllActive();
-      for (var i = 0; i < placed.length; i++) {
-        if (placed[i] && placed[i].marker) placed[i].marker.remove();
-      }
+      placed.forEach(function (item) { item.marker.remove(); });
       placed = [];
       lastPlacedPxByTag = {};
-    }
-
-    // Rehydrate placed annotations from a GeoJSON FeatureCollection produced by
-    // getPlacedGeoJSON() (or compatible shape). Replaces any existing placed
-    // markers. Used when resuming a workshop from a saved session.
-    function loadPlacedAnnotations(fc) {
-      // Tear down anything currently on the map first.
-      for (var i = 0; i < placed.length; i++) {
-        if (placed[i] && placed[i].marker) placed[i].marker.remove();
-      }
-      placed = [];
-      lastPlacedPxByTag = {};
-
-      var features = (fc && Array.isArray(fc.features)) ? fc.features : [];
-      for (var j = 0; j < features.length; j++) {
-        var feat = features[j];
-        if (!feat || !feat.geometry) continue;
-        if (feat.geometry.type !== 'Point') continue;
-        var coords = feat.geometry.coordinates;
-        if (!Array.isArray(coords) || coords.length < 2) continue;
-        var lng = Number(coords[0]);
-        var lat = Number(coords[1]);
-        if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
-        var props = feat.properties || {};
-        var text = String(props.text || '');
-        var tagId = String(props.tagId || '');
-        var step = Number(props.step) || 0;
-        var angleDeg = Number(props.angleDeg) || 0;
-
-        var el = createPlacedAnnotationEl(text);
-        var rotor = el.querySelector('.tag-annotation-chip__rotor');
-        setBoxRotation(rotor || el, angleDeg);
-
-        var marker = new mapboxgl.Marker({ element: el, anchor: 'bottom', offset: [0, 0] })
-          .setLngLat([lng, lat])
-          .addTo(map);
-
-        var item = {
-          tagId: tagId,
-          text: text,
-          lng: lng,
-          lat: lat,
-          angleDeg: angleDeg,
-          marker: marker,
-          step: step
-        };
-        applyItemAppearance(item);
-        placed.push(item);
-      }
-      return placed.length;
-    }
-
-    function isItemVisible(item) {
-      if (!item) return false;
-      return !visibleSteps || visibleSteps.has(Number(item.step) || 0);
     }
 
     function isPlacedVisible(index) {
@@ -646,35 +323,27 @@
 
     function findNearestPlaced(lng, lat, maxDistancePx) {
       var selectorPx = projectLngLatToPx(lng, lat);
-      var maxDistSq = Number(maxDistancePx) * Number(maxDistancePx);
+      var maxDistSq = maxDistancePx * maxDistancePx;
       var best = null;
-
-      for (var i = 0; i < placed.length; i++) {
-        var item = placed[i];
-        if (!item) continue;
-        if (!isItemVisible(item)) continue;
-        var itemPx = projectLngLatToPx(item.lng, item.lat);
-        var distSq = distanceSq(selectorPx, itemPx);
-        if (!Number.isFinite(distSq) || distSq > maxDistSq) continue;
-        if (!best || distSq < best.distanceSq) {
-          best = { index: i, distanceSq: distSq };
-        }
-      }
-
+      placed.forEach(function (item, index) {
+        if (!isItemVisible(item)) return;
+        var distSq = distanceSq(selectorPx, projectLngLatToPx(item.lng, item.lat));
+        if (!Number.isFinite(distSq) || distSq > maxDistSq) return;
+        if (!best || distSq < best.distanceSq) best = { index: index, distanceSq: distSq };
+      });
       return best;
     }
 
     function movePlaced(index, lng, lat) {
       var item = placed[index];
-      if (!item || !item.marker) return false;
+      if (!item) return false;
       item.lng = Number(lng);
       item.lat = Number(lat);
       updatePlacedMarker(item);
-      // If any active entry is editing this placed index, keep its marker in sync.
+      // A textbox editing this chip moves with it.
       for (var key in activeByTagId) {
-        if (!Object.prototype.hasOwnProperty.call(activeByTagId, key)) continue;
         var entry = activeByTagId[key];
-        if (Number.isInteger(entry.editIndex) && entry.editIndex === index && entry.marker) {
+        if (entry.editIndex === index) {
           entry.lng = item.lng;
           entry.lat = item.lat;
           entry.marker.setLngLat([item.lng, item.lat]);
@@ -691,17 +360,10 @@
       findNearestPlaced: findNearestPlaced,
       movePlaced: movePlaced,
       beginEditPlaced: beginEditPlaced,
-      syncExternalText: syncExternalText,
-      commitExternal: commitExternal,
       commitAllActive: commitAllActive,
-      clearActiveForTag: function (tagId) { removeActiveForTag(tagId); },
       setCurrentStep: setCurrentStep,
       setVisibleSteps: setVisibleSteps,
-      setRecolorByStep: setRecolorByStep,
-      setPlacedVisible: setPlacedVisible,
-      getPlacedByStep: getPlacedByStep,
-      isPlacedVisible: isPlacedVisible,
-      loadPlacedAnnotations: loadPlacedAnnotations
+      isPlacedVisible: isPlacedVisible
     };
   }
 

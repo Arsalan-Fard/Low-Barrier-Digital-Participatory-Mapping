@@ -1,12 +1,8 @@
+// Facilitator-uploaded GeoJSON layers (/api/custom-layers): uMap and SimpleStyle styling,
+// labels, popups, per-category filters and hover/selection highlights.
 (function () {
-  // Facilitator-uploaded GeoJSON overlays (managed via /api/custom-layers).
-  // Besides geometry, this renderer understands common uMap/SimpleStyle
-  // properties, builds popups + labels, exposes category filters, and uses
-  // feature-state for hover/selection highlighting.
-
   var PALETTE = ['#f59e0b', '#10b981', '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#14b8a6', '#f43f5e'];
   var UMAP_ICON_ORIGIN = 'https://umap.openstreetmap.fr';
-  var INTERNAL_PREFIX = '__cw_';
   var POPUP_STYLE_ID = 'compact-custom-geo-popup-styles';
 
   function ensurePopupStyles() {
@@ -14,13 +10,11 @@
     var style = document.createElement('style');
     style.id = POPUP_STYLE_ID;
     style.textContent =
-      '.compact-data-popup .maplibregl-popup-content,' +
-      '.compact-data-popup .mapboxgl-popup-content{' +
+      '.compact-data-popup .maplibregl-popup-content{' +
         'padding:16px 54px 16px 16px;border-radius:12px;' +
         'box-shadow:0 14px 36px rgba(15,23,42,.24)' +
       '}' +
-      '.compact-data-popup .maplibregl-popup-close-button,' +
-      '.compact-data-popup .mapboxgl-popup-close-button{' +
+      '.compact-data-popup .maplibregl-popup-close-button{' +
         'display:grid;place-items:center;width:40px;height:40px;' +
         'top:7px;right:7px;padding:0;border:1px solid #cbd5e1;' +
         'border-radius:999px;background:#fff;color:#334155;' +
@@ -28,12 +22,10 @@
         'font:400 28px/1 Arial,sans-serif;z-index:2;transition:' +
         'background .14s ease,color .14s ease,transform .14s ease' +
       '}' +
-      '.compact-data-popup .maplibregl-popup-close-button:hover,' +
-      '.compact-data-popup .mapboxgl-popup-close-button:hover{' +
+      '.compact-data-popup .maplibregl-popup-close-button:hover{' +
         'background:#f1f5f9;color:#0f172a;transform:scale(1.04)' +
       '}' +
-      '.compact-data-popup .maplibregl-popup-close-button:focus-visible,' +
-      '.compact-data-popup .mapboxgl-popup-close-button:focus-visible{' +
+      '.compact-data-popup .maplibregl-popup-close-button:focus-visible{' +
         'outline:3px solid rgba(20,184,166,.42);outline-offset:2px' +
       '}';
     document.head.appendChild(style);
@@ -41,21 +33,17 @@
 
   function createCustomGeojsonLayers(options) {
     var map = options.map;
-    var registry = [];                  // [{id, name}] from the server
-    var dataById = {};                  // id -> prepared FeatureCollection
-    var visibleById = {};               // id -> current map visibility
-    var loadCallbacksById = {};         // id -> [cb] while fetch is in flight
-    var metaById = {};                  // id -> categories/icons/fallback color
-    var categoryStateById = {};         // id -> {category: boolean}
-    var interactionHandlersById = {};   // id -> delegated map listeners
-    var iconLoading = {};               // icon id -> true while loading
-    var hoveredFeature = null;           // {layerId, featureId}
-    var selectedFeature = null;          // {layerId, featureId}
+    var registry = []; // [{ id, name }] from the server
+    var dataById = {}; // id -> prepared FeatureCollection
+    var visibleById = {};
+    var loadCallbacksById = {}; // id -> callbacks waiting for the fetch
+    var metaById = {}; // id -> { categories, icons }
+    var categoryStateById = {}; // id -> { category: shown }
+    var interactionHandlersById = {};
+    var iconLoading = {};
+    var hoveredFeature = null; // { layerId, featureId }
+    var selectedFeature = null; // { layerId, featureId }
     var activePopup = null;
-    var legendEl = null;
-    var legendBodyEl = null;
-    var legendTitleEl = null;
-    var legendCollapsed = false;
 
     function hashString(value) {
       var text = String(value || '');
@@ -74,10 +62,12 @@
       return PALETTE[Math.abs(hash) % PALETTE.length];
     }
 
-    function layerKey(id) { return hashString(id); }
-    function srcId(id) { return 'custom-geo-src-' + layerKey(id); }
+    function srcId(id) {
+      return 'custom-geo-src-' + hashString(id);
+    }
+
     function layerIdsFor(id) {
-      var key = layerKey(id);
+      var key = hashString(id);
       return {
         fill: 'custom-geo-fill-' + key,
         line: 'custom-geo-line-' + key,
@@ -88,15 +78,19 @@
         labelArea: 'custom-geo-label-area-' + key
       };
     }
+
     function allLayerIds(id) {
       var ids = layerIdsFor(id);
-      return [ids.fill, ids.line, ids.point, ids.icon, ids.labelPoint, ids.labelLine, ids.labelArea];
+      return Object.keys(ids).map(function (kind) { return ids[kind]; });
     }
 
-    function clamp(value, min, max, fallback) {
-      value = Number(value);
-      if (!isFinite(value)) return fallback;
-      return Math.max(min, Math.min(max, value));
+    // The first value that is a number, clamped to [min, max].
+    function firstClamped(min, max, fallback, values) {
+      for (var i = 0; i < values.length; i++) {
+        var n = Number(values[i]);
+        if (isFinite(n)) return Math.max(min, Math.min(max, n));
+      }
+      return fallback;
     }
 
     function textValue(value) {
@@ -116,7 +110,6 @@
       value = textValue(value);
       if (!value) return fallback;
       var probe = document.createElement('span');
-      probe.style.color = '';
       probe.style.color = value;
       return probe.style.color ? value : fallback;
     }
@@ -128,7 +121,7 @@
     }
 
     function umapOptions(properties) {
-      var value = properties && properties._umap_options;
+      var value = properties._umap_options;
       if (value && typeof value === 'object') return value;
       if (typeof value === 'string') {
         try {
@@ -159,6 +152,13 @@
       return 6;
     }
 
+    function iconSize(properties) {
+      var size = firstValue(properties['marker-size']).toLowerCase();
+      if (size === 'large') return 1.25;
+      if (size === 'small') return 0.75;
+      return 1;
+    }
+
     function resolveIconUrl(value) {
       value = textValue(value);
       if (!value) return '';
@@ -168,6 +168,8 @@
       return '';
     }
 
+    // The uMap layers an export was made from, as the server records them; null unless
+    // their counts add up to exactly the features in this export.
     function compactLayerManifest(payload, featureCount) {
       var properties = payload && payload.properties;
       var manifest = properties && properties._compact_workshop_layers;
@@ -188,8 +190,6 @@
           options: entry.options && typeof entry.options === 'object' ? entry.options : {}
         });
       }
-      // Block boundaries are only safe when the manifest describes every
-      // feature in this exact export. Otherwise retain the generic fallback.
       return total === featureCount ? normalized : null;
     }
 
@@ -205,14 +205,12 @@
 
       if (manifestLayers) {
         manifestLayerByIndex = [];
-        manifestLayers.forEach(function (entry, layerIndex) {
-          var layerColor = validCssColor(entry.options.color, colorFor(id + ':' + entry.id));
+        manifestLayers.forEach(function (entry) {
           categoryInfo[entry.name] = {
             name: entry.name,
             displayName: entry.name,
             count: 0,
-            color: layerColor,
-            order: layerIndex
+            color: validCssColor(entry.options.color, colorFor(id + ':' + entry.id))
           };
           categoryOrder.push(entry.name);
           for (var offset = 0; offset < entry.count; offset++) manifestLayerByIndex.push(entry);
@@ -221,9 +219,7 @@
 
       features.forEach(function (feature, index) {
         if (!feature || typeof feature !== 'object') return;
-        var properties = feature.properties && typeof feature.properties === 'object'
-          ? feature.properties
-          : {};
+        var properties = feature.properties && typeof feature.properties === 'object' ? feature.properties : {};
         var manifestLayer = manifestLayerByIndex && manifestLayerByIndex[index];
         var inheritedOptions = manifestLayer ? manifestLayer.options : {};
         var featureOptions = umapOptions(properties);
@@ -231,10 +227,8 @@
         var category = manifestLayer ? manifestLayer.name : categoryFor(properties);
         var categoryFallback = manifestLayer ? categoryInfo[category].color : fallbackColor;
         var baseColor = validCssColor(opts.color, categoryFallback);
-        // uMap's own feature/layer styles take precedence over generic
-        // SimpleStyle fields. Reach-area polygons in uMap backups all carry a
-        // generic teal `fill`, while their real distinct colors live on each
-        // uMap data layer.
+        // uMap's own styles win over SimpleStyle fields: uMap backups give every reach-area
+        // polygon the same teal `fill`, while the real colours sit on the uMap layers.
         var fillColor = validCssColor(firstValue(
           featureOptions.fillColor,
           featureOptions.color,
@@ -247,7 +241,6 @@
           inheritedOptions.color,
           properties.stroke
         ), baseColor);
-        var label = firstValue(properties.name, properties.title);
         var iconUrl = resolveIconUrl(firstValue(opts.iconUrl, properties['marker-symbol']));
         var featureId = feature.id != null ? String(feature.id) : 'feature-' + (index + 1);
         if (usedFeatureIds[featureId]) featureId += '-' + (index + 1);
@@ -256,35 +249,26 @@
 
         var normalized = Object.assign({}, properties, {
           __cw_category: category,
-          __cw_label: label,
+          __cw_label: firstValue(properties.name, properties.title),
           __cw_color: baseColor,
           __cw_fill: fillColor,
           __cw_stroke: strokeColor,
-          __cw_fill_opacity: clamp(featureOptions.fillOpacity, 0, 1,
-            clamp(featureOptions.opacity, 0, 1,
-              clamp(inheritedOptions.fillOpacity, 0, 1,
-                clamp(inheritedOptions.opacity, 0, 1,
-                  clamp(properties['fill-opacity'], 0, 1, 0.24))))),
-          __cw_line_opacity: clamp(featureOptions.opacity, 0, 1,
-            clamp(inheritedOptions.opacity, 0, 1,
-              clamp(properties['stroke-opacity'], 0, 1, 0.9))),
-          __cw_line_width: clamp(featureOptions.weight, 0.5, 16,
-            clamp(inheritedOptions.weight, 0.5, 16,
-              clamp(properties['stroke-width'], 0.5, 16, 2.5))),
-          __cw_point_opacity: clamp(featureOptions.iconOpacity, 0, 1,
-            clamp(featureOptions.opacity, 0, 1,
-              clamp(inheritedOptions.iconOpacity, 0, 1,
-                clamp(inheritedOptions.opacity, 0, 1, 0.92)))),
+          __cw_fill_opacity: firstClamped(0, 1, 0.24, [featureOptions.fillOpacity, featureOptions.opacity,
+            inheritedOptions.fillOpacity, inheritedOptions.opacity, properties['fill-opacity']]),
+          __cw_line_opacity: firstClamped(0, 1, 0.9, [featureOptions.opacity, inheritedOptions.opacity,
+            properties['stroke-opacity']]),
+          __cw_line_width: firstClamped(0.5, 16, 2.5, [featureOptions.weight, inheritedOptions.weight,
+            properties['stroke-width']]),
+          __cw_point_opacity: firstClamped(0, 1, 0.92, [featureOptions.iconOpacity, featureOptions.opacity,
+            inheritedOptions.iconOpacity, inheritedOptions.opacity]),
           __cw_point_radius: markerRadius(properties, opts),
-          __cw_outlink: firstValue(opts.outlink),
-          __cw_popup_shape: firstValue(opts.popupShape)
+          __cw_outlink: firstValue(opts.outlink)
         });
 
         if (iconUrl) {
           var iconId = 'custom-geo-image-' + hashString(iconUrl);
           normalized.__cw_icon_id = iconId;
-          normalized.__cw_icon_size = firstValue(properties['marker-size']).toLowerCase() === 'large' ? 1.25
-            : (firstValue(properties['marker-size']).toLowerCase() === 'small' ? 0.75 : 1);
+          normalized.__cw_icon_size = iconSize(properties);
           iconDefs[iconId] = {
             id: iconId,
             url: iconUrl,
@@ -311,42 +295,34 @@
         nextState[entry.name] = previousState[entry.name] !== false;
       });
       categoryStateById[id] = nextState;
-      metaById[id] = { categories: categories, icons: iconDefs, fallbackColor: fallbackColor };
+      metaById[id] = { categories: categories, icons: iconDefs };
       return { type: 'FeatureCollection', features: features };
     }
 
     function selectedStateExpression() {
       return ['boolean', ['feature-state', 'selected'], false];
     }
+
     function hoverStateExpression() {
       return ['boolean', ['feature-state', 'hover'], false];
     }
 
     function geometryFilter(kind) {
-      if (kind === 'fill') return ['==', '$type', 'Polygon'];
+      if (kind === 'fill' || kind === 'labelArea') return ['==', '$type', 'Polygon'];
       if (kind === 'line') return ['any', ['==', '$type', 'LineString'], ['==', '$type', 'Polygon']];
+      if (kind === 'labelLine') return ['==', '$type', 'LineString'];
       return ['==', '$type', 'Point'];
     }
 
-    function enabledCategories(id) {
-      var state = categoryStateById[id] || {};
-      return Object.keys(state).filter(function (name) { return state[name] !== false; });
-    }
-
     function filterFor(id, kind) {
-      var geometryKind = kind === 'labelPoint' ? 'point'
-        : (kind === 'labelLine' ? 'line' : (kind === 'labelArea' ? 'fill' : kind));
-      var geometry = kind === 'labelLine' ? ['==', '$type', 'LineString']
-        : (kind === 'labelArea' ? ['==', '$type', 'Polygon'] : geometryFilter(geometryKind));
-      var filters = [geometry];
+      var filters = [geometryFilter(kind)];
       if (kind === 'labelPoint' || kind === 'labelLine' || kind === 'labelArea') {
         filters.push(['!=', '__cw_label', '']);
       }
       if (kind === 'icon') filters.push(['has', '__cw_icon_id']);
-      // MapLibre still parses layer filters using its legacy property-filter
-      // grammar. Keep expression syntax in paint/layout values, but use the
-      // legacy `in` form here so this also works on MapLibre 5.
-      var categories = enabledCategories(id);
+      // Legacy filter syntax (`$type`, `in key ...values`), which MapLibre 5 still accepts.
+      var state = categoryStateById[id] || {};
+      var categories = Object.keys(state).filter(function (name) { return state[name] !== false; });
       filters.push(categories.length
         ? ['in', '__cw_category'].concat(categories)
         : ['==', '__cw_category', '__cw_no_category_enabled__']);
@@ -354,7 +330,7 @@
     }
 
     function ensureLayers(id) {
-      if (!map || !dataById[id]) return;
+      if (!dataById[id]) return;
       var visibility = visibleById[id] ? 'visible' : 'none';
       var ids = layerIdsFor(id);
 
@@ -441,13 +417,13 @@
         layout: Object.assign({
           visibility: visibility,
           'text-field': ['get', '__cw_label'],
-          'text-font': ['Open Sans Semibold'],
+          'text-font': window.CompactMapSetup.labelFont(map, ['Open Sans Semibold']),
           'text-size': ['interpolate', ['linear'], ['zoom'], 14, 10, 17, 13],
           'text-max-width': 14,
           'text-allow-overlap': false,
           'text-ignore-placement': false,
           'text-optional': false
-        }, extraLayout || {}),
+        }, extraLayout),
         paint: {
           'text-color': '#172033',
           'text-halo-color': 'rgba(255,255,255,0.95)',
@@ -457,12 +433,12 @@
       });
     }
 
+    // A disc with the category's initial, for icons that cannot be loaded.
     function fallbackIcon(definition) {
       var canvas = document.createElement('canvas');
       canvas.width = 48;
       canvas.height = 48;
       var context = canvas.getContext('2d');
-      context.clearRect(0, 0, 48, 48);
       context.beginPath();
       context.arc(24, 24, 20, 0, Math.PI * 2);
       context.fillStyle = validCssColor(definition.color, '#334155');
@@ -479,21 +455,18 @@
     }
 
     function addIconImage(definition, image) {
-      if (!map || map.hasImage(definition.id)) return;
+      if (map.hasImage(definition.id)) return;
       try {
         map.addImage(definition.id, image, { pixelRatio: 2 });
       } catch (_error) {
-        if (!map.hasImage(definition.id)) {
-          try { map.addImage(definition.id, fallbackIcon(definition), { pixelRatio: 2 }); } catch (_fallbackError) {}
-        }
+        if (!map.hasImage(definition.id)) map.addImage(definition.id, fallbackIcon(definition), { pixelRatio: 2 });
       }
     }
 
     function ensureIcons(id) {
-      var meta = metaById[id];
-      if (!map || !meta) return;
-      Object.keys(meta.icons).forEach(function (iconId) {
-        var definition = meta.icons[iconId];
+      var icons = metaById[id].icons;
+      Object.keys(icons).forEach(function (iconId) {
+        var definition = icons[iconId];
         if (map.hasImage(iconId) || iconLoading[iconId]) return;
         iconLoading[iconId] = true;
         Promise.resolve(map.loadImage(definition.url))
@@ -504,19 +477,16 @@
     }
 
     function applyCategoryFilter(id) {
-      if (!map || !dataById[id]) return;
+      if (!dataById[id]) return;
       var ids = layerIdsFor(id);
-      var kinds = {
-        fill: 'fill', line: 'line', point: 'point', icon: 'icon',
-        labelPoint: 'labelPoint', labelLine: 'labelLine', labelArea: 'labelArea'
-      };
-      Object.keys(kinds).forEach(function (key) {
-        if (map.getLayer(ids[key])) map.setFilter(ids[key], filterFor(id, kinds[key]));
+      Object.keys(ids).forEach(function (kind) {
+        if (map.getLayer(ids[kind])) map.setFilter(ids[kind], filterFor(id, kind));
       });
     }
 
     function safeSetFeatureState(ref, state) {
-      if (!ref || !map || !map.getSource(srcId(ref.layerId))) return;
+      if (!ref || !map.getSource(srcId(ref.layerId))) return;
+      // setFeatureState throws while a new basemap style is still loading.
       try { map.setFeatureState({ source: srcId(ref.layerId), id: ref.featureId }, state); } catch (_error) {}
     }
 
@@ -545,19 +515,20 @@
 
     function safeHttpUrl(value) {
       value = textValue(value);
-      if (!value) return '';
       if (/^\/\//.test(value)) value = 'https:' + value;
       return /^https?:\/\//i.test(value) ? value : '';
     }
 
+    // Escaped text with line breaks, and uMap's {{https://...}} image links as images.
     function descriptionHtml(value) {
       value = String(value == null ? '' : value);
-      if (!value) return '';
       var output = '';
       var position = 0;
       var imagePattern = /\{\{(https?:\/\/[^}]+)\}\}/gi;
       var match;
-      function appendText(text) { output += escapeHtml(text).replace(/\r?\n/g, '<br>'); }
+      function appendText(text) {
+        output += escapeHtml(text).replace(/\r?\n/g, '<br>');
+      }
       while ((match = imagePattern.exec(value))) {
         appendText(value.slice(position, match.index));
         var imageUrl = safeHttpUrl(match[1]);
@@ -569,7 +540,7 @@
     }
 
     function popupHtml(feature) {
-      var properties = feature && feature.properties ? feature.properties : {};
+      var properties = feature.properties || {};
       var title = firstValue(properties.name, properties.title, humanize(properties.__cw_category), 'Map feature');
       var html = '<div style="font:13px/1.42 system-ui,sans-serif;color:#172033;max-width:340px">' +
         '<div style="font-size:16px;font-weight:750;margin:0 0 6px">' + escapeHtml(title) + '</div>';
@@ -601,11 +572,13 @@
       var website = safeHttpUrl(properties.website);
       var outlink = safeHttpUrl(properties.__cw_outlink);
       var wikipedia = safeHttpUrl(properties.wikipedia);
+      var phone = textValue(properties.phone);
+      var email = textValue(properties.email);
       if (website) links.push(['Website', website]);
       if (outlink && outlink !== website) links.push(['More information', outlink]);
       if (wikipedia) links.push(['Wikipedia', wikipedia]);
-      if (textValue(properties.phone)) links.push(['Call', 'tel:' + textValue(properties.phone).replace(/[^0-9+]/g, '')]);
-      if (textValue(properties.email)) links.push(['Email', 'mailto:' + textValue(properties.email)]);
+      if (phone) links.push(['Call', 'tel:' + phone.replace(/[^0-9+]/g, '')]);
+      if (email) links.push(['Email', 'mailto:' + email]);
       if (links.length) {
         html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:9px">';
         links.forEach(function (link) {
@@ -617,11 +590,9 @@
     }
 
     function showPopup(event, feature) {
-      var PopupCtor = (window.maplibregl && window.maplibregl.Popup) || (window.mapboxgl && window.mapboxgl.Popup);
-      if (!PopupCtor || !event || !event.lngLat) return;
       if (activePopup) activePopup.remove();
       ensurePopupStyles();
-      activePopup = new PopupCtor({
+      activePopup = new maplibregl.Popup({
         closeButton: true,
         closeOnClick: true,
         className: 'compact-data-popup',
@@ -630,10 +601,7 @@
         .setLngLat(event.lngLat)
         .setHTML(popupHtml(feature))
         .addTo(map);
-      var popupElement = activePopup.getElement && activePopup.getElement();
-      var closeButton = popupElement && popupElement.querySelector(
-        '.maplibregl-popup-close-button, .mapboxgl-popup-close-button'
-      );
+      var closeButton = activePopup.getElement().querySelector('.maplibregl-popup-close-button');
       if (closeButton) {
         closeButton.textContent = '×';
         closeButton.title = 'Close popup';
@@ -646,19 +614,18 @@
     }
 
     function bindInteractions(id) {
-      if (!map || interactionHandlersById[id]) return;
+      if (interactionHandlersById[id]) return;
       var ids = layerIdsFor(id);
       var handlers = [];
-      // Bind in visual stacking order. A point/icon often sits inside a large
-      // polygon, and the first handler marks the native click as consumed, so
-      // the top-most feature must get the popup and selection first.
+      // Bound top layer first: a point often sits inside a large polygon, and the first
+      // handler marks the native event as handled so the top-most feature wins.
       [ids.labelPoint, ids.labelLine, ids.labelArea, ids.icon, ids.point, ids.line, ids.fill].forEach(function (layerId) {
         if (!map.getLayer(layerId)) return;
         var move = function (event) {
           if (!event.features || !event.features.length) return;
           var original = event.originalEvent;
           if (original && original.__compactCustomGeoHoverHandled) return;
-          try { if (original) original.__compactCustomGeoHoverHandled = true; } catch (_error) {}
+          if (original) original.__compactCustomGeoHoverHandled = true;
           map.getCanvas().style.cursor = 'pointer';
           setHovered(id, event.features[0].id);
         };
@@ -670,7 +637,7 @@
           if (!event.features || !event.features.length) return;
           var original = event.originalEvent;
           if (original && original.__compactCustomGeoHandled) return;
-          try { if (original) original.__compactCustomGeoHandled = true; } catch (_error) {}
+          if (original) original.__compactCustomGeoHandled = true;
           var feature = event.features[0];
           setSelected(id, feature.id);
           showPopup(event, feature);
@@ -684,85 +651,20 @@
     }
 
     function unbindInteractions(id) {
-      var handlers = interactionHandlersById[id] || [];
-      handlers.forEach(function (entry) {
-        try { map.off('mousemove', entry.layerId, entry.move); } catch (_error) {}
-        try { map.off('mouseleave', entry.layerId, entry.leave); } catch (_error) {}
-        try { map.off('click', entry.layerId, entry.click); } catch (_error) {}
+      (interactionHandlersById[id] || []).forEach(function (entry) {
+        map.off('mousemove', entry.layerId, entry.move);
+        map.off('mouseleave', entry.layerId, entry.leave);
+        map.off('click', entry.layerId, entry.click);
       });
       delete interactionHandlersById[id];
     }
 
-    function ensureLegendDom() {
-      if (legendEl) return;
-      var host = document.getElementById('main_container') || (map && map.getContainer && map.getContainer().parentNode) || document.body;
-      legendEl = document.createElement('div');
-      legendEl.id = 'customGeoLayerLegend';
-      Object.assign(legendEl.style, {
-        position: 'absolute', left: '124px', top: '50%', bottom: 'auto',
-        transform: 'translateY(-50%)', zIndex: '1002',
-        display: 'none', width: '280px', maxWidth: 'calc(100% - 140px)',
-        maxHeight: 'calc(100vh - 32px)',
-        color: '#fff', background: 'rgba(18,18,18,0.9)',
-        border: '1px solid rgba(255,255,255,0.2)', borderRadius: '10px',
-        boxShadow: '0 12px 30px rgba(0,0,0,0.35)',
-        font: '12px/1.35 system-ui, sans-serif', pointerEvents: 'auto', overflow: 'hidden'
-      });
-      var header = document.createElement('div');
-      Object.assign(header.style, { display: 'flex', alignItems: 'center', gap: '8px', padding: '9px 10px', borderBottom: '1px solid rgba(255,255,255,0.14)' });
-      legendTitleEl = document.createElement('strong');
-      legendTitleEl.style.flex = '1';
-      var collapse = document.createElement('button');
-      collapse.type = 'button';
-      collapse.textContent = '−';
-      collapse.title = 'Collapse data-layer filters';
-      Object.assign(collapse.style, { border: '0', background: 'transparent', color: '#fff', cursor: 'pointer', fontSize: '17px', lineHeight: '1', padding: '1px 4px' });
-      collapse.addEventListener('click', function () {
-        legendCollapsed = !legendCollapsed;
-        legendBodyEl.style.display = legendCollapsed ? 'none' : 'block';
-        collapse.textContent = legendCollapsed ? '+' : '−';
-        collapse.title = legendCollapsed ? 'Expand data-layer filters' : 'Collapse data-layer filters';
-      });
-      header.appendChild(legendTitleEl);
-      header.appendChild(collapse);
-      legendBodyEl = document.createElement('div');
-      Object.assign(legendBodyEl.style, { maxHeight: '42vh', overflowY: 'auto', padding: '7px 9px 9px' });
-      legendEl.appendChild(header);
-      legendEl.appendChild(legendBodyEl);
-      host.appendChild(legendEl);
-    }
-
-    function registryName(id) {
-      for (var i = 0; i < registry.length; i++) {
-        if (String(registry[i].id) === String(id)) return registry[i].name || registry[i].id;
-      }
-      return String(id || 'Data layer');
-    }
-
-    function updateCategoryControls(id, value, checkboxes, status) {
-      var state = categoryStateById[id] || {};
-      Object.keys(state).forEach(function (name) { state[name] = value; });
-      checkboxes.forEach(function (checkbox) { checkbox.checked = value; });
-      status.textContent = (value ? Object.keys(state).length : 0) + '/' + Object.keys(state).length + ' shown';
-      applyCategoryFilter(id);
-    }
-
-    function renderLegend() {
-      // Sublayer controls live in the workshop editor's Data Layers tree.
-      // Remove the former floating map panel if this module is hot-reloaded.
-      if (legendEl && legendEl.parentNode) legendEl.parentNode.removeChild(legendEl);
-      legendEl = null;
-      legendBodyEl = null;
-      legendTitleEl = null;
-    }
-
-    // Refresh the id/name registry from the server. callback(err, registry).
+    // Refreshes the id/name registry from the server; callback(err, registry).
     function refresh(callback) {
       fetch('/api/custom-layers', { cache: 'no-store' })
         .then(function (response) { return response.json(); })
         .then(function (data) {
           registry = data && Array.isArray(data.layers) ? data.layers : [];
-          renderLegend();
           if (typeof callback === 'function') callback(null, registry);
         })
         .catch(function (error) {
@@ -770,18 +672,22 @@
         });
     }
 
-    function list() { return registry.slice(); }
-    function getName(id) { return registryName(id); }
+    function getName(id) {
+      for (var i = 0; i < registry.length; i++) {
+        if (String(registry[i].id) === String(id)) return registry[i].name || registry[i].id;
+      }
+      return String(id || 'Data layer');
+    }
 
     function getSublayers(id) {
       id = String(id || '');
       var meta = metaById[id];
       var state = categoryStateById[id] || {};
-      if (!meta || !Array.isArray(meta.categories)) return null;
+      if (!meta) return null;
       return meta.categories.map(function (entry) {
         return {
           name: entry.name,
-          label: entry.displayName || humanize(entry.name),
+          label: entry.displayName,
           count: entry.count,
           color: entry.color,
           visible: state[entry.name] !== false
@@ -809,11 +715,21 @@
     }
 
     function loadLayer(id, callback) {
-      if (typeof callback !== 'function') callback = function () {};
       id = String(id || '');
-      if (dataById[id]) { callback(null, dataById[id]); return; }
-      if (loadCallbacksById[id]) { loadCallbacksById[id].push(callback); return; }
+      if (dataById[id]) {
+        callback(null, dataById[id]);
+        return;
+      }
+      if (loadCallbacksById[id]) {
+        loadCallbacksById[id].push(callback);
+        return;
+      }
       loadCallbacksById[id] = [callback];
+      function finish(error, data) {
+        var callbacks = loadCallbacksById[id];
+        delete loadCallbacksById[id];
+        callbacks.forEach(function (done) { done(error, data); });
+      }
       fetch('/api/custom-layers/' + encodeURIComponent(id))
         .then(function (response) {
           if (!response.ok) throw new Error('http_' + response.status);
@@ -821,15 +737,10 @@
         })
         .then(function (geojson) {
           dataById[id] = prepareData(id, geojson);
-          var callbacks = loadCallbacksById[id];
-          delete loadCallbacksById[id];
-          callbacks.forEach(function (done) { done(null, dataById[id]); });
-          renderLegend();
+          finish(null, dataById[id]);
         })
         .catch(function (error) {
-          var callbacks = loadCallbacksById[id];
-          delete loadCallbacksById[id];
-          callbacks.forEach(function (done) { done(error, null); });
+          finish(error, null);
         });
     }
 
@@ -838,15 +749,14 @@
       visibleById[id] = !!show;
       if (show) ensureLayers(id);
       allLayerIds(id).forEach(function (layerId) {
-        if (map && map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', show ? 'visible' : 'none');
+        if (map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', show ? 'visible' : 'none');
       });
       if (!show && hoveredFeature && hoveredFeature.layerId === id) setHovered(null, null);
-      renderLegend();
     }
 
     function hideAllExcept(keepIds) {
       var keep = {};
-      (Array.isArray(keepIds) ? keepIds : []).forEach(function (id) { keep[String(id)] = true; });
+      keepIds.forEach(function (id) { keep[String(id)] = true; });
       Object.keys(visibleById).forEach(function (id) {
         if (visibleById[id] && !keep[id]) setLayerVisible(id, false);
       });
@@ -861,19 +771,17 @@
       }
       unbindInteractions(id);
       allLayerIds(id).forEach(function (layerId) {
-        if (map && map.getLayer(layerId)) map.removeLayer(layerId);
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
       });
-      if (map && map.getSource(srcId(id))) map.removeSource(srcId(id));
+      if (map.getSource(srcId(id))) map.removeSource(srcId(id));
       delete dataById[id];
       delete visibleById[id];
       delete metaById[id];
       delete categoryStateById[id];
-      renderLegend();
     }
 
     return {
       refresh: refresh,
-      list: list,
       getName: getName,
       getSublayers: getSublayers,
       loadLayer: loadLayer,

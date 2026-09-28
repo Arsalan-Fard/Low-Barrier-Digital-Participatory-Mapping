@@ -1,0 +1,10 @@
+# Participant data never goes into git: photos carry children's names and
+# handwriting, results carry home locations.
+/runs/
+/sessions/
+/*.jpg
+/*.jpeg
+/*.png
+/*.heic
+__pycache__/
+/.venv/

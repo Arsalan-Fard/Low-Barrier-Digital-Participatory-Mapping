@@ -5,14 +5,12 @@
   function createOsmnxNetwork(options) {
     var map = options.map;
     var hasNet = false;
-    var bbox = null;
     var visible = false;
     var fetchInFlight = false;
-    var networkData = null;      // last GeoJSON shown, re-applied after style reloads
-    var cachedCallbacks = null;  // pending showCached() callbacks while the file loads
+    var networkData = null; // the GeoJSON on the map, put back after a basemap reload
+    var cachedCallbacks = null; // loadCached callbacks waiting for the file
 
     function ensureLayer() {
-      if (!map) return;
       if (!map.getSource(NETWORK_SOURCE_ID)) {
         map.addSource(NETWORK_SOURCE_ID, {
           type: 'geojson',
@@ -41,40 +39,40 @@
     function setData(geojson) {
       networkData = geojson || null;
       ensureLayer();
-      var src = map && map.getSource(NETWORK_SOURCE_ID);
-      if (src) src.setData(geojson || { type: 'FeatureCollection', features: [] });
+      map.getSource(NETWORK_SOURCE_ID).setData(geojson || { type: 'FeatureCollection', features: [] });
     }
 
     function setVisible(show) {
       visible = !!show;
       ensureLayer();
-      if (map && map.getLayer(NETWORK_LAYER_ID)) {
-        map.setLayoutProperty(NETWORK_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
-      }
+      map.setLayoutProperty(NETWORK_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
     }
 
     function hasNetwork() {
       return hasNet;
     }
 
-    function getBbox() {
-      return bbox;
-    }
-
     function isFetching() {
       return fetchInFlight;
     }
 
-    // Load the network GeoJSON from the bundled data/osmnx_network.geojson (the
-    // same cache the server loads for routing). Reuses whatever is already
-    // loaded (cached file or a live fetch). Does NOT touch visibility — callers
-    // decide that once the load lands (so a slow load can't force the layer on
-    // after the caller changed its mind). callback(err, geojson).
+    // Loads data/osmnx_network.geojson, the network the server routes on, once. Visibility is
+    // left to the caller, so a slow load cannot turn the layer on after the caller changed its mind.
     function loadCached(callback) {
-      if (typeof callback !== 'function') callback = function () {};
-      if (networkData) { callback(null, networkData); return; }
-      if (cachedCallbacks) { cachedCallbacks.push(callback); return; }
+      if (networkData) {
+        callback(null, networkData);
+        return;
+      }
+      if (cachedCallbacks) {
+        cachedCallbacks.push(callback);
+        return;
+      }
       cachedCallbacks = [callback];
+      function finish(err, geojson) {
+        var callbacks = cachedCallbacks;
+        cachedCallbacks = null;
+        callbacks.forEach(function (cb) { cb(err, geojson); });
+      }
       fetch('data/osmnx_network.geojson')
         .then(function (res) {
           if (!res.ok) throw new Error('http_' + res.status);
@@ -82,19 +80,17 @@
         })
         .then(function (geojson) {
           setData(geojson);
-          var cbs = cachedCallbacks; cachedCallbacks = null;
-          cbs.forEach(function (cb) { cb(null, geojson); });
+          finish(null, geojson);
         })
         .catch(function (err) {
-          var cbs = cachedCallbacks; cachedCallbacks = null;
-          cbs.forEach(function (cb) { cb(err, null); });
+          finish(err, null);
         });
     }
 
-    // Fetch road network for the current map viewport and cache it on the server.
+    // Fetches the walking network of the current view; the server keeps it for routing.
     function fetchForCurrentView(callback) {
-      if (!map || fetchInFlight) {
-        if (typeof callback === 'function') callback(new Error('busy_or_no_map'), null);
+      if (fetchInFlight) {
+        callback(new Error('busy_or_no_map'), null);
         return;
       }
       var b = map.getBounds();
@@ -120,13 +116,12 @@
             throw new Error((r.body && r.body.error) || ('http_' + r.status));
           }
           hasNet = true;
-          bbox = r.body.bbox || [payload.minLng, payload.minLat, payload.maxLng, payload.maxLat];
           setData(r.body.geojson);
           setVisible(true);
-          if (typeof callback === 'function') callback(null, r.body);
+          callback(null, r.body);
         })
         .catch(function (err) {
-          if (typeof callback === 'function') callback(err, null);
+          callback(err, null);
         })
         .finally(function () {
           fetchInFlight = false;
@@ -136,13 +131,11 @@
     return {
       fetchForCurrentView: fetchForCurrentView,
       hasNetwork: hasNetwork,
-      getBbox: getBbox,
       isFetching: isFetching,
       setVisible: setVisible,
       loadCached: loadCached
     };
   }
 
-  window.CompactOsmnx = null; // populated by script.js after map is ready
   window.CompactOsmnxModule = { createOsmnxNetwork: createOsmnxNetwork };
 })();

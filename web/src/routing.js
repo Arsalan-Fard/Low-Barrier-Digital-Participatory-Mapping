@@ -8,45 +8,53 @@
   var PENDING_SOURCE_ID = 'routing-pending-source';
   var PENDING_LINE_LAYER_ID = 'routing-pending-line';
 
-  var HOLD_MS = 2000;         // tag must be still for 2 s to set its waypoint
+  var HOLD_MS = 2000; // a tag held still this long sets its end of the route
   var MOVE_THRESHOLD_PX = 16;
   var DEBOUNCE_MS = 500;
+  // MapLibre has no line-dash-offset, so the dashes are made to travel by cycling the pattern.
+  var DASH_SEQUENCE = [
+    [0, 4, 3],
+    [0.5, 4, 2.5],
+    [1, 4, 2],
+    [1.5, 4, 1.5],
+    [2, 4, 1],
+    [2.5, 4, 0.5],
+    [3, 4, 0],
+    [3.5, 3.5, 0],
+    [4, 3, 0],
+    [4, 2.5, 0.5],
+    [4, 2, 1],
+    [4, 1.5, 1.5],
+    [4, 1, 2],
+    [4, 0.5, 2.5]
+  ];
 
-  // Internal state per tag
+  function emptyCollection() {
+    return { type: 'FeatureCollection', features: [] };
+  }
+
   function makeTagState() {
-    return {
-      holdPoint: null,   // { x, y } viewport px — current hold position
-      holdSinceMs: 0,
-      lngLat: null,      // { lng, lat } — confirmed waypoint
-      marker: null       // mapboxgl.Marker pin
-    };
+    return { holdPoint: null, holdSinceMs: 0, lngLat: null, marker: null };
   }
 
   function createRouting(options) {
     var map = options.map;
     var getAccessToken = options.getAccessToken;
 
-    var tagA = makeTagState(); // tag 18 = origin
-    var tagB = makeTagState(); // tag 19 = destination
+    var tagA = makeTagState();
+    var tagB = makeTagState();
     var lastCallMs = 0;
     var lastRouteKey = '';
-    var drawnRouteKey = '';   // endpoints for which a route is currently drawn
+    var drawnRouteKey = ''; // the endpoints of the route on the map
     var fetchInFlight = false;
     var visible = true;
     var dashAnimFrame = 0;
     var dashAnimStart = 0;
 
-    // ---- Map layer management ----
-
     function ensureLayers() {
-      if (!map) return;
       if (!map.getSource(ROUTE_SOURCE_ID)) {
-        map.addSource(ROUTE_SOURCE_ID, {
-          type: 'geojson',
-          data: { type: 'FeatureCollection', features: [] }
-        });
+        map.addSource(ROUTE_SOURCE_ID, { type: 'geojson', data: emptyCollection() });
       }
-      // Casing (thicker, dark outline for contrast)
       if (!map.getLayer(ROUTE_CASING_LAYER_ID)) {
         map.addLayer({
           id: ROUTE_CASING_LAYER_ID,
@@ -60,7 +68,6 @@
           }
         });
       }
-      // Main route line
       if (!map.getLayer(ROUTE_LINE_LAYER_ID)) {
         map.addLayer({
           id: ROUTE_LINE_LAYER_ID,
@@ -77,19 +84,13 @@
     }
 
     function setGeoJSON(geojson) {
-      if (!map || !map.getSource(ROUTE_SOURCE_ID)) return;
-      map.getSource(ROUTE_SOURCE_ID).setData(
-        geojson || { type: 'FeatureCollection', features: [] }
-      );
+      var src = map.getSource(ROUTE_SOURCE_ID);
+      if (src) src.setData(geojson || emptyCollection());
     }
 
     function ensurePendingLayer() {
-      if (!map) return;
       if (!map.getSource(PENDING_SOURCE_ID)) {
-        map.addSource(PENDING_SOURCE_ID, {
-          type: 'geojson',
-          data: { type: 'FeatureCollection', features: [] }
-        });
+        map.addSource(PENDING_SOURCE_ID, { type: 'geojson', data: emptyCollection() });
       }
       if (!map.getLayer(PENDING_LINE_LAYER_ID)) {
         map.addLayer({
@@ -105,61 +106,32 @@
           }
         });
       }
-      startDashAnimation();
     }
 
-    // Animate the dash pattern by cycling through phases so the dashes visibly
-    // travel along the line while we wait for the route to arrive.
+    // The dashes travel along the pending line while the route is on its way.
     function startDashAnimation() {
       if (dashAnimFrame) return;
-      // Cycle through increasing "gap/dash" ratios; mapbox-gl doesn't support
-      // line-dash-offset, so we shift the pattern by permuting the array.
-      var sequence = [
-        [0, 4, 3],
-        [0.5, 4, 2.5],
-        [1, 4, 2],
-        [1.5, 4, 1.5],
-        [2, 4, 1],
-        [2.5, 4, 0.5],
-        [3, 4, 0],
-        [3.5, 3.5, 0],
-        [4, 3, 0],
-        [4, 2.5, 0.5],
-        [4, 2, 1],
-        [4, 1.5, 1.5],
-        [4, 1, 2],
-        [4, 0.5, 2.5]
-      ];
       dashAnimStart = performance.now();
       var step = function () {
         dashAnimFrame = 0;
-        if (!map || !map.getLayer(PENDING_LINE_LAYER_ID)) return;
-        var vis = map.getLayoutProperty(PENDING_LINE_LAYER_ID, 'visibility');
-        if (vis === 'none') return;
-        var elapsed = performance.now() - dashAnimStart;
-        var idx = Math.floor(elapsed / 60) % sequence.length;
-        try {
-          map.setPaintProperty(PENDING_LINE_LAYER_ID, 'line-dasharray', sequence[idx]);
-        } catch (_e) { /* ignore if layer is gone */ }
+        if (!map.getLayer(PENDING_LINE_LAYER_ID)) return;
+        if (map.getLayoutProperty(PENDING_LINE_LAYER_ID, 'visibility') === 'none') return;
+        var idx = Math.floor((performance.now() - dashAnimStart) / 60) % DASH_SEQUENCE.length;
+        map.setPaintProperty(PENDING_LINE_LAYER_ID, 'line-dasharray', DASH_SEQUENCE[idx]);
         dashAnimFrame = requestAnimationFrame(step);
       };
       dashAnimFrame = requestAnimationFrame(step);
     }
 
     function stopDashAnimation() {
-      if (dashAnimFrame) {
-        cancelAnimationFrame(dashAnimFrame);
-        dashAnimFrame = 0;
-      }
+      if (!dashAnimFrame) return;
+      cancelAnimationFrame(dashAnimFrame);
+      dashAnimFrame = 0;
     }
 
     function ensureLabelLayer() {
-      if (!map) return;
       if (!map.getSource(ROUTE_LABEL_SOURCE_ID)) {
-        map.addSource(ROUTE_LABEL_SOURCE_ID, {
-          type: 'geojson',
-          data: { type: 'FeatureCollection', features: [] }
-        });
+        map.addSource(ROUTE_LABEL_SOURCE_ID, { type: 'geojson', data: emptyCollection() });
       }
       if (!map.getLayer(ROUTE_LABEL_LAYER_ID)) {
         map.addLayer({
@@ -169,7 +141,7 @@
           layout: {
             'text-field': ['get', 'label'],
             'text-size': 13,
-            'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+            'text-font': window.CompactMapSetup.labelFont(map, ['Open Sans Bold', 'Arial Unicode MS Bold']),
             'text-anchor': 'center',
             'text-allow-overlap': true,
             'text-ignore-placement': true,
@@ -185,43 +157,32 @@
     }
 
     function setPendingLine(ptA, ptB) {
-      if (!map) return;
       ensurePendingLayer();
       var src = map.getSource(PENDING_SOURCE_ID);
-      if (!src) return;
-      if (ptA && ptB) {
-        var gA = map.unproject([ptA.x, ptA.y]);
-        var gB = map.unproject([ptB.x, ptB.y]);
-        src.setData({
-          type: 'FeatureCollection',
-          features: [{
-            type: 'Feature',
-            geometry: {
-              type: 'LineString',
-              coordinates: [
-                [gA.lng, gA.lat],
-                [gB.lng, gB.lat]
-              ]
-            },
-            properties: {}
-          }]
-        });
-        if (map.getLayer(PENDING_LINE_LAYER_ID))
-          map.setLayoutProperty(PENDING_LINE_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
-      } else {
-        src.setData({ type: 'FeatureCollection', features: [] });
+      if (!ptA || !ptB) {
+        src.setData(emptyCollection());
         stopDashAnimation();
+        return;
       }
+      var gA = map.unproject([ptA.x, ptA.y]);
+      var gB = map.unproject([ptB.x, ptB.y]);
+      src.setData({
+        type: 'FeatureCollection',
+        features: [{
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: [[gA.lng, gA.lat], [gB.lng, gB.lat]] },
+          properties: {}
+        }]
+      });
+      map.setLayoutProperty(PENDING_LINE_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
+      startDashAnimation();
     }
 
     function setLayersVisible(show) {
-      if (!map) return;
       var v = show ? 'visible' : 'none';
       if (map.getLayer(ROUTE_LINE_LAYER_ID)) map.setLayoutProperty(ROUTE_LINE_LAYER_ID, 'visibility', v);
       if (map.getLayer(ROUTE_CASING_LAYER_ID)) map.setLayoutProperty(ROUTE_CASING_LAYER_ID, 'visibility', v);
     }
-
-    // ---- Pin markers ----
 
     function makePinEl(label, color) {
       var el = document.createElement('div');
@@ -243,10 +204,8 @@
     }
 
     function updatePin(state, lng, lat, label, color) {
-      if (!map) return;
       if (!state.marker) {
-        var el = makePinEl(label, color);
-        state.marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+        state.marker = new mapboxgl.Marker({ element: makePinEl(label, color), anchor: 'center' })
           .setLngLat([lng, lat])
           .addTo(map);
       } else {
@@ -256,14 +215,13 @@
     }
 
     function removePin(state) {
-      if (state.marker) { state.marker.remove(); state.marker = null; }
+      if (!state.marker) return;
+      state.marker.remove();
+      state.marker = null;
     }
 
-    // ---- Directions API ----
-
     function routeKey(a, b) {
-      return a.lng.toFixed(5) + ',' + a.lat.toFixed(5) + '|' +
-             b.lng.toFixed(5) + ',' + b.lat.toFixed(5);
+      return a.lng.toFixed(5) + ',' + a.lat.toFixed(5) + '|' + b.lng.toFixed(5) + ',' + b.lat.toFixed(5);
     }
 
     function haversineMeters(lng1, lat1, lng2, lat2) {
@@ -313,32 +271,27 @@
 
     function updateDistanceLabel(coords, distanceMeters) {
       ensureLabelLayer();
-      var src = map && map.getSource(ROUTE_LABEL_SOURCE_ID);
-      if (!src) return;
+      var src = map.getSource(ROUTE_LABEL_SOURCE_ID);
       var mid = midpointAtHalfLength(coords);
       if (!mid) {
-        src.setData({ type: 'FeatureCollection', features: [] });
+        src.setData(emptyCollection());
         return;
       }
-      var dist = (typeof distanceMeters === 'number' && isFinite(distanceMeters))
-        ? distanceMeters
-        : lineLengthMeters(coords);
+      var hasDistance = typeof distanceMeters === 'number' && isFinite(distanceMeters);
       src.setData({
         type: 'FeatureCollection',
         features: [{
           type: 'Feature',
           geometry: { type: 'Point', coordinates: mid },
-          properties: { label: formatDistance(dist) }
+          properties: { label: formatDistance(hasDistance ? distanceMeters : lineLengthMeters(coords)) }
         }]
       });
-      if (map.getLayer(ROUTE_LABEL_LAYER_ID)) {
-        map.setLayoutProperty(ROUTE_LABEL_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
-      }
+      map.setLayoutProperty(ROUTE_LABEL_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
     }
 
     function clearDistanceLabel() {
-      var src = map && map.getSource(ROUTE_LABEL_SOURCE_ID);
-      if (src) src.setData({ type: 'FeatureCollection', features: [] });
+      var src = map.getSource(ROUTE_LABEL_SOURCE_ID);
+      if (src) src.setData(emptyCollection());
     }
 
     function drawRouteGeometry(geom, distanceMeters) {
@@ -357,7 +310,7 @@
     }
 
     function fetchRouteViaMapbox(a, b) {
-      var token = typeof getAccessToken === 'function' ? getAccessToken() : '';
+      var token = getAccessToken();
       if (!token) {
         fetchInFlight = false;
         return;
@@ -392,7 +345,6 @@
 
     function fetchRoute(a, b) {
       if (fetchInFlight) return;
-
       var key = routeKey(a, b);
       if (key === lastRouteKey) return;
       if ((Date.now() - lastCallMs) < DEBOUNCE_MS) return;
@@ -401,135 +353,91 @@
       lastCallMs = Date.now();
       lastRouteKey = key;
 
-      var localAvailable = !!(window.CompactOsmnx && window.CompactOsmnx.hasNetwork && window.CompactOsmnx.hasNetwork());
-      if (!localAvailable) {
+      if (!window.CompactOsmnx.hasNetwork()) {
         fetchRouteViaMapbox(a, b);
         return;
       }
-
       fetch('/api/osmnx-shortest-path', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ a: a, b: b })
       })
         .then(function (res) {
-          if (res.status === 404 || res.status === 409) {
-            // out_of_bounds / no_graph_cached — fall back cleanly
-            return res.json().then(function (body) {
-              throw { fallback: true, body: body };
-            });
-          }
+          // 404/409: the ends are outside the cached graph, or there is no graph yet.
+          if (res.status === 404 || res.status === 409) throw { fallback: true };
           if (!res.ok) throw new Error('osmnx ' + res.status);
           return res.json();
         })
         .then(function (data) {
-          if (!data || !data.ok || !data.geometry) {
-            throw { fallback: true };
-          }
+          if (!data || !data.ok || !data.geometry) throw { fallback: true };
           drawRouteGeometry(data.geometry, data.distanceMeters);
           fetchInFlight = false;
         })
         .catch(function (err) {
-          if (err && err.fallback) {
-            fetchRouteViaMapbox(a, b);
-          } else {
-            console.warn('[routing] local path failed, falling back:', err);
-            fetchRouteViaMapbox(a, b);
-          }
+          if (!(err && err.fallback)) console.warn('[routing] local path failed, falling back:', err);
+          fetchRouteViaMapbox(a, b);
         });
     }
 
-    // ---- Dwell logic (shared for both tags) ----
-
-    // Returns progress 0→1 (1 = confirmed). Negative = tag absent.
+    // The progress 0..1 of a tag's hold (1 sets its end), or -1 when the tag is gone.
     function updateTagDwell(state, tagPoint, nowMs) {
       if (!tagPoint) {
         state.holdPoint = null;
         state.holdSinceMs = 0;
-        return -1; // tag lifted
+        return -1;
       }
-
-      if (!state.holdPoint) {
-        state.holdPoint = { x: tagPoint.x, y: tagPoint.y };
-        state.holdSinceMs = nowMs;
-        return 0;
+      if (state.holdPoint) {
+        var dx = tagPoint.x - state.holdPoint.x;
+        var dy = tagPoint.y - state.holdPoint.y;
+        if (Math.sqrt(dx * dx + dy * dy) <= MOVE_THRESHOLD_PX) {
+          return Math.min(1, (nowMs - state.holdSinceMs) / HOLD_MS);
+        }
       }
-
-      var dx = tagPoint.x - state.holdPoint.x;
-      var dy = tagPoint.y - state.holdPoint.y;
-      if (Math.sqrt(dx * dx + dy * dy) > MOVE_THRESHOLD_PX) {
-        state.holdPoint = { x: tagPoint.x, y: tagPoint.y };
-        state.holdSinceMs = nowMs;
-        return 0;
-      }
-
-      return Math.min(1, (nowMs - state.holdSinceMs) / HOLD_MS);
+      state.holdPoint = { x: tagPoint.x, y: tagPoint.y };
+      state.holdSinceMs = nowMs;
+      return 0;
     }
-
-    // ---- Main update (called every poll frame) ----
 
     function update(tagAPoint, tagBPoint, nowMs) {
       var progressA = updateTagDwell(tagA, tagAPoint, nowMs);
       var progressB = updateTagDwell(tagB, tagBPoint, nowMs);
+      // A lifted tag leaves its pin at full size.
+      setPinScale(tagA, progressA < 0 ? 1 : progressA);
+      setPinScale(tagB, progressB < 0 ? 1 : progressB);
 
-      // Animate pin scale while dwelling; keep at 1 after confirmed
-      if (progressA < 0) {
-        setPinScale(tagA, 1); // tag lifted — keep pin visible at full size
-      } else {
-        setPinScale(tagA, progressA);
+      if (progressA >= 1) {
+        var geoA = map.unproject([tagAPoint.x, tagAPoint.y]);
+        tagA.lngLat = { lng: geoA.lng, lat: geoA.lat };
+        updatePin(tagA, geoA.lng, geoA.lat, 'A', '#22cc66');
       }
-      if (progressB < 0) {
-        setPinScale(tagB, 1);
-      } else {
-        setPinScale(tagB, progressB);
-      }
-
-      if (progressA >= 1 && tagAPoint) {
-        var geo = map.unproject([tagAPoint.x, tagAPoint.y]);
-        tagA.lngLat = { lng: geo.lng, lat: geo.lat };
-        updatePin(tagA, geo.lng, geo.lat, 'A', '#22cc66');
-      }
-      if (progressB >= 1 && tagBPoint) {
+      if (progressB >= 1) {
         var geoB = map.unproject([tagBPoint.x, tagBPoint.y]);
         tagB.lngLat = { lng: geoB.lng, lat: geoB.lat };
         updatePin(tagB, geoB.lng, geoB.lat, 'B', '#ff5555');
       }
 
-      // Show dashed pending line whenever both tags are visible but the
-      // currently drawn route (if any) doesn't match the live endpoints yet.
-      var bothPresent = (progressA >= 0 && tagAPoint) && (progressB >= 0 && tagBPoint);
+      // The dashed line shows while both tags are down and the drawn route is not yet theirs.
       var liveKey = (tagA.lngLat && tagB.lngLat) ? routeKey(tagA.lngLat, tagB.lngLat) : '';
-      var routeMatchesLive = !!liveKey && drawnRouteKey === liveKey;
-      var showPending = bothPresent && !routeMatchesLive;
-      setPendingLine(showPending ? tagAPoint : null,
-                     showPending ? tagBPoint : null);
-      if (!showPending) stopDashAnimation();
+      var showPending = !!(tagAPoint && tagBPoint) && !(liveKey && drawnRouteKey === liveKey);
+      setPendingLine(showPending ? tagAPoint : null, showPending ? tagBPoint : null);
 
-      if (tagA.lngLat && tagB.lngLat) {
-        fetchRoute(tagA.lngLat, tagB.lngLat);
-      }
+      if (tagA.lngLat && tagB.lngLat) fetchRoute(tagA.lngLat, tagB.lngLat);
     }
-
-    // ---- Visibility toggle (N key) ----
 
     function setVisible(show) {
       visible = !!show;
+      var v = visible ? 'visible' : 'none';
       setLayersVisible(visible);
-      if (map && map.getLayer(PENDING_LINE_LAYER_ID))
-        map.setLayoutProperty(PENDING_LINE_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
-      if (map && map.getLayer(ROUTE_LABEL_LAYER_ID))
-        map.setLayoutProperty(ROUTE_LABEL_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
+      if (map.getLayer(PENDING_LINE_LAYER_ID)) map.setLayoutProperty(PENDING_LINE_LAYER_ID, 'visibility', v);
+      if (map.getLayer(ROUTE_LABEL_LAYER_ID)) map.setLayoutProperty(ROUTE_LABEL_LAYER_ID, 'visibility', v);
       if (tagA.marker) tagA.marker.getElement().style.display = visible ? '' : 'none';
       if (tagB.marker) tagB.marker.getElement().style.display = visible ? '' : 'none';
     }
-
-    // ---- Clear ----
 
     function clear() {
       setGeoJSON(null);
       setPendingLine(null, null);
       clearDistanceLabel();
-      stopDashAnimation();
       removePin(tagA);
       removePin(tagB);
       tagA = makeTagState();

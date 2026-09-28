@@ -1,20 +1,26 @@
 (function () {
-  // In-map workshop AUTHORING. Opened from the map's "Workshops" nav button, it
-  // edits the same {id,name,steps:[...]} shape the runtime player reads, directly
-  // against the live map (pan/zoom + "Capture view", per-step theme/environment,
-  // draggable on-map text labels, .dxf floorplan upload). No VGA — the old
-  // settings-page editor's VGA/boundary tooling is intentionally omitted.
+  // Workshop authoring on the live map, opened from the workshop picker. It
+  // edits the {id, name, steps: [...]} list that workshopRuntime.js plays: each
+  // part's view, basemap or floorplan, data layers, and on-map texts and images.
 
-  function clamp01(v) { v = Number(v); return !isFinite(v) ? 0 : (v < 0 ? 0 : (v > 1 ? 1 : v)); }
-  function uid() { return 'ws_' + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4); }
+  function clamp01(v) {
+    v = Number(v);
+    if (!isFinite(v)) return 0;
+    return Math.max(0, Math.min(1, v));
+  }
+
+  function uid() {
+    return 'ws_' + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+  }
 
   var OUTDOOR_THEMES = [
     { value: 'streets', label: 'Streets' },
     { value: 'satellite', label: 'Satellite' },
-    { value: 'topo', label: 'Topographic' }
+    { value: 'topo', label: 'Topographic' },
+    { value: 'paper', label: 'Paper map' }
   ];
 
-  // Uploaded GeoJSON layers are stored per step as 'custom:<file id>'.
+  // A part lists uploaded GeoJSON layers in its dataLayers as 'custom:<file id>'.
   var CUSTOM_PREFIX = 'custom:';
 
   function createEditor() {
@@ -25,40 +31,47 @@
     var sublayersOpenById = {};
 
     var panel = null;
-    var labelOverlay = null;   // draggable text-label layer over #main_container
-    var els = {};              // cached panel sub-elements
+    var labelOverlay = null;
+    var els = {};
     var container = null;
 
-    function getApp() { return window.CompactMapApp || null; }
+    function getApp() {
+      return window.CompactMapApp;
+    }
+
     function getContainer() {
       if (!container) container = document.getElementById('main_container') || document.body;
       return container;
     }
 
-    // ---- data helpers ----
-    function curWorkshop() { return state.workshops[state.wsIndex] || null; }
+    function curWorkshop() {
+      return state.workshops[state.wsIndex] || null;
+    }
+
     function curStep() {
       var w = curWorkshop();
       if (!w || !Array.isArray(w.steps)) return null;
       return w.steps[state.stepIndex] || null;
     }
-    function makeStep(n) {
-      return { id: n, label: 'Part ' + n, theme: 'streets', indoor: false, indoorId: '', mapView: null, labels: [], images: [], dataLayers: [] };
-    }
-    // A part's display name is independent from text placed on the map.
-    function stepName(step, idx) {
+
+    function partName(idx) {
       return 'Part ' + (idx + 1);
     }
-    function syncStepLabel(step, idx) {
-      if (step) step.label = stepName(step, idx);
+
+    function makeStep(n) {
+      return { id: n, label: partName(n - 1), theme: 'streets', indoor: false, indoorId: '', mapView: null, labels: [], images: [], dataLayers: [] };
     }
 
-    // ---- persistence ----
+    function makeWorkshop(name) {
+      return { id: uid(), name: name, steps: [makeStep(1)] };
+    }
+
     function scheduleSave() {
       setStatus('Saving…');
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(saveNow, 500);
     }
+
     function saveNow() {
       saveTimer = 0;
       fetch('/api/workshops', {
@@ -66,8 +79,14 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workshops: state.workshops })
       }).then(function (r) { return r.json(); }).then(function (d) {
-        setStatus(d && d.ok ? 'Saved' : 'Save failed', d && d.ok ? '' : 'err');
-        if (d && d.ok) setTimeout(function () { if (els.status && els.status.textContent === 'Saved') setStatus(''); }, 1200);
+        if (!d || !d.ok) {
+          setStatus('Save failed', 'err');
+          return;
+        }
+        setStatus('Saved');
+        setTimeout(function () {
+          if (els.status.textContent === 'Saved') setStatus('');
+        }, 1200);
       }).catch(function () { setStatus('Save failed', 'err'); });
     }
 
@@ -76,45 +95,40 @@
         .then(function (r) { return r.json(); })
         .then(function (d) {
           state.workshops = (d && Array.isArray(d.workshops)) ? d.workshops : [];
-          // Normalize: every step needs labels + dataLayers arrays.
           state.workshops.forEach(function (w) {
             if (!Array.isArray(w.steps)) w.steps = [];
             w.steps.forEach(function (s, i) {
               if (!Array.isArray(s.labels)) s.labels = [];
               if (!Array.isArray(s.images)) s.images = [];
               if (!Array.isArray(s.dataLayers)) s.dataLayers = [];
-              syncStepLabel(s, i);
+              s.label = partName(i);
             });
           });
-          if (!state.workshops.length) {
-            state.workshops.push({ id: uid(), name: 'Workshop 1', steps: [makeStep(1)] });
-          }
+          if (!state.workshops.length) state.workshops.push(makeWorkshop('Workshop 1'));
           state.wsIndex = 0;
           state.stepIndex = 0;
         })
         .catch(function () {
-          state.workshops = [{ id: uid(), name: 'Workshop 1', steps: [makeStep(1)] }];
-          state.wsIndex = 0; state.stepIndex = 0;
+          state.workshops = [makeWorkshop('Workshop 1')];
+          state.wsIndex = 0;
+          state.stepIndex = 0;
         });
     }
+
     function loadFloorplans() {
       return fetch('/api/floorplans', { cache: 'no-store' })
         .then(function (r) { return r.json(); })
         .then(function (d) { state.floorplans = (d && Array.isArray(d.floorplans)) ? d.floorplans : []; })
         .catch(function () { state.floorplans = []; });
     }
+
+    // Refreshes the map's shared id/name registry of uploaded layers.
     function loadCustomLayers() {
-      // Refresh the map app's shared id/name registry after catalog changes.
-      var geo = window.CompactCustomGeoLayers;
-      if (geo && typeof geo.refresh === 'function') {
-        return new Promise(function (resolve) {
-          geo.refresh(function () { resolve(); });
-        });
-      }
-      return fetch('/api/custom-layers', { cache: 'no-store' })
-        .then(function (r) { return r.json(); })
-        .catch(function () {});
+      return new Promise(function (resolve) {
+        window.CompactCustomGeoLayers.refresh(function () { resolve(); });
+      });
     }
+
     function loadDataLayers() {
       return fetch('/api/data-layers', { cache: 'no-store' })
         .then(function (r) { return r.json(); })
@@ -122,19 +136,16 @@
         .catch(function () { state.dataLayers = []; });
     }
 
-    // ---- apply a step's state to the live map (mirrors runtime.applyStep, no tagging) ----
+    // The runtime's applyStep without the input tagging.
     function applyStepToMap(step) {
       var a = getApp();
-      if (!a || !step) return;
-      if (step.indoor && a.setIndoorFloorplan) a.setIndoorFloorplan(step.indoorId || '');
-      var layer = step.indoor ? 'floorplan' : (step.theme || 'streets');
-      if (a.setMapTheme) a.setMapTheme(layer);
-      if (step.mapView && a.applyStepView) a.applyStepView(step.mapView);
-      // setDataLayers self-defers past any style reload setMapTheme kicked off.
-      if (a.setDataLayers) a.setDataLayers(Array.isArray(step.dataLayers) ? step.dataLayers : []);
+      if (step.indoor) a.setIndoorFloorplan(step.indoorId || '');
+      a.setMapTheme(step.indoor ? 'floorplan' : (step.theme || 'streets'));
+      if (step.mapView) a.applyStepView(step.mapView);
+      // setDataLayers waits out any style reload setMapTheme started.
+      a.setDataLayers(Array.isArray(step.dataLayers) ? step.dataLayers : []);
     }
 
-    // ================= draggable on-map text labels =================
     function ensureLabelOverlay() {
       if (labelOverlay) return labelOverlay;
       labelOverlay = document.createElement('div');
@@ -157,6 +168,51 @@
       labels.forEach(function (l, i) { overlay.appendChild(buildLabelChip(l, i, step)); });
       var images = Array.isArray(step.images) ? step.images : [];
       images.forEach(function (img, i) { overlay.appendChild(buildImageChip(img, i, step)); });
+    }
+
+    // Follows the mouse until the button is released, then saves.
+    function trackDrag(onMove) {
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        scheduleSave();
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    }
+
+    // Dragging the chip stores its centre as a fraction of the map container.
+    function makeMovable(chip, item) {
+      chip.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        var rect = getContainer().getBoundingClientRect();
+        trackDrag(function (ev) {
+          item.xPct = clamp01((ev.clientX - rect.left) / rect.width);
+          item.yPct = clamp01((ev.clientY - rect.top) / rect.height);
+          chip.style.left = (item.xPct * 100) + '%';
+          chip.style.top = (item.yPct * 100) + '%';
+        });
+      });
+    }
+
+    function addDeleteButton(chip, list, index) {
+      var del = document.createElement('button');
+      del.type = 'button';
+      del.textContent = '×';
+      Object.assign(del.style, {
+        position: 'absolute', top: '-10px', right: '-10px',
+        width: '20px', height: '20px', lineHeight: '18px', padding: '0',
+        borderRadius: '50%', border: '1px solid #b0483e', background: '#fff',
+        color: '#b0483e', fontWeight: '700', cursor: 'pointer'
+      });
+      del.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      del.addEventListener('click', function (e) {
+        e.stopPropagation();
+        list.splice(index, 1);
+        renderLabels();
+        scheduleSave();
+      });
+      chip.appendChild(del);
     }
 
     function buildLabelChip(label, index, step) {
@@ -182,62 +238,20 @@
         userSelect: 'none'
       });
 
-      // Editable text.
       var textEl = document.createElement('span');
       textEl.textContent = String(label.text || '');
       textEl.setAttribute('contenteditable', 'true');
       textEl.style.outline = 'none';
       textEl.style.cursor = 'text';
-      textEl.addEventListener('mousedown', function (e) { e.stopPropagation(); }); // don't start a drag when editing
+      // Editing the text must not start a drag.
+      textEl.addEventListener('mousedown', function (e) { e.stopPropagation(); });
       textEl.addEventListener('input', function () {
         label.text = textEl.textContent;
-        syncStepLabel(step, state.stepIndex);
-        renderStepList();
         scheduleSave();
       });
       chip.appendChild(textEl);
-
-      // Delete button.
-      var del = document.createElement('button');
-      del.type = 'button';
-      del.textContent = '×';
-      Object.assign(del.style, {
-        position: 'absolute', top: '-10px', right: '-10px',
-        width: '20px', height: '20px', lineHeight: '18px', padding: '0',
-        borderRadius: '50%', border: '1px solid #b0483e', background: '#fff',
-        color: '#b0483e', fontWeight: '700', cursor: 'pointer'
-      });
-      del.addEventListener('mousedown', function (e) { e.stopPropagation(); });
-      del.addEventListener('click', function (e) {
-        e.stopPropagation();
-        step.labels.splice(index, 1);
-        syncStepLabel(step, state.stepIndex);
-        renderLabels();
-        renderStepList();
-        scheduleSave();
-      });
-      chip.appendChild(del);
-
-      // Drag to reposition (updates xPct/yPct as a fraction of the container).
-      chip.addEventListener('mousedown', function (e) {
-        if (e.target === del || e.target === textEl) return;
-        e.preventDefault();
-        var rect = getContainer().getBoundingClientRect();
-        function onMove(ev) {
-          label.xPct = clamp01((ev.clientX - rect.left) / rect.width);
-          label.yPct = clamp01((ev.clientY - rect.top) / rect.height);
-          chip.style.left = (label.xPct * 100) + '%';
-          chip.style.top = (label.yPct * 100) + '%';
-        }
-        function onUp() {
-          document.removeEventListener('mousemove', onMove);
-          document.removeEventListener('mouseup', onUp);
-          scheduleSave();
-        }
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-      });
-
+      addDeleteButton(chip, step.labels, index);
+      makeMovable(chip, label);
       return chip;
     }
 
@@ -264,24 +278,7 @@
         pointerEvents: 'none', userSelect: 'none'
       });
       chip.appendChild(img);
-
-      var del = document.createElement('button');
-      del.type = 'button';
-      del.textContent = '×';
-      Object.assign(del.style, {
-        position: 'absolute', top: '-10px', right: '-10px',
-        width: '20px', height: '20px', lineHeight: '18px', padding: '0',
-        borderRadius: '50%', border: '1px solid #b0483e', background: '#fff',
-        color: '#b0483e', fontWeight: '700', cursor: 'pointer'
-      });
-      del.addEventListener('mousedown', function (e) { e.stopPropagation(); });
-      del.addEventListener('click', function (e) {
-        e.stopPropagation();
-        step.images.splice(index, 1);
-        renderLabels();
-        scheduleSave();
-      });
-      chip.appendChild(del);
+      addDeleteButton(chip, step.images, index);
 
       var resize = document.createElement('span');
       resize.title = 'Resize image';
@@ -292,43 +289,19 @@
         cursor: 'nwse-resize'
       });
       resize.addEventListener('mousedown', function (e) {
-        e.preventDefault(); e.stopPropagation();
+        e.preventDefault();
+        e.stopPropagation();
         var containerRect = getContainer().getBoundingClientRect();
         var startX = e.clientX;
         var startWidth = chip.getBoundingClientRect().width;
-        function onMove(ev) {
+        trackDrag(function (ev) {
           var next = Math.max(0.05, Math.min(0.8, (startWidth + ev.clientX - startX) / containerRect.width));
           image.widthPct = next;
           chip.style.width = (next * 100) + '%';
-        }
-        function onUp() {
-          document.removeEventListener('mousemove', onMove);
-          document.removeEventListener('mouseup', onUp);
-          scheduleSave();
-        }
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
+        });
       });
       chip.appendChild(resize);
-
-      chip.addEventListener('mousedown', function (e) {
-        if (e.target === del || e.target === resize) return;
-        e.preventDefault();
-        var rect = getContainer().getBoundingClientRect();
-        function onMove(ev) {
-          image.xPct = clamp01((ev.clientX - rect.left) / rect.width);
-          image.yPct = clamp01((ev.clientY - rect.top) / rect.height);
-          chip.style.left = (image.xPct * 100) + '%';
-          chip.style.top = (image.yPct * 100) + '%';
-        }
-        function onUp() {
-          document.removeEventListener('mousemove', onMove);
-          document.removeEventListener('mouseup', onUp);
-          scheduleSave();
-        }
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-      });
+      makeMovable(chip, image);
       return chip;
     }
 
@@ -337,9 +310,7 @@
       if (!step) return;
       if (!Array.isArray(step.labels)) step.labels = [];
       step.labels.push({ text: 'Text', xPct: 0.5, yPct: 0.5, fontSize: 20, bgOpacity: 0.6 });
-      syncStepLabel(step, state.stepIndex);
       renderLabels();
-      renderStepList();
       scheduleSave();
     }
 
@@ -365,11 +336,14 @@
           setStatus('Image added ✓');
           scheduleSave();
         })
-        .catch(function (err) { setStatus('Image upload failed: ' + (err && err.message || ''), 'err'); });
+        .catch(function (err) { setStatus('Image upload failed: ' + ((err && err.message) || ''), 'err'); });
     }
 
-    // ================= panel UI =================
-    function css(el, styles) { Object.assign(el.style, styles); return el; }
+    function css(el, styles) {
+      Object.assign(el.style, styles);
+      return el;
+    }
+
     var BTN = {
       padding: '7px 12px', font: '600 13px system-ui, sans-serif', color: '#fff',
       background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.28)',
@@ -385,16 +359,15 @@
       b.addEventListener('click', onClick);
       return b;
     }
+
     function setStatus(msg, kind) {
-      if (!els.status) return;
       els.status.textContent = msg || '';
       els.status.style.color = kind === 'err' ? '#ff8d7e' : 'rgba(255,255,255,0.6)';
     }
 
     function ensurePanel() {
       if (panel) return panel;
-      // Native <select> dropdown lists render on a light OS popup, so give the
-      // options dark text (the closed field keeps its white-on-dark styling).
+      // A native select's option list opens on a light OS popup: dark text there.
       var optStyle = document.createElement('style');
       optStyle.textContent = '#wsEditPanel select option { color: #111; background: #fff; }';
       document.head.appendChild(optStyle);
@@ -409,7 +382,6 @@
         boxShadow: '-14px 0 34px rgba(0,0,0,0.45)'
       });
 
-      // Header
       var head = css(document.createElement('div'), {
         display: 'flex', alignItems: 'center', gap: '10px',
         padding: '12px 14px', borderBottom: '1px solid rgba(255,255,255,0.14)'
@@ -417,19 +389,16 @@
       var title = document.createElement('div');
       title.textContent = 'Workshop editor';
       css(title, { fontWeight: '700', fontSize: '15px', flex: '1' });
-      var closeBtn = mkBtn('Close', close_);
       head.appendChild(title);
-      head.appendChild(closeBtn);
+      head.appendChild(mkBtn('Close', closeEditor));
       panel.appendChild(head);
 
-      // Scroll body
       var body = css(document.createElement('div'), {
         flex: '1', minHeight: '0', overflowY: 'auto', padding: '12px 14px',
         display: 'flex', flexDirection: 'column', gap: '12px'
       });
       panel.appendChild(body);
 
-      // Workshop selector + new + delete
       var wsRow = css(document.createElement('div'), { display: 'flex', gap: '6px', alignItems: 'center' });
       els.wsSelect = document.createElement('select');
       css(els.wsSelect, fieldStyle());
@@ -440,26 +409,30 @@
       wsRow.appendChild(mkBtn('Delete', deleteWorkshop, Object.assign({}, BTN, { color: '#ff8d7e', borderColor: '#e6c6c0' })));
       body.appendChild(wsRow);
 
-      // Name
       els.nameInput = document.createElement('input');
       els.nameInput.type = 'text';
       els.nameInput.placeholder = 'Workshop name';
       css(els.nameInput, fieldStyle());
       els.nameInput.addEventListener('input', function () {
-        var w = curWorkshop(); if (w) { w.name = els.nameInput.value; renderWsSelect(); scheduleSave(); }
+        var w = curWorkshop();
+        if (!w) return;
+        w.name = els.nameInput.value;
+        renderWsSelect();
+        scheduleSave();
       });
-      body.appendChild(labeled('Name', els.nameInput));
+      els.nameInput.style.width = '100%';
+      body.appendChild(labeledRow('Name', els.nameInput));
 
-      // Workshop parts
       var stepsHead = css(document.createElement('div'), { display: 'flex', alignItems: 'center', gap: '8px' });
-      var stepsLbl = sectionLabel('Workshop parts'); stepsLbl.style.flex = '1'; stepsLbl.style.margin = '0';
+      var stepsLbl = sectionLabel('Workshop parts');
+      stepsLbl.style.flex = '1';
+      stepsLbl.style.margin = '0';
       stepsHead.appendChild(stepsLbl);
       stepsHead.appendChild(mkBtn('+ Add part', addStep, PRIMARY));
       body.appendChild(stepsHead);
       els.stepList = css(document.createElement('div'), { display: 'flex', flexDirection: 'column', gap: '4px' });
       body.appendChild(els.stepList);
 
-      // Selected-step controls
       els.stepControls = css(document.createElement('div'), {
         display: 'flex', flexDirection: 'column', gap: '10px',
         paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.14)'
@@ -467,7 +440,6 @@
       body.appendChild(els.stepControls);
       buildStepControls();
 
-      // Status
       els.status = css(document.createElement('div'), { fontSize: '12px', minHeight: '16px', color: 'rgba(255,255,255,0.6)' });
       body.appendChild(els.status);
 
@@ -482,71 +454,82 @@
         color: '#fff', font: '600 13px system-ui, sans-serif'
       };
     }
+
     function sectionLabel(text) {
       var l = document.createElement('div');
       l.textContent = text;
       css(l, { fontSize: '11px', fontWeight: '700', letterSpacing: '0.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.55)', margin: '2px 0' });
       return l;
     }
-    function labeled(text, field) {
+
+    function labeledRow(text, row) {
       var wrap = document.createElement('div');
       wrap.appendChild(sectionLabel(text));
-      field.style.width = '100%';
-      wrap.appendChild(field);
+      wrap.appendChild(row);
       return wrap;
     }
 
     function buildStepControls() {
       var c = els.stepControls;
-      c.innerHTML = '';
 
-      // Environment toggle
       var envRow = css(document.createElement('div'), { display: 'flex', gap: '6px' });
       els.envOutdoor = mkBtn('Outdoor', function () { setEnvironment(false); });
       els.envIndoor = mkBtn('Indoor', function () { setEnvironment(true); });
-      els.envOutdoor.style.flex = '1'; els.envIndoor.style.flex = '1';
+      els.envOutdoor.style.flex = '1';
+      els.envIndoor.style.flex = '1';
       envRow.appendChild(els.envOutdoor);
       envRow.appendChild(els.envIndoor);
       c.appendChild(labeledRow('Environment', envRow));
 
-      // Theme (outdoor)
       els.themeSelect = document.createElement('select');
-      css(els.themeSelect, fieldStyle()); els.themeSelect.style.width = '100%';
+      css(els.themeSelect, fieldStyle());
+      els.themeSelect.style.width = '100%';
       OUTDOOR_THEMES.forEach(function (t) {
-        var o = document.createElement('option'); o.value = t.value; o.textContent = t.label; els.themeSelect.appendChild(o);
+        var o = document.createElement('option');
+        o.value = t.value;
+        o.textContent = t.label;
+        els.themeSelect.appendChild(o);
       });
       els.themeSelect.addEventListener('change', function () {
-        var s = curStep(); if (s) { s.theme = els.themeSelect.value; applyStepToMap(s); scheduleSave(); }
+        var s = curStep();
+        if (!s) return;
+        s.theme = els.themeSelect.value;
+        applyStepToMap(s);
+        scheduleSave();
       });
       els.themeWrap = labeledRow('Basemap', els.themeSelect);
       c.appendChild(els.themeWrap);
 
-      // Floorplan (indoor)
       var fpRow = css(document.createElement('div'), { display: 'flex', gap: '6px', alignItems: 'center' });
       els.fpSelect = document.createElement('select');
-      css(els.fpSelect, fieldStyle()); els.fpSelect.style.flex = '1';
+      css(els.fpSelect, fieldStyle());
+      els.fpSelect.style.flex = '1';
       els.fpSelect.addEventListener('change', function () {
-        var s = curStep(); if (s) { s.indoorId = els.fpSelect.value || ''; applyStepToMap(s); scheduleSave(); }
+        var s = curStep();
+        if (!s) return;
+        s.indoorId = els.fpSelect.value || '';
+        applyStepToMap(s);
+        scheduleSave();
       });
       els.fpFile = document.createElement('input');
-      els.fpFile.type = 'file'; els.fpFile.accept = '.dxf'; els.fpFile.style.display = 'none';
+      els.fpFile.type = 'file';
+      els.fpFile.accept = '.dxf';
+      els.fpFile.style.display = 'none';
       els.fpFile.addEventListener('change', function (e) {
-        var f = e.target.files && e.target.files[0]; if (f) uploadFloorplan(f); els.fpFile.value = '';
+        var f = e.target.files && e.target.files[0];
+        if (f) uploadFloorplan(f);
+        els.fpFile.value = '';
       });
-      var upBtn = mkBtn('Upload', function () { els.fpFile.click(); });
       fpRow.appendChild(els.fpSelect);
-      fpRow.appendChild(upBtn);
+      fpRow.appendChild(mkBtn('Upload', function () { els.fpFile.click(); }));
       fpRow.appendChild(els.fpFile);
       els.fpWrap = labeledRow('Floorplan (.dxf)', fpRow);
       c.appendChild(els.fpWrap);
 
-      // Data layers shown on this step's map: the built-in checkboxes plus one
-      // per uploaded GeoJSON file (rows rebuilt by renderDataLayerChecks).
+      // A checkbox per data layer (see renderDataLayerChecks), then a drop zone
+      // for GeoJSON or uMap backup files.
       els.layersCol = css(document.createElement('div'), { display: 'flex', flexDirection: 'column', gap: '5px' });
       var layersWrap = labeledRow('Data layers', els.layersCol);
-
-      // Upload GeoJSON or a full uMap backup: drag & drop onto the zone, or
-      // click to browse. The backend normalizes both to the shared renderer.
       els.layerFile = document.createElement('input');
       els.layerFile.type = 'file';
       els.layerFile.accept = '.geojson,.json,.umap,application/geo+json,application/json';
@@ -568,7 +551,10 @@
         els.layerDrop.style.background = hot ? 'rgba(47,143,134,0.18)' : 'transparent';
       };
       els.layerDrop.addEventListener('click', function () { els.layerFile.click(); });
-      els.layerDrop.addEventListener('dragover', function (e) { e.preventDefault(); setDropHot(true); });
+      els.layerDrop.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        setDropHot(true);
+      });
       els.layerDrop.addEventListener('dragleave', function () { setDropHot(false); });
       els.layerDrop.addEventListener('drop', function (e) {
         e.preventDefault();
@@ -579,10 +565,11 @@
       layersWrap.appendChild(els.layerFile);
       c.appendChild(layersWrap);
 
-      // Capture view + add text/image
       var actRow = css(document.createElement('div'), { display: 'flex', gap: '6px' });
-      var capBtn = mkBtn('Capture view', captureView, PRIMARY); capBtn.style.flex = '1';
-      var textBtn = mkBtn('+ Add text', addLabel); textBtn.style.flex = '1';
+      var capBtn = mkBtn('Capture view', captureView, PRIMARY);
+      capBtn.style.flex = '1';
+      var textBtn = mkBtn('+ Add text', addLabel);
+      textBtn.style.flex = '1';
       els.imageFile = document.createElement('input');
       els.imageFile.type = 'file';
       els.imageFile.accept = 'image/png,image/jpeg,image/webp';
@@ -592,26 +579,20 @@
         els.imageFile.value = '';
         if (file) addImage(file);
       });
-      var imageBtn = mkBtn('+ Add image', function () { els.imageFile.click(); }); imageBtn.style.flex = '1';
+      var imageBtn = mkBtn('+ Add image', function () { els.imageFile.click(); });
+      imageBtn.style.flex = '1';
       actRow.appendChild(capBtn);
       actRow.appendChild(textBtn);
       actRow.appendChild(imageBtn);
       c.appendChild(actRow);
       c.appendChild(els.imageFile);
 
-      els.viewHint = css(document.createElement('div'), { fontSize: '11px', color: 'rgba(255,255,255,0.5)', lineHeight: '1.4' });
-      els.viewHint.textContent = 'Pan/zoom the map, then Capture view to save this part’s camera.';
-      c.appendChild(els.viewHint);
-    }
-    function labeledRow(text, row) {
-      var wrap = document.createElement('div');
-      wrap.appendChild(sectionLabel(text));
-      wrap.appendChild(row);
-      return wrap;
+      var viewHint = css(document.createElement('div'), { fontSize: '11px', color: 'rgba(255,255,255,0.5)', lineHeight: '1.4' });
+      viewHint.textContent = 'Pan/zoom the map, then Capture view to save this part’s camera.';
+      c.appendChild(viewHint);
     }
 
-    // ---- data-layer rows (built-ins + uploaded custom layers) ----
-    function layerCheckRow(key, label, onDelete, onToggle) {
+    function layerCheckRow(key, label, onDelete) {
       var step = curStep();
       var row = css(document.createElement('label'), {
         display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
@@ -622,15 +603,14 @@
       cb.style.accentColor = 'rgba(47,143,134,0.9)';
       cb.checked = !!(step && Array.isArray(step.dataLayers) && step.dataLayers.indexOf(key) !== -1);
       cb.addEventListener('change', function () {
-        var s = curStep(); if (!s) return;
+        var s = curStep();
+        if (!s) return;
         if (!Array.isArray(s.dataLayers)) s.dataLayers = [];
         var i = s.dataLayers.indexOf(key);
         if (cb.checked && i === -1) s.dataLayers.push(key);
         if (!cb.checked && i !== -1) s.dataLayers.splice(i, 1);
-        var a = getApp();
-        if (a && a.setDataLayers) a.setDataLayers(s.dataLayers);
+        getApp().setDataLayers(s.dataLayers);
         scheduleSave();
-        if (typeof onToggle === 'function') onToggle(cb.checked);
       });
       var txt = css(document.createElement('span'), {
         flex: '1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
@@ -638,24 +618,26 @@
       txt.textContent = label;
       row.appendChild(cb);
       row.appendChild(txt);
-      if (onDelete) {
-        // preventDefault so the click doesn't also activate the label's checkbox.
-        var del = mkBtn('\uD83D\uDDD1', function (e) { e.preventDefault(); e.stopPropagation(); onDelete(); },
-          Object.assign({}, BTN, { padding: '1px 3px', fontSize: '15px', lineHeight: '1', color: '#ff8d7e', border: '0', background: 'transparent' }));
-        del.title = 'Remove from Data Layers';
-        del.setAttribute('aria-label', 'Remove ' + label + ' from Data Layers');
-        row.appendChild(del);
-      }
+      // preventDefault: inside the label, the click would also toggle the checkbox.
+      var delStyle = Object.assign({}, BTN, { padding: '1px 3px', fontSize: '15px', lineHeight: '1', color: '#ff8d7e', border: '0', background: 'transparent' });
+      var del = mkBtn('🗑', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        onDelete();
+      }, delStyle);
+      del.title = 'Remove from Data Layers';
+      del.setAttribute('aria-label', 'Remove ' + label + ' from Data Layers');
+      row.appendChild(del);
       return row;
     }
 
     function renderCustomSublayers(layer, host) {
-      var key = String(layer && layer.id || '');
+      var key = String(layer.id || '');
       var id = key.slice(CUSTOM_PREFIX.length);
+      if (!id) return;
       var geo = window.CompactCustomGeoLayers;
-      if (!id || !geo) return;
 
-      var sublayers = typeof geo.getSublayers === 'function' ? geo.getSublayers(id) : null;
+      var sublayers = geo.getSublayers(id);
       if (!sublayers) {
         var loading = css(document.createElement('div'), {
           marginLeft: '24px', color: 'rgba(255,255,255,0.45)',
@@ -663,11 +645,9 @@
         });
         loading.textContent = 'Loading sublayers…';
         host.appendChild(loading);
-        if (typeof geo.loadLayer === 'function') {
-          geo.loadLayer(id, function () {
-            if (host.isConnected) renderDataLayerChecks();
-          });
-        }
+        geo.loadLayer(id, function () {
+          if (host.isConnected) renderDataLayerChecks();
+        });
         return;
       }
       if (!sublayers.length) return;
@@ -686,8 +666,7 @@
         font: '600 11px system-ui, sans-serif', padding: '2px 0'
       });
       function updateSummary() {
-        var current = typeof geo.getSublayers === 'function' ? geo.getSublayers(id) : sublayers;
-        var shown = (current || []).filter(function (entry) { return entry.visible; }).length;
+        var shown = (geo.getSublayers(id) || []).filter(function (entry) { return entry.visible; }).length;
         summary.textContent = shown + '/' + sublayers.length + ' sublayers';
       }
       updateSummary();
@@ -698,13 +677,12 @@
         gap: '5px', padding: '3px 0 4px'
       });
       function sublayerButton(text, show) {
-        var button = mkBtn(text, function (e) {
+        return mkBtn(text, function (e) {
           e.preventDefault();
           e.stopPropagation();
-          if (typeof geo.setAllSublayersVisible === 'function') geo.setAllSublayersVisible(id, show);
+          geo.setAllSublayersVisible(id, show);
           renderDataLayerChecks();
         }, Object.assign({}, BTN, { padding: '2px 6px', fontSize: '10px' }));
-        return button;
       }
       controls.appendChild(sublayerButton('All', true));
       controls.appendChild(sublayerButton('None', false));
@@ -726,9 +704,7 @@
         checkbox.style.margin = '0';
         checkbox.style.accentColor = entry.color;
         checkbox.addEventListener('change', function () {
-          if (typeof geo.setSublayerVisible === 'function') {
-            geo.setSublayerVisible(id, entry.name, checkbox.checked);
-          }
+          geo.setSublayerVisible(id, entry.name, checkbox.checked);
           updateSummary();
         });
         var swatch = css(document.createElement('span'), {
@@ -752,7 +728,6 @@
     }
 
     function renderDataLayerChecks() {
-      if (!els.layersCol) return;
       els.layersCol.innerHTML = '';
       state.dataLayers.forEach(function (l) {
         var group = css(document.createElement('div'), {
@@ -766,11 +741,21 @@
       });
     }
 
+    function refreshAfterLayerChange() {
+      renderDataLayerChecks();
+      var s = curStep();
+      if (s) getApp().setDataLayers(s.dataLayers || []);
+      scheduleSave();
+    }
+
     function uploadCustomLayers(files) {
       var list = Array.prototype.slice.call(files || []).filter(function (f) {
-        return /\.(?:(?:geo)?json|umap)$/i.test(String(f && f.name || ''));
+        return /\.(?:(?:geo)?json|umap)$/i.test(String((f && f.name) || ''));
       });
-      if (!list.length) { setStatus('Only .geojson/.json/.umap files', 'err'); return; }
+      if (!list.length) {
+        setStatus('Only .geojson/.json/.umap files', 'err');
+        return;
+      }
       setStatus('Uploading layer…');
       var pending = list.length;
       var failed = 0;
@@ -781,7 +766,7 @@
           .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
           .then(function (res) {
             if (!res.ok || !res.d || !res.d.ok) throw new Error((res.d && res.d.error) || 'upload_failed');
-            // Activate the new layer on the current step right away.
+            // Switched on for the current part straight away.
             var s = curStep();
             if (s) {
               if (!Array.isArray(s.dataLayers)) s.dataLayers = [];
@@ -794,11 +779,7 @@
             pending--;
             if (pending) return;
             Promise.all([loadCustomLayers(), loadDataLayers()]).then(function () {
-              renderDataLayerChecks();
-              var s = curStep();
-              var a = getApp();
-              if (s && a && a.setDataLayers) a.setDataLayers(s.dataLayers || []);
-              scheduleSave();
+              refreshAfterLayerChange();
               setStatus(failed ? 'Some uploads failed' : 'Layer added ✓', failed ? 'err' : '');
             });
           });
@@ -806,15 +787,14 @@
     }
 
     function deleteDataLayer(layer) {
-      var key = String(layer && layer.id || '');
-      var name = String(layer && layer.name || key);
+      var key = String((layer && layer.id) || '');
+      var name = String((layer && layer.name) || key);
       if (!key) return;
       if (!window.confirm('Remove layer "' + name + '" from Data Layers? It will be removed from every workshop, but its source file will be kept.')) return;
       fetch('/api/data-layers/' + encodeURIComponent(key), { method: 'DELETE' })
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (!d || !d.ok) throw new Error((d && d.error) || 'delete_failed');
-          // Strip the layer from every step of every workshop.
           state.workshops.forEach(function (w) {
             (Array.isArray(w.steps) ? w.steps : []).forEach(function (s) {
               if (!Array.isArray(s.dataLayers)) return;
@@ -822,26 +802,19 @@
               if (i !== -1) s.dataLayers.splice(i, 1);
             });
           });
-          var geo = window.CompactCustomGeoLayers;
-          if (key.indexOf(CUSTOM_PREFIX) === 0 && geo && typeof geo.forget === 'function') {
-            geo.forget(key.slice(CUSTOM_PREFIX.length));
+          if (key.indexOf(CUSTOM_PREFIX) === 0) {
+            window.CompactCustomGeoLayers.forget(key.slice(CUSTOM_PREFIX.length));
           }
           return Promise.all([loadCustomLayers(), loadDataLayers()]);
         })
         .then(function () {
-          renderDataLayerChecks();
-          var s = curStep();
-          var a = getApp();
-          if (s && a && a.setDataLayers) a.setDataLayers(s.dataLayers || []);
-          scheduleSave();
+          refreshAfterLayerChange();
           setStatus('Layer removed from Data Layers');
         })
-        .catch(function (err) { setStatus('Remove failed: ' + (err && err.message || ''), 'err'); });
+        .catch(function (err) { setStatus('Remove failed: ' + ((err && err.message) || ''), 'err'); });
     }
 
-    // ---- rendering ----
     function renderWsSelect() {
-      if (!els.wsSelect) return;
       els.wsSelect.innerHTML = '';
       state.workshops.forEach(function (w, i) {
         var o = document.createElement('option');
@@ -853,28 +826,33 @@
     }
 
     function renderStepList() {
-      if (!els.stepList) return;
       els.stepList.innerHTML = '';
       var w = curWorkshop();
       if (!w) return;
       w.steps.forEach(function (step, i) {
+        var selected = i === state.stepIndex;
         var row = css(document.createElement('div'), {
           display: 'flex', alignItems: 'center', gap: '6px',
           padding: '7px 9px', borderRadius: '7px', cursor: 'pointer',
-          border: '1px solid ' + (i === state.stepIndex ? 'rgba(47,143,134,0.9)' : 'rgba(255,255,255,0.14)'),
-          background: i === state.stepIndex ? 'rgba(47,143,134,0.22)' : 'rgba(255,255,255,0.05)'
+          border: '1px solid ' + (selected ? 'rgba(47,143,134,0.9)' : 'rgba(255,255,255,0.14)'),
+          background: selected ? 'rgba(47,143,134,0.22)' : 'rgba(255,255,255,0.05)'
         });
         var num = css(document.createElement('span'), { opacity: '0.6', fontSize: '11px', flex: '0 0 auto' });
         num.textContent = 'P' + (i + 1);
         var nm = css(document.createElement('span'), { flex: '1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: '600' });
-        nm.textContent = stepName(step, i);
+        nm.textContent = partName(i);
         var envTag = css(document.createElement('span'), { fontSize: '10px', opacity: '0.7', flex: '0 0 auto' });
         envTag.textContent = step.indoor ? 'indoor' : 'outdoor';
-        row.appendChild(num); row.appendChild(nm); row.appendChild(envTag);
+        row.appendChild(num);
+        row.appendChild(nm);
+        row.appendChild(envTag);
         row.addEventListener('click', function () { selectStep(i); });
         if (w.steps.length > 1) {
-          var del = mkBtn('×', function (e) { e.stopPropagation(); deleteStep(i); }, Object.assign({}, BTN, { padding: '2px 8px', color: '#ff8d7e', borderColor: 'transparent', background: 'transparent' }));
-          row.appendChild(del);
+          var delStyle = Object.assign({}, BTN, { padding: '2px 8px', color: '#ff8d7e', borderColor: 'transparent', background: 'transparent' });
+          row.appendChild(mkBtn('×', function (e) {
+            e.stopPropagation();
+            deleteStep(i);
+          }, delStyle));
         }
         els.stepList.appendChild(row);
       });
@@ -883,12 +861,10 @@
     function renderStepControls() {
       var step = curStep();
       if (!step) return;
-      // env toggle active states
       var onStyle = { background: 'rgba(47,143,134,0.9)', borderColor: 'rgba(53,160,148,0.95)' };
       var offStyle = { background: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.28)' };
       css(els.envOutdoor, step.indoor ? offStyle : onStyle);
       css(els.envIndoor, step.indoor ? onStyle : offStyle);
-      // theme vs floorplan visibility
       els.themeWrap.style.display = step.indoor ? 'none' : 'block';
       els.fpWrap.style.display = step.indoor ? 'block' : 'none';
       els.themeSelect.value = step.theme || 'streets';
@@ -897,44 +873,55 @@
     }
 
     function renderFloorplanSelect(step) {
-      if (!els.fpSelect) return;
       els.fpSelect.innerHTML = '';
-      var def = document.createElement('option'); def.value = ''; def.textContent = 'Default plan'; els.fpSelect.appendChild(def);
+      var def = document.createElement('option');
+      def.value = '';
+      def.textContent = 'Default plan';
+      els.fpSelect.appendChild(def);
       state.floorplans.forEach(function (fp) {
-        var o = document.createElement('option'); o.value = fp.id; o.textContent = fp.name || fp.id; els.fpSelect.appendChild(o);
+        var o = document.createElement('option');
+        o.value = fp.id;
+        o.textContent = fp.name || fp.id;
+        els.fpSelect.appendChild(o);
       });
-      els.fpSelect.value = (step && step.indoorId) || '';
+      els.fpSelect.value = step.indoorId || '';
     }
 
     function renderAll() {
       renderWsSelect();
-      if (els.nameInput) { var w = curWorkshop(); els.nameInput.value = w ? (w.name || '') : ''; }
+      var w = curWorkshop();
+      els.nameInput.value = w ? (w.name || '') : '';
       renderStepList();
       renderStepControls();
       renderLabels();
     }
 
-    // ---- actions ----
     function selectWorkshop(idx) {
       if (idx < 0 || idx >= state.workshops.length) return;
       state.wsIndex = idx;
       state.stepIndex = 0;
-      var s = curStep(); if (s) applyStepToMap(s);
+      var s = curStep();
+      if (s) applyStepToMap(s);
       renderAll();
     }
+
     function selectStep(idx) {
-      var w = curWorkshop(); if (!w) return;
+      var w = curWorkshop();
+      if (!w) return;
       state.stepIndex = Math.max(0, Math.min(idx, w.steps.length - 1));
-      var s = curStep(); if (s) applyStepToMap(s);
+      var s = curStep();
+      if (s) applyStepToMap(s);
       renderStepList();
       renderStepControls();
       renderLabels();
     }
+
     function newWorkshop() {
-      state.workshops.push({ id: uid(), name: 'Workshop ' + (state.workshops.length + 1), steps: [makeStep(1)] });
+      state.workshops.push(makeWorkshop('Workshop ' + (state.workshops.length + 1)));
       selectWorkshop(state.workshops.length - 1);
       scheduleSave();
     }
+
     function deleteWorkshop() {
       var target = curWorkshop();
       if (!target) return;
@@ -950,62 +937,68 @@
         }
         if (targetIndex < 0) return;
         state.workshops.splice(targetIndex, 1);
-        if (!state.workshops.length) state.workshops.push({ id: uid(), name: 'Workshop 1', steps: [makeStep(1)] });
+        if (!state.workshops.length) state.workshops.push(makeWorkshop('Workshop 1'));
         state.wsIndex = Math.max(0, Math.min(targetIndex - 1, state.workshops.length - 1));
         state.stepIndex = 0;
         selectWorkshop(state.wsIndex);
         scheduleSave();
       }
 
-      var pf = window.CompactPageFlow;
-      if (pf && typeof pf.confirmDialog === 'function') {
-        pf.confirmDialog({
-          title: 'Delete workshop?',
-          message: '"' + targetName + '" and all of its parts will be permanently deleted.',
-          confirmText: 'Delete',
-          cancelText: 'Cancel',
-          danger: true,
-          onConfirm: removeTarget
-        });
-        return;
-      }
-      if (window.confirm('Delete "' + targetName + '" and all of its parts?')) removeTarget();
+      window.CompactPageFlow.confirmDialog({
+        title: 'Delete workshop?',
+        message: '"' + targetName + '" and all of its parts will be permanently deleted.',
+        confirmText: 'Delete',
+        cancelText: 'Cancel',
+        danger: true,
+        onConfirm: removeTarget
+      });
     }
+
     function addStep() {
-      var w = curWorkshop(); if (!w) return;
+      var w = curWorkshop();
+      if (!w) return;
       w.steps.push(makeStep(w.steps.length + 1));
       selectStep(w.steps.length - 1);
       scheduleSave();
     }
+
     function deleteStep(idx) {
-      var w = curWorkshop(); if (!w || w.steps.length <= 1) return;
+      var w = curWorkshop();
+      if (!w || w.steps.length <= 1) return;
       w.steps.splice(idx, 1);
-      // Renumber ids sequentially.
-      w.steps.forEach(function (s, i) { s.id = i + 1; syncStepLabel(s, i); });
+      w.steps.forEach(function (s, i) {
+        s.id = i + 1;
+        s.label = partName(i);
+      });
       if (state.stepIndex >= w.steps.length) state.stepIndex = w.steps.length - 1;
       selectStep(state.stepIndex);
       scheduleSave();
     }
+
     function setEnvironment(indoor) {
-      var s = curStep(); if (!s) return;
+      var s = curStep();
+      if (!s) return;
       if (!!s.indoor === !!indoor) return;
       s.indoor = !!indoor;
-      // The camera framing differs between outdoor map and indoor plan; drop the
-      // saved view so it re-frames (same behaviour as the old editor).
+      // An outdoor view does not frame the indoor plan or the other way round.
       s.mapView = null;
       applyStepToMap(s);
       renderStepControls();
       renderStepList();
       scheduleSave();
     }
+
     function captureView() {
-      var s = curStep(); var a = getApp();
-      if (!s || !a || !a.getMapView) return;
-      s.mapView = a.getMapView();
+      var s = curStep();
+      if (!s) return;
+      s.mapView = getApp().getMapView();
       setStatus('View captured ✓');
-      setTimeout(function () { if (els.status && els.status.textContent === 'View captured ✓') setStatus(''); }, 1200);
+      setTimeout(function () {
+        if (els.status.textContent === 'View captured ✓') setStatus('');
+      }, 1200);
       scheduleSave();
     }
+
     function uploadFloorplan(file) {
       setStatus('Uploading floorplan…');
       var fd = new FormData();
@@ -1016,45 +1009,51 @@
           if (!res.ok || !res.d || !res.d.ok) throw new Error((res.d && res.d.error) || 'upload_failed');
           state.floorplans = Array.isArray(res.d.floorplans) ? res.d.floorplans : state.floorplans;
           var s = curStep();
-          if (s) { s.indoor = true; s.indoorId = res.d.id || ''; s.mapView = null; applyStepToMap(s); }
+          if (s) {
+            s.indoor = true;
+            s.indoorId = res.d.id || '';
+            s.mapView = null;
+            applyStepToMap(s);
+          }
           renderStepControls();
           renderStepList();
           setStatus('Floorplan added ✓');
           scheduleSave();
         })
-        .catch(function (err) { setStatus('Upload failed: ' + (err && err.message || ''), 'err'); });
+        .catch(function (err) { setStatus('Upload failed: ' + ((err && err.message) || ''), 'err'); });
     }
 
-    // ---- open / close ----
-    function open_() {
-      if (open) return Promise.resolve();
-      // If the runtime player is active, leave it — authoring takes over the map.
-      var rt = window.CompactWorkshopRuntime;
-      if (rt && typeof rt.isActive === 'function' && rt.isActive() && typeof rt.exit === 'function') rt.exit();
+    function openEditor() {
+      if (open) return;
+      // Authoring takes the map over from a running workshop.
+      var runtime = window.CompactWorkshopRuntime;
+      if (runtime.isActive()) runtime.exit();
       ensurePanel();
       ensureLabelOverlay();
       open = true;
       panel.style.display = 'flex';
-      var start = loaded ? Promise.resolve() : Promise.all([loadWorkshops(), loadFloorplans(), loadCustomLayers(), loadDataLayers()]).then(function () { loaded = true; });
-      return start.then(function () {
-        var s = curStep(); if (s) applyStepToMap(s);
+      var start = loaded
+        ? Promise.resolve()
+        : Promise.all([loadWorkshops(), loadFloorplans(), loadCustomLayers(), loadDataLayers()]).then(function () { loaded = true; });
+      start.then(function () {
+        var s = curStep();
+        if (s) applyStepToMap(s);
         renderAll();
       });
     }
-    // Open the editor and immediately start a fresh workshop (picker "+" button).
-    function openNew() {
-      return Promise.resolve(open_()).then(function () { newWorkshop(); });
-    }
-    function close_() {
+
+    function closeEditor() {
       if (!open) return;
       open = false;
-      if (panel) panel.style.display = 'none';
-      renderLabels();  // hides the overlay
-      if (saveTimer) { clearTimeout(saveTimer); saveNow(); }
+      panel.style.display = 'none';
+      renderLabels();
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveNow();
+      }
     }
-    function toggle() { if (open) close_(); else open_(); }
 
-    return { open: open_, openNew: openNew, close: close_, toggle: toggle, isOpen: function () { return open; } };
+    return { open: openEditor, close: closeEditor, isOpen: function () { return open; } };
   }
 
   window.CompactWorkshopEditor = createEditor();

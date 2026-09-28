@@ -29,21 +29,16 @@
       font-family: var(--font-ui);
     }
     .hidden { display: none !important; }
-    /* Two stacked maps share the same box. #mapBlur (back) is the real
-       geographic basemap and is always shown; the privacy `blur()` filter is
-       toggled on it for screenshots. #map (front) has an empty/transparent
-       style and renders ONLY the data overlays, so they stay perfectly sharp
-       on top of the (optionally blurred) basemap. */
+    /* Two stacked maps: #mapBlur (back) holds the basemap and takes the privacy
+       blur; #map (front) is transparent and draws only the data, so it stays sharp. */
     #mapBlur {
       position: absolute;
       inset: 0;
       left: 300px;
       z-index: 0;
     }
-    #mapBlur.active .mapboxgl-canvas,
     #mapBlur.active .maplibregl-canvas,
     #mapBlur.active > * { filter: blur(var(--privacy-blur, 24px)); }
-    /* Front map is always transparent — it has no basemap, just overlays. */
     #map {
       position: absolute;
       inset: 0;
@@ -51,8 +46,6 @@
       z-index: 1;
       background: transparent;
     }
-    #map .mapboxgl-canvas-container,
-    #map .mapboxgl-canvas,
     #map .maplibregl-canvas-container,
     #map .maplibregl-canvas { background: transparent !important; }
     #privacyBadge {
@@ -114,29 +107,6 @@
       font-size: 11px;
       font-weight: 700;
       line-height: 1.35;
-    }
-    #sidebar .mode-filter {
-      display: flex;
-      gap: 4px;
-    }
-    #sidebar .mode-filter button {
-      flex: 1;
-      padding: 6px 8px;
-      border-radius: 6px;
-      border: 1px solid var(--line);
-      background: #fff;
-      color: var(--ink);
-      font-size: 11px;
-      font-weight: 700;
-      cursor: pointer;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    #sidebar .mode-filter button:hover { background: var(--green-soft); border-color: var(--green); }
-    #sidebar .mode-filter button.active {
-      background: var(--green);
-      border-color: var(--green-dark);
-      color: #fff;
     }
     #sidebar .sel-actions {
       display: flex;
@@ -204,7 +174,6 @@
     #sessionList .item .tag.expo { background: #e8f8fb; color: #1f7a81; }
     #sessionList .item .tag.unknown { background: #edf2f1; color: var(--muted); }
     #sessionList .empty { padding: 20px 8px; color: var(--muted); font-size: 12px; text-align: center; }
-    .legend { left: 316px; }
     .panel h1 {
       margin: 0 0 8px;
       font-size: 15px;
@@ -212,13 +181,10 @@
       text-transform: uppercase;
       color: var(--ink);
     }
-    .panel .stats { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
-    .panel .stats strong { color: var(--green-dark); }
     .panel label { display: block; font-size: 11px; font-weight: 700; color: var(--muted); margin: 10px 0 4px; text-transform: uppercase; letter-spacing: 0.06em; }
     .panel input[type="range"] { width: 100%; accent-color: var(--green); }
     .panel .row { display: flex; gap: 8px; align-items: center; }
     .panel .row input[type="range"] { flex: 1; }
-    .panel .row .val { font-size: 12px; color: var(--green-dark); min-width: 34px; text-align: right; }
     .panel .toggles { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
     .panel .toggle {
       flex: 1 1 auto;
@@ -234,30 +200,8 @@
     }
     .panel .toggle:hover { background: var(--green-tint); border-color: var(--green); }
     .panel .toggle.active { background: var(--green-soft); border-color: var(--green); color: var(--green-dark); }
-    .panel .note { font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.4; }
     .panel .err { color: var(--danger); font-size: 12px; margin-top: 6px; }
-    .legend {
-      position: absolute;
-      bottom: 16px;
-      left: 12px;
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 8px 12px;
-      font-size: 11px;
-      color: var(--muted);
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      box-shadow: 0 6px 18px rgba(31, 114, 107, 0.06);
-    }
-    .legend .bar {
-      width: 140px; height: 10px; border-radius: 6px;
-      background: linear-gradient(to right, rgba(33,102,172,0), rgb(103,169,207), rgb(209,229,240), rgb(253,219,199), rgb(239,138,98), rgb(178,24,43));
-    }
 
-    /* Annotation labels: bold colored text on a transparent background, sitting
-       just above the lng/lat. */
     .hm-ann-chip {
       pointer-events: auto;
       cursor: pointer;
@@ -271,8 +215,6 @@
       text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7), 0 0 1px rgba(0, 0, 0, 0.6);
       transform-origin: 50% 100%;
     }
-    /* Back button now lives at the top of the sidebar so it is always reachable
-       (the old bottom-left fixed button overlapped the legend). */
     #resultsBackBtn {
       display: inline-flex;
       align-items: center;
@@ -346,10 +288,6 @@
   <div class="err" id="err"></div>
 </div>
 
-<div class="legend">
-  <span>low</span><div class="bar"></div><span>high</span>
-</div>
-
 <script src="https://cdn.jsdelivr.net/gh/glowbox/maptastic@master/build/maptastic.min.js"></script>
 <script src="src/pageWarp.js"></script>
 <script src="https://unpkg.com/maplibre-gl@5.7.1/dist/maplibre-gl.js"></script>
@@ -358,14 +296,11 @@
 <script src="src/tagAssignments.js"></script>
 <script>
 (function () {
-  var CONFIG = (window.CompactMapConfig && window.CompactMapConfig.CONFIG) || {};
-  mapboxgl.accessToken = CONFIG.useMapboxServices ? (CONFIG.accessToken || '') : '';
+  var CONFIG = window.CompactMapConfig.CONFIG;
 
   var DRAWING_SOURCE_ID = 'heatmap-drawing-source';
-  var TAGS_SOURCE_ID = 'heatmap-tags-source';
   var ANNOTATIONS_SOURCE_ID = 'heatmap-annotations-source';
   var DRAWING_LINE_LAYER_ID = 'heatmap-drawing-line';
-  var TAGS_LAYER_ID = 'heatmap-tags-layer';
   var ANNOTATIONS_LAYER_ID = 'heatmap-annotations-layer';
   var FLOORPLAN_SOURCE_ID = 'heatmap-floorplan-source';
   var FLOORPLAN_LAYER_ID = 'heatmap-floorplan-lines';
@@ -382,78 +317,41 @@
     try { return JSON.parse(JSON.stringify(style)); } catch (_err) { return style; }
   }
 
-  function themeStyle(theme) {
-    var entry = CONFIG.styles && CONFIG.styles[theme];
-    if (!entry) return null;
-    if (entry.style) return entry.style;
-    return entry;
-  }
-
-  // Basemap styles the 'L' shortcut cycles through, mirroring the live map.
-  // These are MapLibre-compatible OSM raster styles in static/no-token mode.
-  var BASEMAP_STYLES = [
-    { label: 'Dark view', style: themeStyle('dark') || CONFIG.style },
-    { label: 'Streets view', style: themeStyle('dawn') || CONFIG.style },
-    { label: 'Light view', style: themeStyle('light') || CONFIG.style }
-  ];
-  var basemapIndex = 0;
-
-  var initialStyle = CONFIG.style || BASEMAP_STYLES[0].style;
   var initialCenter = CONFIG.center || [2.2085, 48.7116];
   var initialZoom = (typeof CONFIG.zoom === 'number') ? CONFIG.zoom : 15;
-  // The geographic style currently shown on the basemap (back) map. Cycled
-  // by the L key. Starts from CONFIG.style if provided.
-  var basemapStyle = initialStyle;
 
-  // A minimal Mapbox style with no background/land/water layers. The front
-  // map uses this so its WebGL canvas is genuinely transparent (nothing to
-  // clear opaque) — the data overlays draw on top of nothing and the
-  // blurred basemap from the back map shows straight through. This is the
-  // robust fix for the "canvas stays white" problem: we never fight the
-  // basemap's background layer because the front map has no basemap at all.
-  // `glyphs` is required because the winner-label layer is a symbol layer
-  // with text; without it Mapbox can't render any labels on this map.
+  // The front map has no basemap layers, so its canvas stays transparent over the back map.
   var EMPTY_STYLE = {
     version: 8,
-    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
     sources: {},
     layers: []
   };
 
-  // Front map: data overlays only, transparent, owns all interaction.
   var map = new mapboxgl.Map({
     container: 'map',
     style: EMPTY_STYLE,
     center: initialCenter,
     zoom: initialZoom,
     pitch: 0,
-    bearing: 0,
-    preserveDrawingBuffer: true
+    bearing: 0
   });
 
-  // Back map: the real geographic basemap, always present (it IS the map
-  // view), blurred via CSS only while privacy mode is on. Created up front
-  // since it's now the actual basemap, not an optional privacy extra.
   var blurMap = new mapboxgl.Map({
     container: 'mapBlur',
-    style: cloneStyle(basemapStyle),
+    style: cloneStyle(CONFIG.style),
     center: initialCenter,
     zoom: initialZoom,
     pitch: 0,
     bearing: 0,
-    interactive: false,        // front map owns all interaction
-    attributionControl: CONFIG.attributionControl !== false,
-    preserveDrawingBuffer: true
+    interactive: false,
+    attributionControl: CONFIG.attributionControl !== false
   });
-  // Keep the basemap locked to the front map's camera so the sharp overlays
-  // always sit exactly over the right ground.
   map.on('move', syncBlurCamera);
   map.on('zoom', syncBlurCamera);
   map.on('rotate', syncBlurCamera);
   map.on('pitch', syncBlurCamera);
 
   function syncBlurCamera() {
-    if (!blurMap) return;
     blurMap.jumpTo({
       center: map.getCenter(),
       zoom: map.getZoom(),
@@ -463,35 +361,30 @@
   }
 
   var state = {
-    sessionsByName: {},    // name -> { mode, data }
-    orderedNames: [],      // filenames, newest first
-    selectedNames: {},     // name -> true
-    modeFilter: 'all',
-    basemapFilter: 'all',
+    sessionsByName: {},    // 'session:' / 'timeline:' / 'expo:' + filename -> { filename, mode, basemap, data }
+    orderedNames: [],
+    selectedNames: {},
     drawingFeatures: [],
-    tagFeatures: [],
     annotationFeatures: [],
     stickerDotFeatures: [],
-    annotationMarkerSpecs: [], // [{ lng, lat, text, sessionName }]
-    annotationDomMarkers: [],  // mapboxgl.Marker instances currently on map
+    annotationMarkerSpecs: [],
+    annotationDomMarkers: [],
     showDrawing: true,
-    showTags: false,
     showAnnotations: true,
     showAnnotationMarkers: false,
     timelineFrameIndex: 0,
-    timelineFrameMax: 0,
     radius: 28,
     intensity: 1.0,
     bounds: null,
-    availableSteps: [],     // sorted step numbers present in the selected sessions
+    availableSteps: [],
     visibleSteps: null      // Set of enabled step numbers; null = show all
   };
 
   var queryParams = new URLSearchParams(window.location.search);
   var requestedWorkshopId = String(queryParams.get('workshop') || '').trim();
   var requestedWorkshopName = String(queryParams.get('name') || '').trim();
-  var workshopPreselection = qs('workshopPreselection');
-  if (requestedWorkshopId && workshopPreselection) {
+  if (requestedWorkshopId) {
+    var workshopPreselection = qs('workshopPreselection');
     workshopPreselection.textContent = 'Preselected: ' + (requestedWorkshopName || requestedWorkshopId);
     workshopPreselection.classList.remove('hidden');
   }
@@ -509,79 +402,28 @@
   }
 
   function visibleNames() {
-    return state.orderedNames.filter(function (n) {
-      var entry = state.sessionsByName[n];
-      if (!entry) return false;
-      if (state.modeFilter !== 'all' && entry.mode !== state.modeFilter) return false;
-      if (state.basemapFilter !== 'all' && entry.basemap !== state.basemapFilter) return false;
-      return true;
-    });
+    return state.orderedNames.filter(function (n) { return !!state.sessionsByName[n]; });
   }
 
   function selectedSessions() {
-    var visible = visibleNames();
-    var visibleSet = {};
-    for (var i = 0; i < visible.length; i++) visibleSet[visible[i]] = true;
     var out = [];
-    for (var j = 0; j < state.orderedNames.length; j++) {
-      var n = state.orderedNames[j];
-      if (state.selectedNames[n] && visibleSet[n]) {
-        var entry = state.sessionsByName[n];
-        if (!entry) continue;
-        if (entry.mode === 'timeline') {
-          var frames = entry.data && Array.isArray(entry.data.frames) ? entry.data.frames : [];
-          var idx = Math.max(0, Math.min(frames.length - 1, state.timelineFrameIndex));
-          var frame = frames[idx] || null;
-          if (frame && frame.state) out.push({ name: n, session: frame.state });
-        } else {
-          out.push({ name: n, session: entry.data });
-        }
+    visibleNames().forEach(function (n) {
+      if (!state.selectedNames[n]) return;
+      var entry = state.sessionsByName[n];
+      if (entry.mode !== 'timeline') {
+        out.push({ name: n, session: entry.data });
+        return;
       }
-    }
+      var frames = entry.data && Array.isArray(entry.data.frames) ? entry.data.frames : [];
+      var idx = Math.max(0, Math.min(frames.length - 1, state.timelineFrameIndex));
+      var frame = frames[idx];
+      if (frame && frame.state) out.push({ name: n, session: frame.state });
+    });
     return out;
   }
 
   function qs(id) { return document.getElementById(id); }
-  function setText(id, val) { var el = document.getElementById(id); if (el) el.textContent = val; }
   function setErr(msg) { qs('err').textContent = msg || ''; }
-
-  function buildHeatLayer(id, source, baseRadius, baseIntensity) {
-    return {
-      id: id,
-      type: 'heatmap',
-      source: source,
-      maxzoom: 22,
-      paint: {
-        'heatmap-weight': ['coalesce', ['get', 'weight'], 1],
-        'heatmap-intensity': [
-          'interpolate', ['linear'], ['zoom'],
-          10, baseIntensity * 0.6,
-          16, baseIntensity,
-          22, baseIntensity * 1.8
-        ],
-        'heatmap-color': [
-          'interpolate', ['linear'], ['heatmap-density'],
-          0.00, 'rgba(33,102,172,0)',
-          0.20, 'rgb(103,169,207)',
-          0.40, 'rgb(209,229,240)',
-          0.60, 'rgb(253,219,199)',
-          0.80, 'rgb(239,138,98)',
-          1.00, 'rgb(178,24,43)'
-        ],
-        'heatmap-radius': [
-          'interpolate', ['linear'], ['zoom'],
-          10, baseRadius * 0.6,
-          16, baseRadius,
-          22, baseRadius * 2.2
-        ],
-        'heatmap-opacity': [
-          'interpolate', ['linear'], ['zoom'],
-          10, 0.85,
-          22, 0.7
-        ]
-      }
-    };
-  }
 
   function buildDrawingLineLayer() {
     return {
@@ -645,9 +487,6 @@
     if (!map.getSource(DRAWING_SOURCE_ID)) {
       map.addSource(DRAWING_SOURCE_ID, { type: 'geojson', data: emptyFC() });
     }
-    if (!map.getSource(TAGS_SOURCE_ID)) {
-      map.addSource(TAGS_SOURCE_ID, { type: 'geojson', data: emptyFC() });
-    }
     if (!map.getSource(ANNOTATIONS_SOURCE_ID)) {
       map.addSource(ANNOTATIONS_SOURCE_ID, { type: 'geojson', data: emptyFC() });
     }
@@ -656,9 +495,6 @@
     }
     if (!map.getLayer(DRAWING_LINE_LAYER_ID)) {
       map.addLayer(buildDrawingLineLayer());
-    }
-    if (!map.getLayer(TAGS_LAYER_ID)) {
-      map.addLayer(buildHeatLayer(TAGS_LAYER_ID, TAGS_SOURCE_ID, state.radius * 1.4, state.intensity * 1.2));
     }
     if (!map.getLayer(ANNOTATIONS_LAYER_ID)) {
       map.addLayer(buildAnnotationHeatLayer(ANNOTATIONS_LAYER_ID, ANNOTATIONS_SOURCE_ID, state.radius * 1.2, state.intensity));
@@ -681,6 +517,15 @@
 
   function emptyFC() { return { type: 'FeatureCollection', features: [] }; }
 
+  function extendBoundsWithCoord(c) {
+    if (!Array.isArray(c) || c.length < 2) return;
+    var lng = Number(c[0]);
+    var lat = Number(c[1]);
+    if (!isFinite(lng) || !isFinite(lat)) return;
+    if (!state.bounds) state.bounds = new mapboxgl.LngLatBounds([lng, lat], [lng, lat]);
+    else state.bounds.extend([lng, lat]);
+  }
+
   function pushPoint(collection, lng, lat, weight, step) {
     if (!isFinite(lng) || !isFinite(lat)) return;
     collection.push({
@@ -691,23 +536,11 @@
         step: Number.isFinite(Number(step)) ? Number(step) : -1
       }
     });
-    if (!state.bounds) state.bounds = new mapboxgl.LngLatBounds([lng, lat], [lng, lat]);
-    else state.bounds.extend([lng, lat]);
+    extendBoundsWithCoord([lng, lat]);
   }
 
-  function extendBoundsWithCoord(c) {
-    if (!Array.isArray(c) || c.length < 2) return;
-    var lng = Number(c[0]);
-    var lat = Number(c[1]);
-    if (!isFinite(lng) || !isFinite(lat)) return;
-    if (!state.bounds) state.bounds = new mapboxgl.LngLatBounds([lng, lat], [lng, lat]);
-    else state.bounds.extend([lng, lat]);
-  }
-
-  // Convert a telecom-hall expo session (compact shape) into the {annotations FC,
-  // drawings FC, points} shape the heatmap renders. Like/dislike notes → annotation
-  // Points (with text + colour); walk/bike/car routes → drawing LineStrings; the
-  // Street-View point pool → extra heat points via a synthetic annotations entry.
+  // Expo sessions have their own compact shape: like/dislike notes become
+  // annotation points and walk/bicycle/car routes become drawing lines.
   function expoToHeatmapSession(data) {
     data = data && typeof data === 'object' ? data : {};
     var annFeatures = [];
@@ -742,12 +575,9 @@
     });
 
     return {
-      mode: 'expo',
       basemap: 'mapbox',
       annotations: { type: 'FeatureCollection', features: annFeatures },
-      drawings: { type: 'FeatureCollection', features: drawFeatures },
-      // keep the original for reference / future fields
-      _expo: data
+      drawings: { type: 'FeatureCollection', features: drawFeatures }
     };
   }
 
@@ -760,14 +590,11 @@
         if (ag && ag.type === 'Point' && Array.isArray(ag.coordinates) && ag.coordinates.length >= 2) {
           var alng = Number(ag.coordinates[0]);
           var alat = Number(ag.coordinates[1]);
-          var atext = (af.properties && af.properties.text) ? String(af.properties.text) : '';
-          var astep = af.properties && Number.isFinite(Number(af.properties.step))
-            ? Number(af.properties.step) : null;
-          pushPoint(state.annotationFeatures, alng, alat, 1, astep);
-          extendBoundsWithCoord([alng, alat]);
           var aProps = af.properties || {};
+          var astep = Number.isFinite(Number(aProps.step)) ? Number(aProps.step) : null;
+          pushPoint(state.annotationFeatures, alng, alat, 1, astep);
           state.annotationMarkerSpecs.push({
-            lng: alng, lat: alat, text: atext, step: astep,
+            lng: alng, lat: alat, text: aProps.text ? String(aProps.text) : '', step: astep,
             tagId: aProps.tagId != null ? String(aProps.tagId) : '',
             color: aProps.color ? String(aProps.color) : '',
             sessionName: sessionName || ''
@@ -776,8 +603,7 @@
       }
     }
 
-    // Stickers — feed into the same heatmap collection. Stickers with a
-    // comment also surface as labeled markers (same UX as annotations).
+    // Stickers feed the same heatmap; commented ones also get a label.
     var stickFc = session && session.stickers;
     if (stickFc && Array.isArray(stickFc.features)) {
       for (var si = 0; si < stickFc.features.length; si++) {
@@ -789,7 +615,6 @@
           var sprops = sf.properties || {};
           var sstep = Number.isFinite(Number(sprops.step)) ? Number(sprops.step) : null;
           pushPoint(state.annotationFeatures, slng, slat, 1, sstep);
-          extendBoundsWithCoord([slng, slat]);
           var sDotColor = sprops.color ? String(sprops.color) : DEFAULT_STICKER_COLOR;
           state.stickerDotFeatures.push({
             type: 'Feature',
@@ -800,7 +625,7 @@
             state.annotationMarkerSpecs.push({
               lng: slng, lat: slat, text: String(sprops.commentText),
               step: sstep, tagId: sprops.tagId != null ? String(sprops.tagId) : '',
-              color: sDotColor || '',
+              color: sDotColor,
               sessionName: sessionName || ''
             });
           }
@@ -808,7 +633,7 @@
       }
     }
 
-    // v2 schema: drawing.path.features; v1: drawings.features
+    // v2 sessions keep lines in drawing.path; v1 and converted expo sessions in drawings.
     var fc = (session && session.drawing && session.drawing.path)
       || (session && session.drawings)
       || null;
@@ -831,13 +656,11 @@
 
   function rebuildCollections(sessionEntries) {
     state.drawingFeatures = [];
-    state.tagFeatures = [];
     state.annotationFeatures = [];
     state.stickerDotFeatures = [];
     state.annotationMarkerSpecs = [];
     state.bounds = null;
-    (sessionEntries || []).forEach(function (entry) {
-      if (!entry) return;
+    sessionEntries.forEach(function (entry) {
       extractSessionPoints(entry.session, entry.name);
     });
   }
@@ -845,29 +668,22 @@
   function updateTimelineControls() {
     var maxFrame = 0;
     var hasTimeline = false;
-    var visibleSet = {};
-    visibleNames().forEach(function (name) { visibleSet[name] = true; });
-    for (var i = 0; i < state.orderedNames.length; i++) {
-      var name = state.orderedNames[i];
+    visibleNames().forEach(function (name) {
       var entry = state.sessionsByName[name];
-      if (!entry || entry.mode !== 'timeline' || !state.selectedNames[name] || !visibleSet[name]) continue;
+      if (entry.mode !== 'timeline' || !state.selectedNames[name]) return;
       var frames = entry.data && Array.isArray(entry.data.frames) ? entry.data.frames : [];
-      if (!frames.length) continue;
+      if (!frames.length) return;
       hasTimeline = true;
       maxFrame = Math.max(maxFrame, frames.length - 1);
-    }
+    });
 
-    state.timelineFrameMax = maxFrame;
     if (state.timelineFrameIndex > maxFrame) state.timelineFrameIndex = maxFrame;
 
-    var controls = qs('timelineControls');
     var slider = qs('timelineFrame');
-    var label = qs('timelineVal');
-    if (!controls || !slider || !label) return;
-    controls.classList.toggle('hidden', !hasTimeline);
+    qs('timelineControls').classList.toggle('hidden', !hasTimeline);
     slider.max = String(maxFrame);
     slider.value = String(state.timelineFrameIndex);
-    label.textContent = hasTimeline
+    qs('timelineVal').textContent = hasTimeline
       ? String(state.timelineFrameIndex + 1) + '/' + String(maxFrame + 1)
       : '0/0';
   }
@@ -880,9 +696,8 @@
   }
 
   function annotationLabelColor(spec) {
-    if (spec && spec.color) return String(spec.color);
-    if (spec && spec.tagId && window.CompactTagAssignments
-        && typeof window.CompactTagAssignments.getAssignment === 'function') {
+    if (spec.color) return String(spec.color);
+    if (spec.tagId) {
       var a = window.CompactTagAssignments.getAssignment(spec.tagId);
       if (a && a.color) return String(a.color);
     }
@@ -904,7 +719,8 @@
     for (var i = 0; i < specs.length; i++) {
       var s = specs[i];
       if (!isFinite(s.lng) || !isFinite(s.lat)) continue;
-      if (!stepVisible(Number.isFinite(Number(s.step)) ? Number(s.step) : 0)) continue;
+      var step = Number(s.step);
+      if (!stepVisible(Number.isFinite(step) ? step : 0)) continue;
       var text = String(s.text || '');
       if (!text) continue;
       var el = document.createElement('div');
@@ -913,15 +729,14 @@
       el.style.color = annotationLabelColor(s);
       el.style.fontSize = String(fontSizePxForAnnotationLabel(text)) + 'px';
       el.title = text + (s.sessionName ? '\n' + s.sessionName : '');
+      var meta = '';
+      if (s.step != null) {
+        meta = '<div style="opacity:0.7;font-size:11px;margin-bottom:4px;color:#333;">step ' + s.step
+          + (s.sessionName ? ' · ' + escapeHtml(s.sessionName) : '') + '</div>';
+      }
       var popup = new mapboxgl.Popup({ offset: 14, closeButton: true, maxWidth: '320px' })
-        .setHTML(
-          '<div style="font-family:Arial,sans-serif;font-size:13px;line-height:1.4;max-width:300px;color:#111;">'
-          + (s.step != null ? '<div style="opacity:0.7;font-size:11px;margin-bottom:4px;color:#333;">step ' + s.step + (s.sessionName ? ' · ' + escapeHtml(s.sessionName) : '') + '</div>' : '')
-          + '<div>' + escapeHtml(text) + '</div>'
-          + '</div>'
-        );
-      // Anchor 'bottom' so the chip's baseline sits just above the lng/lat —
-      // same convention as the live map.
+        .setHTML('<div style="font-family:Arial,sans-serif;font-size:13px;line-height:1.4;max-width:300px;color:#111;">'
+          + meta + '<div>' + escapeHtml(text) + '</div></div>');
       var marker = new mapboxgl.Marker({ element: el, anchor: 'bottom', offset: [0, -6] })
         .setLngLat([s.lng, s.lat])
         .setPopup(popup)
@@ -940,30 +755,21 @@
     ensureLayers();
     var byStep = function (f) { return stepVisible(featureStep(f)); };
     var drawings = (state.showDrawing ? state.drawingFeatures : []).filter(byStep);
-    var tags = (state.showTags ? state.tagFeatures : []).filter(byStep);
     var annotations = (state.showAnnotations ? state.annotationFeatures : []).filter(byStep);
     var stickerDots = (state.showAnnotations ? state.stickerDotFeatures : []).filter(byStep);
     map.getSource(DRAWING_SOURCE_ID).setData({ type: 'FeatureCollection', features: drawings });
-    map.getSource(TAGS_SOURCE_ID).setData({ type: 'FeatureCollection', features: tags });
     map.getSource(ANNOTATIONS_SOURCE_ID).setData({ type: 'FeatureCollection', features: annotations });
     map.getSource(STICKER_DOTS_SOURCE_ID).setData({ type: 'FeatureCollection', features: stickerDots });
     map.setLayoutProperty(DRAWING_LINE_LAYER_ID, 'visibility', state.showDrawing ? 'visible' : 'none');
-    map.setLayoutProperty(TAGS_LAYER_ID, 'visibility', state.showTags ? 'visible' : 'none');
     map.setLayoutProperty(ANNOTATIONS_LAYER_ID, 'visibility', state.showAnnotations ? 'visible' : 'none');
-    if (map.getLayer(STICKER_DOTS_LAYER_ID)) {
-      map.setLayoutProperty(STICKER_DOTS_LAYER_ID, 'visibility', state.showAnnotations ? 'visible' : 'none');
-    }
+    map.setLayoutProperty(STICKER_DOTS_LAYER_ID, 'visibility', state.showAnnotations ? 'visible' : 'none');
     renderAnnotationDomMarkers();
   }
 
   function updateHeatParams() {
-    if (map.getLayer(TAGS_LAYER_ID)) {
-      map.removeLayer(TAGS_LAYER_ID);
-    }
     if (map.getLayer(ANNOTATIONS_LAYER_ID)) {
       map.removeLayer(ANNOTATIONS_LAYER_ID);
     }
-    map.addLayer(buildHeatLayer(TAGS_LAYER_ID, TAGS_SOURCE_ID, state.radius * 1.4, state.intensity * 1.2));
     map.addLayer(buildAnnotationHeatLayer(ANNOTATIONS_LAYER_ID, ANNOTATIONS_SOURCE_ID, state.radius * 1.2, state.intensity));
   }
 
@@ -972,6 +778,40 @@
     try {
       map.fitBounds(state.bounds, { padding: 40, duration: 600, maxZoom: 17 });
     } catch (_err) {}
+  }
+
+  function listEntries(names, kind) {
+    return names.map(function (name) { return { key: kind + ':' + name, filename: name, kind: kind }; });
+  }
+
+  function loadSession(entry) {
+    var url = '/api/session/';
+    if (entry.kind === 'timeline') url = '/api/timeline-session/';
+    else if (entry.kind === 'expo') url = '/api/expo-session/';
+    return fetch(url + encodeURIComponent(entry.filename))
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        var mode;
+        if (entry.kind === 'timeline') {
+          mode = 'timeline';
+        } else if (entry.kind === 'expo') {
+          mode = 'expo';
+          data = expoToHeatmapSession(data);
+        } else {
+          mode = sessionMode(data);
+        }
+        state.sessionsByName[entry.key] = {
+          filename: entry.filename,
+          mode: mode,
+          basemap: sessionBasemap(data),
+          data: data
+        };
+        state.selectedNames[entry.key] = !requestedWorkshopId
+          || String(data && data.workshopId || '') === requestedWorkshopId;
+      })
+      .catch(function (err) {
+        console.warn('[heatmap] failed to load', entry.filename, err);
+      });
   }
 
   function loadAllSessions() {
@@ -985,11 +825,9 @@
         var files = (bodies[0] && bodies[0].sessions) || [];
         var timelineFiles = (bodies[1] && bodies[1].timelines) || [];
         var expoFiles = (bodies[2] && bodies[2].expoSessions) || [];
-        var entries = files.map(function (name) { return { key: 'session:' + name, filename: name, kind: 'session' }; })
-          .concat(timelineFiles.map(function (name) { return { key: 'timeline:' + name, filename: name, kind: 'timeline' }; }))
-          .concat(expoFiles.map(function (name) { return { key: 'expo:' + name, filename: name, kind: 'expo' }; }));
-        setText('sessionsTotal', String(entries.length));
-        setText('sessionsLoaded', '0');
+        var entries = listEntries(files, 'session')
+          .concat(listEntries(timelineFiles, 'timeline'))
+          .concat(listEntries(expoFiles, 'expo'));
         state.sessionsByName = {};
         state.orderedNames = entries.map(function (entry) { return entry.key; });
         state.selectedNames = {};
@@ -1000,35 +838,7 @@
           rebuildFromSelection();
           return;
         }
-        var loaded = 0;
-        return Promise.all(entries.map(function (entry) {
-          var url = entry.kind === 'timeline'
-            ? '/api/timeline-session/' + encodeURIComponent(entry.filename)
-            : (entry.kind === 'expo'
-              ? '/api/expo-session/' + encodeURIComponent(entry.filename)
-              : '/api/session/' + encodeURIComponent(entry.filename));
-          return fetch(url)
-            .then(function (res) { return res.json(); })
-            .then(function (data) {
-              // Expo sessions have their own compact shape — convert to the heatmap's
-              // expected {annotations FC, drawings FC} before storing.
-              if (entry.kind === 'expo') data = expoToHeatmapSession(data);
-              state.sessionsByName[entry.key] = {
-                filename: entry.filename,
-                kind: entry.kind,
-                mode: entry.kind === 'timeline' ? 'timeline' : (entry.kind === 'expo' ? 'expo' : sessionMode(data)),
-                basemap: sessionBasemap(data),
-                data: data
-              };
-              state.selectedNames[entry.key] = !requestedWorkshopId
-                || String(data && data.workshopId || '') === requestedWorkshopId;
-              loaded++;
-              setText('sessionsLoaded', String(loaded));
-            })
-            .catch(function (err) {
-              console.warn('[heatmap] failed to load', entry.filename, err);
-            });
-        }));
+        return Promise.all(entries.map(loadSession));
       })
       .then(function () {
         renderSessionList();
@@ -1055,7 +865,7 @@
       return;
     }
     names.forEach(function (name) {
-      var entry = state.sessionsByName[name] || { mode: 'unknown' };
+      var entry = state.sessionsByName[name];
       var item = document.createElement('label');
       item.className = 'item';
 
@@ -1070,13 +880,14 @@
 
       var nm = document.createElement('span');
       nm.className = 'nm';
-      var filename = entry.filename || name.replace(/^(session|timeline):/, '');
-      nm.textContent = filename.replace(/^session_/, '').replace(/^timeline_/, '').replace(/^expo_/, '').replace(/\.json$/, '');
-      nm.title = filename;
+      nm.textContent = entry.filename.replace(/^session_/, '').replace(/^timeline_/, '').replace(/^expo_/, '').replace(/\.json$/, '');
+      nm.title = entry.filename;
 
       var tag = document.createElement('span');
       tag.className = 'tag ' + entry.mode;
-      tag.textContent = entry.mode === 'timeline' ? 'Y' : (entry.mode === 'expo' ? 'E' : '?');
+      tag.textContent = '?';
+      if (entry.mode === 'timeline') tag.textContent = 'Y';
+      else if (entry.mode === 'expo') tag.textContent = 'E';
 
       item.appendChild(cb);
       item.appendChild(nm);
@@ -1101,49 +912,46 @@
     refreshFloorplanBackdrop();
   }
 
-  // Collect the step numbers present across the currently selected sessions'
-  // features, and (re)render the per-step toggle buttons. Mirrors the /map
-  // workshop bar: each S# button shows/hides that step's inputs. New steps that
-  // appear default to visible; the user's existing on/off choices are kept.
   function featureStep(f) {
     var s = f && f.properties ? Number(f.properties.step) : NaN;
     return Number.isFinite(s) ? s : 0;
   }
 
+  // One S# toggle per step present in the selection, like the /map workshop bar.
+  // The visible set is taken from the first selection and kept from then on.
   function refreshStepFilter() {
     var present = {};
     state.drawingFeatures.forEach(function (f) { present[featureStep(f)] = true; });
     state.annotationFeatures.forEach(function (f) { present[featureStep(f)] = true; });
     state.stickerDotFeatures.forEach(function (f) { present[featureStep(f)] = true; });
     state.annotationMarkerSpecs.forEach(function (s) {
-      var n = Number(s.step); present[Number.isFinite(n) ? n : 0] = true;
+      var n = Number(s.step);
+      present[Number.isFinite(n) ? n : 0] = true;
     });
     var steps = Object.keys(present).map(Number).sort(function (a, b) { return a - b; });
     state.availableSteps = steps;
-    // Initialise / extend the visible set: keep prior choices, default new steps on.
     if (!state.visibleSteps) state.visibleSteps = new Set(steps);
-    else steps.forEach(function (n) { /* keep existing on/off; new steps stay shown */ });
     renderStepToggles();
   }
 
   function renderStepToggles() {
     var wrap = qs('stepFilterWrap');
     var host = qs('stepToggles');
-    if (!wrap || !host) return;
     var steps = state.availableSteps;
-    // Only meaningful when there's more than one step (i.e. a workshop run).
-    if (!steps.length || (steps.length === 1)) { wrap.classList.add('hidden'); return; }
+    if (steps.length <= 1) {
+      wrap.classList.add('hidden');
+      return;
+    }
     wrap.classList.remove('hidden');
     host.innerHTML = '';
     steps.forEach(function (n, i) {
-      var on = !state.visibleSteps || state.visibleSteps.has(n);
+      var on = state.visibleSteps.has(n);
       var btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'toggle' + (on ? ' active' : '');
       btn.textContent = 'S' + (i + 1);
       btn.title = (on ? 'Hide' : 'Show') + ' step ' + (i + 1) + ' inputs';
       btn.addEventListener('click', function () {
-        if (!state.visibleSteps) state.visibleSteps = new Set(state.availableSteps);
         if (state.visibleSteps.has(n)) state.visibleSteps.delete(n);
         else state.visibleSteps.add(n);
         renderStepToggles();
@@ -1157,15 +965,12 @@
     return !state.visibleSteps || state.visibleSteps.has(Number(step));
   }
 
-  // ---- UI wiring ----
-
   document.querySelectorAll('.toggle').forEach(function (btn) {
     btn.addEventListener('click', function () {
       btn.classList.toggle('active');
       var layer = btn.getAttribute('data-layer');
       var on = btn.classList.contains('active');
       if (layer === 'drawing') state.showDrawing = on;
-      if (layer === 'tags') state.showTags = on;
       if (layer === 'annotations') state.showAnnotations = on;
       if (layer === 'annotationMarkers') state.showAnnotationMarkers = on;
       pushToMap();
@@ -1189,33 +994,16 @@
     rebuildFromSelection();
   });
 
-  document.querySelectorAll('.mode-filter button').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      document.querySelectorAll('.mode-filter button').forEach(function (b) {
-        b.classList.toggle('active', b === btn);
-      });
-      state.modeFilter = btn.getAttribute('data-mode') || 'all';
-      renderSessionList();
-      rebuildFromSelection();
-    });
-  });
+  qs('resultsBackBtn').addEventListener('click', function () { window.location.href = '/home?setup'; });
 
-  var backBtn = document.getElementById('resultsBackBtn');
-  if (backBtn) backBtn.addEventListener('click', function () { window.location.href = '/home?setup'; });
-
-  // Show the floorplan backdrop automatically when any selected session is a
-  // floorplan/indoor session (the manual Any/Map/Floorplan filter was removed).
   function refreshFloorplanBackdrop() {
     var anyFloorplan = selectedSessions().some(function (s) {
-      var entry = s && state.sessionsByName[s.name];
-      return entry && entry.basemap === 'floorplan';
+      return state.sessionsByName[s.name].basemap === 'floorplan';
     });
     applyFloorplanBasemap(anyFloorplan);
   }
 
-  // The floorplan (white mask + black wall lines) is rendered on the BACK
-  // (basemap) map, not the front data map, so it blurs together with the
-  // basemap for privacy while the annotation / heatmap overlays stay sharp.
+  // The floorplan goes on the back map so it blurs with the basemap while the data stays sharp.
   function applyFloorplanBasemap(showFloorplan) {
     if (!showFloorplan) {
       [FLOORPLAN_BG_LAYER_ID, FLOORPLAN_LAYER_ID].forEach(function (id) {
@@ -1225,8 +1013,6 @@
     }
     ensureFloorplanLoaded().then(function (payload) {
       if (!payload) return;
-      // blurMap.setStyle() (L cycle) wipes custom layers/sources, so this can
-      // run before the back map's style is ready — defer until it is.
       if (!blurMap.isStyleLoaded()) {
         blurMap.once('style.load', function () { applyFloorplanBasemap(true); });
         return;
@@ -1236,8 +1022,7 @@
       } else {
         blurMap.getSource(FLOORPLAN_SOURCE_ID).setData(payload);
       }
-      // White rectangle covering the floorplan bounds, masking the basemap
-      // so the floorplan reads cleanly. Sits on top of the basemap tiles.
+      // A plain rectangle over the floorplan bounds hides the basemap tiles under the plan.
       if (!blurMap.getLayer(FLOORPLAN_BG_LAYER_ID) && Array.isArray(payload.bounds)) {
         var b = payload.bounds;
         var bgFc = {
@@ -1277,8 +1062,7 @@
       [FLOORPLAN_BG_LAYER_ID, FLOORPLAN_LAYER_ID].forEach(function (id) {
         if (blurMap.getLayer(id)) blurMap.setLayoutProperty(id, 'visibility', 'visible');
       });
-      // Drive the front map's camera (it owns interaction); the back map
-      // follows via syncBlurCamera.
+      // The front map owns the camera; the back map follows through syncBlurCamera.
       if (Array.isArray(payload.bounds) && payload.bounds.length === 2) {
         map.fitBounds(payload.bounds, { padding: 48, duration: 0 });
       }
@@ -1318,24 +1102,6 @@
     rebuildFromSelection();
   });
 
-  // The basemap lives on the back map now, so cycling it only swaps that
-  // map's style. The front map's empty style and all data layers are
-  // untouched — no rebuild needed.
-  function cycleBasemap() {
-    basemapIndex = (basemapIndex + 1) % BASEMAP_STYLES.length;
-    var next = BASEMAP_STYLES[basemapIndex];
-    basemapStyle = next.style;
-    blurMap.setStyle(cloneStyle(next.style));
-    blurMap.once('style.load', function () {
-      syncBlurCamera();
-      // setStyle wiped the floorplan layers from the back map; re-add them
-      // if the floorplan filter is active.
-      // setStyle wiped the floorplan layers from the back map; re-add them if
-      // any selected session is a floorplan/indoor one.
-      refreshFloorplanBackdrop();
-    });
-  }
-
   function isTextInputTarget(target) {
     var name = String((target && target.tagName) || '').toUpperCase();
     if (name === 'TEXTAREA' || name === 'SELECT' || (target && target.isContentEditable)) return true;
@@ -1344,42 +1110,25 @@
     return type !== 'range' && type !== 'button' && type !== 'checkbox' && type !== 'radio';
   }
 
-  // Privacy blur (dual-map): B toggles a heavy blur on a basemap-only back
-  // map while the front map keeps the data overlays perfectly sharp, so a
-  // screenshot hides the location but stays readable. [ and ] adjust the
-  // blur radius while it's on.
+  // B blurs the basemap so a screenshot hides the place but keeps the data readable; [ ] adjust it.
   var privacyBlurOn = false;
   var privacyBlurPx = 24;
   var PRIVACY_BLUR_MIN = 6;
   var PRIVACY_BLUR_MAX = 80;
 
-  // Privacy is now just a CSS blur toggled on the back (basemap) map. The
-  // front map has no basemap to hide, so there's nothing to fight: the
-  // overlays are always sharp, the basemap is just optionally blurred.
   function applyPrivacyBlur() {
-    var blurEl = document.getElementById('mapBlur');
-    var badge = document.getElementById('privacyBadge');
-
-    if (blurEl) {
-      blurEl.style.setProperty('--privacy-blur', privacyBlurPx + 'px');
-      blurEl.classList.toggle('active', privacyBlurOn);
-    }
-    if (badge) {
-      badge.classList.toggle('hidden', !privacyBlurOn);
-      badge.textContent = 'Privacy blur ON · ' + privacyBlurPx + 'px · B toggle · [ ] adjust';
-    }
+    var blurEl = qs('mapBlur');
+    var badge = qs('privacyBadge');
+    blurEl.style.setProperty('--privacy-blur', privacyBlurPx + 'px');
+    blurEl.classList.toggle('active', privacyBlurOn);
+    badge.classList.toggle('hidden', !privacyBlurOn);
+    badge.textContent = 'Privacy blur ON · ' + privacyBlurPx + 'px · B toggle · [ ] adjust';
   }
 
-  // 'L' cycles the basemap view, matching the live map view's L shortcut.
   window.addEventListener('keydown', function (e) {
     if (e.repeat) return;
     if (isTextInputTarget(e.target)) return;
     var key = String(e.key || '').toLowerCase();
-    if (key === 'l') {
-      e.preventDefault();
-      cycleBasemap();
-      return;
-    }
     if (key === 'b') {
       e.preventDefault();
       privacyBlurOn = !privacyBlurOn;
@@ -1388,13 +1137,9 @@
     }
     if (privacyBlurOn && (e.key === '[' || e.key === ']')) {
       e.preventDefault();
-      var step = 4;
-      privacyBlurPx = Math.max(
-        PRIVACY_BLUR_MIN,
-        Math.min(PRIVACY_BLUR_MAX, privacyBlurPx + (e.key === ']' ? step : -step))
-      );
+      var delta = e.key === ']' ? 4 : -4;
+      privacyBlurPx = Math.max(PRIVACY_BLUR_MIN, Math.min(PRIVACY_BLUR_MAX, privacyBlurPx + delta));
       applyPrivacyBlur();
-      return;
     }
   });
 

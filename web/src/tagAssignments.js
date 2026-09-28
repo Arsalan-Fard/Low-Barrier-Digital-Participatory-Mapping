@@ -1,30 +1,28 @@
 (function () {
   var DEFAULT_DRAW_OFFSET_CM = 3;
+  // The street view screen's border tags, in the same order as the marker page
+  // and app.py: corners clockwise from top-left, then right, bottom, left middles.
+  var SCREEN_SLOTS = ['tl', 'tr', 'br', 'bl', 'rm', 'bm', 'lm'];
+  // Keep in step with MARKER_SLOT_DEFAULTS in app.py.
   var DEFAULT_SLOTS = [
-    { key: 'draw-1', group: 'Drawing', tool: 'draw', label: 'Pointer', tagId: 11, tagId2: null, selectorTagId: 20, selectorTagId2: 19, color: '#ff5b5b', offsetCm: DEFAULT_DRAW_OFFSET_CM },
-    { key: 'draw-2', group: 'Drawing', tool: 'draw', label: 'Drawing 2', tagId: 12, tagId2: null, selectorTagId: null, selectorTagId2: null, color: '#3b82f6', offsetCm: DEFAULT_DRAW_OFFSET_CM },
-    { key: 'draw-3', group: 'Drawing', tool: 'draw', label: 'Drawing 3', tagId: 13, tagId2: null, selectorTagId: null, selectorTagId2: null, color: '#22cc66', offsetCm: DEFAULT_DRAW_OFFSET_CM },
-    { key: 'draw-4', group: 'Drawing', tool: 'draw', label: 'Drawing 4', tagId: 14, tagId2: null, selectorTagId: null, selectorTagId2: null, color: '#111111', offsetCm: DEFAULT_DRAW_OFFSET_CM },
+    { key: 'draw-1', group: 'Multi-state pointer', tool: 'draw', label: 'Pointer 1', tagId: 11, tagId2: null, selectorTagId: 20, selectorTagId2: 19, color: '#ff5b5b', offsetCm: DEFAULT_DRAW_OFFSET_CM },
+    { key: 'draw-2', group: 'Multi-state pointer', tool: 'draw', label: 'Pointer 2', tagId: 12, tagId2: null, selectorTagId: null, selectorTagId2: null, color: '#3b82f6', offsetCm: DEFAULT_DRAW_OFFSET_CM },
+    { key: 'draw-3', group: 'Multi-state pointer', tool: 'draw', label: 'Pointer 3', tagId: 13, tagId2: null, selectorTagId: null, selectorTagId2: null, color: '#22cc66', offsetCm: DEFAULT_DRAW_OFFSET_CM },
+    { key: 'draw-4', group: 'Multi-state pointer', tool: 'draw', label: 'Pointer 4', tagId: 14, tagId2: null, selectorTagId: null, selectorTagId2: null, color: '#111111', offsetCm: DEFAULT_DRAW_OFFSET_CM },
+    { key: 'pointer-single-1', group: 'Single-state pointer', tool: 'street-view', label: 'Street view', tagId: 23, color: '' },
+    { key: 'street-screen', group: 'Street view screen', tool: 'street-screen', label: 'Screen', tagId: null, frameTagIds: [2, 3, 4, 5, 6, 7, 8], color: '' },
     { key: 'route-origin', group: 'Shortest-path', tool: 'route-origin', label: 'Route start', tagId: 9, color: '' },
     { key: 'route-dest', group: 'Shortest-path', tool: 'route-dest', label: 'Route end', tagId: 10, color: '' },
     { key: 'isochrone-5', group: 'Analysis', tool: 'isochrone', label: 'Isochrone 5 min', tagId: 38, color: '', minutes: 5 },
     { key: 'isochrone-15', group: 'Analysis', tool: 'isochrone', label: 'Isochrone 15 min', tagId: 37, color: '', minutes: 15 },
-    { key: 'isovist-1', group: 'Analysis', tool: 'isovist', label: 'Isovist', tagId: 39, color: '' },
-    // "Comment": one shared keyboard-location tag + one-or-more post-it tags.
-    { key: 'comment-keyboard', group: 'Comment', tool: 'comment-keyboard', label: 'Keyboard location', tagId: 1, color: '' },
-    { key: 'comment-postit-1', group: 'Comment', tool: 'comment-postit', label: 'Post-it 1', tagId: 0, color: '' }
+    { key: 'isovist-1', group: 'Analysis', tool: 'isovist', label: 'Isovist', tagId: 39, color: '' }
   ];
 
   var FIXED_ASSIGNMENTS = {
     21: { tool: 'pan', colorName: 'white', color: '#ffffff' },
-    22: { tool: 'pan', colorName: 'white', color: '#ffffff' },
-    23: { tool: 'street-view', colorName: 'white', color: '#ffffff' },
-    31: { tool: 'theme', colorName: 'white', color: '#ffffff' },
-    32: { tool: 'theme', colorName: 'white', color: '#ffffff' },
-    33: { tool: 'theme', colorName: 'white', color: '#ffffff' },
-    34: { tool: 'theme', colorName: 'white', color: '#ffffff' }
+    22: { tool: 'pan', colorName: 'white', color: '#ffffff' }
   };
-  var REMOVABLE_TOOLS = { draw: true, 'keyboard-annotation': true };
+  var REMOVABLE_TOOLS = { draw: true };
 
   function normalizeTagId(raw) {
     var n = parseInt(raw, 10);
@@ -43,6 +41,23 @@
     return Math.max(0, Math.min(20, n));
   }
 
+  // One entry per screen slot, null where a slot has no tag. A repeated id is
+  // dropped: the camera cannot tell two slots with the same tag apart.
+  function normalizeFrameTagIds(raw, fallback) {
+    var src = [];
+    if (Array.isArray(raw)) src = raw;
+    else if (Array.isArray(fallback)) src = fallback;
+    var seen = {};
+    var out = [];
+    for (var i = 0; i < SCREEN_SLOTS.length; i++) {
+      var id = normalizeTagId(src[i]);
+      if (id !== null && seen[id]) id = null;
+      if (id !== null) seen[id] = true;
+      out.push(id);
+    }
+    return out;
+  }
+
   function colorName(color) {
     var value = normalizeColor(color, '');
     var names = {
@@ -59,6 +74,15 @@
     return names[value] || value;
   }
 
+  function hasOwn(obj, key) {
+    return Object.prototype.hasOwnProperty.call(obj, key);
+  }
+
+  // src's value when it has the key at all (null included), else base's.
+  function own(src, base, key) {
+    return hasOwn(src, key) ? src[key] : base[key];
+  }
+
   function normalizeSlot(raw, fallback) {
     var src = raw && typeof raw === 'object' ? raw : {};
     var base = fallback && typeof fallback === 'object' ? fallback : {};
@@ -69,21 +93,20 @@
       group: String(src.group || base.group || ''),
       tool: tool,
       label: String(src.label || base.label || ''),
-      tagId: normalizeTagId(Object.prototype.hasOwnProperty.call(src, 'tagId') ? src.tagId : base.tagId),
-      color: tool === 'draw' ? normalizeColor(src.color, fallbackColor) : '',
-      image: String(src.image || base.image || '')
+      tagId: normalizeTagId(own(src, base, 'tagId')),
+      color: tool === 'draw' ? normalizeColor(src.color, fallbackColor) : ''
     };
     if (tool === 'draw') {
-      // Drawing pair plus the pair that selects this drawing tool's mode.
-      normalized.tagId2 = normalizeTagId(Object.prototype.hasOwnProperty.call(src, 'tagId2') ? src.tagId2 : base.tagId2);
-      normalized.selectorTagId = normalizeTagId(Object.prototype.hasOwnProperty.call(src, 'selectorTagId') ? src.selectorTagId : base.selectorTagId);
-      normalized.selectorTagId2 = normalizeTagId(Object.prototype.hasOwnProperty.call(src, 'selectorTagId2') ? src.selectorTagId2 : base.selectorTagId2);
-      normalized.offsetCm = normalizeOffsetCm(
-        Object.prototype.hasOwnProperty.call(src, 'offsetCm') ? src.offsetCm : base.offsetCm,
-        base.offsetCm
-      );
+      normalized.tagId2 = normalizeTagId(own(src, base, 'tagId2'));
+      normalized.selectorTagId = normalizeTagId(own(src, base, 'selectorTagId'));
+      normalized.selectorTagId2 = normalizeTagId(own(src, base, 'selectorTagId2'));
+      normalized.offsetCm = normalizeOffsetCm(own(src, base, 'offsetCm'), base.offsetCm);
     }
-    if (Object.prototype.hasOwnProperty.call(src, 'minutes') || Object.prototype.hasOwnProperty.call(base, 'minutes')) {
+    if (tool === 'street-screen') {
+      normalized.tagId = null;
+      normalized.frameTagIds = normalizeFrameTagIds(src.frameTagIds, base.frameTagIds);
+    }
+    if (hasOwn(src, 'minutes') || hasOwn(base, 'minutes')) {
       normalized.minutes = Math.max(1, Math.min(180, Number(src.minutes || base.minutes || 15)));
     }
     return normalized;
@@ -96,15 +119,6 @@
     for (var i = 0; i < incoming.length; i++) {
       if (!incoming[i] || typeof incoming[i] !== 'object') continue;
       incomingByKey[String(incoming[i].key || '')] = incoming[i];
-    }
-    // Read old settings that stored one global selector as an eraser pair.
-    var legacySelector = incomingByKey['eraser-1'] || null;
-    if (legacySelector && incomingByKey['draw-1']
-        && !Object.prototype.hasOwnProperty.call(incomingByKey['draw-1'], 'selectorTagId')) {
-      incomingByKey['draw-1'] = Object.assign({}, incomingByKey['draw-1'], {
-        selectorTagId: legacySelector.tagId,
-        selectorTagId2: legacySelector.tagId2
-      });
     }
 
     var slots = [];
@@ -119,19 +133,18 @@
       var key = String(slot.key || '');
       if (key.indexOf('extra-') !== 0) continue;
       var tool = String(slot.tool || '').trim();
-      if (tool !== 'draw' && tool !== 'comment-postit') continue;
-      var isDraw = tool === 'draw';
+      if (tool !== 'draw') continue;
       slots.push(normalizeSlot(slot, {
         key: key,
-        group: isDraw ? 'Drawing' : 'Comment',
+        group: 'Multi-state pointer',
         tool: tool,
-        label: isDraw ? 'Drawing' : 'Post-it',
+        label: 'Pointer',
         tagId: null,
-        tagId2: isDraw ? null : undefined,
-        selectorTagId: isDraw ? null : undefined,
-        selectorTagId2: isDraw ? null : undefined,
-        offsetCm: isDraw ? DEFAULT_DRAW_OFFSET_CM : undefined,
-        color: isDraw ? '#ff5b5b' : ''
+        tagId2: null,
+        selectorTagId: null,
+        selectorTagId2: null,
+        offsetCm: DEFAULT_DRAW_OFFSET_CM,
+        color: '#ff5b5b'
       }));
     }
 
@@ -142,46 +155,41 @@
     };
   }
 
-  var config = (window.CompactMapConfig && window.CompactMapConfig.CONFIG) || {};
-  var markerSettings = normalizeSettings(config.markerSettings || null);
+  var markerSettings = normalizeSettings(window.CompactMapConfig.CONFIG.markerSettings);
 
   function assignmentFromSlot(slot) {
-    if (!slot || normalizeTagId(slot.tagId) === null || !slot.tool) return null;
-    var color = (slot.tool === 'comment-keyboard' || slot.tool === 'comment-postit')
-      ? '#082f49'
-      : (slot.tool === 'draw' ? normalizeColor(slot.color, '#ff5b5b') : '');
+    if (normalizeTagId(slot.tagId) === null || !slot.tool) return null;
+    var color = slot.tool === 'draw' ? normalizeColor(slot.color, '#ff5b5b') : '';
     return {
       tagId: normalizeTagId(slot.tagId),
       tool: slot.tool,
       colorName: colorName(color),
       color: color,
-      image: String(slot.image || ''),
       minutes: Number(slot.minutes) || 0
     };
   }
 
   function assignmentMap() {
     var out = {};
-    for (var key in FIXED_ASSIGNMENTS) {
-      if (!Object.prototype.hasOwnProperty.call(FIXED_ASSIGNMENTS, key)) continue;
-      out[key] = {
-        tagId: normalizeTagId(key),
-        tool: String(FIXED_ASSIGNMENTS[key].tool || ''),
-        colorName: String(FIXED_ASSIGNMENTS[key].colorName || ''),
-        color: String(FIXED_ASSIGNMENTS[key].color || ''),
-        image: ''
-      };
-    }
+    Object.keys(FIXED_ASSIGNMENTS).forEach(function (key) {
+      var fixed = FIXED_ASSIGNMENTS[key];
+      out[key] = { tagId: Number(key), tool: fixed.tool, colorName: fixed.colorName, color: fixed.color };
+    });
     markerSettings.slots.forEach(function (slot) {
       var assignment = assignmentFromSlot(slot);
       if (assignment) out[String(assignment.tagId)] = assignment;
-      // For draw pairs, the fold partner maps to the same draw tool/color so both
-      // physical tags render as 'draw' markers.
+      // The screen's border tags are claimed too, so nothing else reads them.
+      if (slot.tool === 'street-screen') {
+        normalizeFrameTagIds(slot.frameTagIds).forEach(function (id) {
+          if (id !== null) out[String(id)] = { tagId: id, tool: 'street-screen', colorName: '', color: '' };
+        });
+      }
+      // The pen's second tag draws in the same colour.
       if (slot.tool === 'draw') {
         var t2 = normalizeTagId(slot.tagId2);
         if (t2 !== null) {
           var c2 = normalizeColor(slot.color, '#ff5b5b');
-          out[String(t2)] = { tagId: t2, tool: 'draw', colorName: colorName(c2), color: c2, image: '' };
+          out[String(t2)] = { tagId: t2, tool: 'draw', colorName: colorName(c2), color: c2 };
         }
       }
     });
@@ -193,14 +201,7 @@
     if (id === null) return null;
     var a = assignmentMap()[String(id)];
     if (!a) return null;
-    return {
-      tagId: id,
-      tool: String(a.tool || ''),
-      colorName: String(a.colorName || ''),
-      color: String(a.color || ''),
-      image: String(a.image || ''),
-      minutes: Number(a.minutes) || 0
-    };
+    return { tagId: id, tool: a.tool, colorName: a.colorName, color: a.color, minutes: Number(a.minutes) || 0 };
   }
 
   function getDrawColor(tagId) {
@@ -222,23 +223,10 @@
       .filter(function (id) { return id !== null; });
   }
 
-  function getToolTagMap(tool, limit) {
-    var out = {};
-    var slots = getSlots(tool);
-    var max = Number(limit) || 0;
-    for (var i = 0; i < slots.length; i++) {
-      if (max && i >= max) break;
-      var id = normalizeTagId(slots[i].tagId);
-      if (id !== null) out[String(i + 1)] = id;
-    }
-    return out;
-  }
-
-  // Draw tool tag pairs (slot.tagId + slot.tagId2) for the fold-open pen.
   function getDrawPairs() {
     var pairs = [];
     markerSettings.slots.forEach(function (slot) {
-      if (!slot || slot.tool !== 'draw') return;
+      if (slot.tool !== 'draw') return;
       var a = normalizeTagId(slot.tagId);
       var b = normalizeTagId(slot.tagId2);
       if (a === null || b === null || a === b) return;
@@ -254,16 +242,15 @@
     return pairs;
   }
 
-  // Each selector pair controls the mode of exactly one drawing pair.
+  // Each selector pair switches the mode of its own slot's drawing pair.
   function getToolSelectorPairs() {
     var pairs = [];
     markerSettings.slots.forEach(function (slot) {
-      if (!slot || slot.tool !== 'draw') return;
+      if (slot.tool !== 'draw') return;
       var a = normalizeTagId(slot.selectorTagId);
       var b = normalizeTagId(slot.selectorTagId2);
       var drawTagId = normalizeTagId(slot.tagId);
-      if (a === null || b === null || a === b) return;
-      if (drawTagId === null) return;
+      if (a === null || b === null || a === b || drawTagId === null) return;
       pairs.push({
         key: 'selector:' + String(slot.key || (a + '-' + b)),
         a: a,
@@ -277,44 +264,6 @@
     return pairs;
   }
 
-  // Comment = one shared keyboard-location tag + one-or-more post-it tags. Each
-  // post-it is paired with the shared keyboard location for the map runtime.
-  function getKeyboardAnnotationSlots() {
-    var keyboardTagId = null;
-    markerSettings.slots.forEach(function (slot) {
-      if (slot && slot.tool === 'comment-keyboard') {
-        var k = normalizeTagId(slot.tagId);
-        if (k !== null) keyboardTagId = k;
-      }
-    });
-    var slots = [];
-    if (keyboardTagId === null) return slots;
-    markerSettings.slots.forEach(function (slot) {
-      if (!slot || slot.tool !== 'comment-postit') return;
-      var annotationTagId = normalizeTagId(slot.tagId);
-      if (annotationTagId === null || annotationTagId === keyboardTagId) return;
-      slots.push({
-        key: String(slot.key || ('comment-' + annotationTagId)),
-        label: String(slot.label || 'Comment'),
-        annotationTagId: annotationTagId,
-        keyboardTagId: keyboardTagId,
-        color: '#082f49'
-      });
-    });
-    return slots;
-  }
-
-  function listAssignments() {
-    var map = assignmentMap();
-    var out = [];
-    for (var key in map) {
-      if (!Object.prototype.hasOwnProperty.call(map, key)) continue;
-      out.push(getAssignment(key));
-    }
-    out.sort(function (a, b) { return a.tagId - b.tagId; });
-    return out;
-  }
-
   function getMarkerSettings() {
     return normalizeSettings(markerSettings);
   }
@@ -322,13 +271,9 @@
   window.CompactTagAssignments = {
     getAssignment: getAssignment,
     getDrawColor: getDrawColor,
-    getSlots: getSlots,
     getToolTagIds: getToolTagIds,
-    getToolTagMap: getToolTagMap,
     getDrawPairs: getDrawPairs,
     getToolSelectorPairs: getToolSelectorPairs,
-    getKeyboardAnnotationSlots: getKeyboardAnnotationSlots,
-    getMarkerSettings: getMarkerSettings,
-    listAssignments: listAssignments
+    getMarkerSettings: getMarkerSettings
   };
 })();

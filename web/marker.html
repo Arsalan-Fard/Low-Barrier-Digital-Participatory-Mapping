@@ -59,12 +59,14 @@
       padding: 9px 16px; cursor: pointer; transition: background 0.14s ease;
     }
     .action:hover { background: #35a094; }
+    .action.ghost { color: var(--ink); background: #fff; border-color: var(--line); }
+    .action.ghost:hover { background: var(--green-tint); border-color: var(--green); }
+    .action:disabled { opacity: 0.45; cursor: not-allowed; }
 
     .status-line { font-size: 13px; min-height: 17px; color: var(--muted); }
     .status-line.ok { color: var(--green-dark); }
     .status-line.err { color: var(--danger); }
 
-    /* ---------- marker editor (new white/green theme) ---------- */
     .marker-settings { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
     .marker-toolbar {
       display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
@@ -85,6 +87,8 @@
     .marker-section { border-bottom: 1px solid var(--line); padding-bottom: 14px; }
     .marker-section:last-child { border-bottom: 0; }
     .marker-section h3 { margin: 0 0 12px; font-size: 18px; font-weight: 700; }
+    .marker-section h3:has(+ .marker-group-hint) { margin-bottom: 4px; }
+    .marker-group-hint { margin: 0 0 12px; max-width: 78ch; font-size: 13px; line-height: 1.5; color: var(--muted); }
     .marker-card-row { display: flex; flex-wrap: wrap; gap: 14px 16px; align-items: flex-start; }
     .marker-card { position: relative; width: 116px; display: flex; flex-direction: column; gap: 8px; }
     .marker-card.wide { width: 176px; }  /* two-tag tools: room for both dropdowns */
@@ -107,8 +111,6 @@
     .marker-delete:hover { background: #fbeeeb; border-color: var(--danger); }
     .marker-controls { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 6px; align-items: center; }
     .marker-controls.draw-controls { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px; }
-    .marker-controls.eraser-controls { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-    .marker-controls.comment-controls { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
     .marker-controls.no-color { grid-template-columns: minmax(0, 1fr); }
     .marker-tag-select {
       width: 100%; height: 32px; border: 1px solid var(--line); border-radius: 8px;
@@ -131,6 +133,31 @@
     .marker-offset-unit { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; }
     .marker-add-card { width: 116px; height: 112px; font-size: 26px; line-height: 1; color: var(--green-dark); cursor: pointer; }
     .marker-add-card:hover { background: var(--green-soft); border-color: var(--green); }
+    /* full row width, so the sheet keeps its own size instead of shrinking to fit */
+    .screen-card { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 8px 36px; align-items: flex-start; }
+    .screen-sheet {
+      position: relative; flex: 0 0 auto; width: 500px; max-width: calc(100% - 92px); aspect-ratio: 420 / 297; /* A3 sheet */
+      /* room for the cells, which are centred ON the sheet's edge */
+      margin: 48px 46px 50px;
+      border: 2px solid var(--ink); border-radius: 6px; background: #fff; box-sizing: border-box;
+    }
+    .screen-sheet-inside {
+      position: absolute; inset: 11%; display: flex; align-items: center; justify-content: center;
+      border: 1px dashed var(--line); border-radius: 4px; background: var(--green-tint);
+      color: var(--muted); font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    }
+    .screen-cell {
+      position: absolute; width: 78px; transform: translate(-50%, -50%);
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: #fff;
+      box-shadow: 0 4px 12px rgba(31, 114, 107, 0.10);
+    }
+    .screen-cell img { width: 40px; height: 40px; image-rendering: pixelated; }
+    .screen-cell .marker-tag-select { height: 28px; font-size: 13px; }
+    .screen-side { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding-top: 48px; }
+    .screen-count { font-size: 13px; font-weight: 700; color: var(--green-dark); }
+    .screen-count.warn { color: var(--danger); }
+
     .marker-bottom-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 28px; align-items: start; }
 
     @media (max-width: 980px) {
@@ -165,6 +192,6 @@
   </div>
 
   <script src="src/config.js"></script>
-  <script src="src/markerEditor.js?v=3"></script>
+  <script src="src/markerEditor.js?v=4"></script>
 </body>
 </html>

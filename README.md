@@ -31,13 +31,22 @@ Useful arguments:
 | `--detector aruco` | Detection backend: `pupil` (pupil_apriltags) or `aruco` (default, OpenCV). |
 | `--port 5000` | Preferred local port. If it is occupied, the app automatically uses the next available port. Use `--port 0` to let the operating system choose immediately. |
 | `--windowed` | Open in a normal browser window. By default the app opens fullscreen (Chrome/Edge app mode, no browser chrome) — F11 or the on-page ⛶ button toggles it. |
-| `--cloudflare-tunnel` | Start a public Cloudflare tunnel so phones can reach the app from outside the local network. Off by default — everything stays local unless you pass this. |
 
 The server prefers http://127.0.0.1:5000 and opens the home page. If port 5000 is
 already occupied, it automatically selects another available port and opens that
 address instead. Without `--source` it looks for an IP camera on port 8080 (e.g. a
 phone camera app) and otherwise starts without a camera; you can connect one later
 from the Settings page.
+
+## Code layout
+
+| Path | What it holds |
+|---|---|
+| `app.py` | Starts everything: command-line options, the camera and detector threads, the web server. |
+| `backend/` | The server, one module per feature: `camera`, `detection` (AprilTags, `/api/tags`), `surface` (projection corners and calibration), `marker_settings` + `markers` (tag assignments, printable markers), `street_screen`, `map_sheets` (+ `map_sheet_layout`, `map_sheet_docx`), `street_network` (OSMnx routes and walking reach), `sessions`, `workshops`, `floorplan`, `recorder`, `pages`. Folder paths are in `backend/config.py`. |
+| `web/` | The pages (`home.html`, `index.html` = the map, `results.html`, `marker.html`) and their scripts in `web/src/`. |
+| `digitizer/` | The Digitizer for photographed paper sheets, mounted at `/digitizer/` (also runs on its own). |
+| `map-style-editor/maputnik/` | The Maputnik style editor, served prebuilt at `/maputnik/`. |
 
 
 ## Why Apriltag Tokens?

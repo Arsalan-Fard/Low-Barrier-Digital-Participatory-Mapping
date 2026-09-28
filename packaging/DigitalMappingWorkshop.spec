@@ -30,8 +30,12 @@ for dirname in (
     "web",
     "data",
     "map-style-editor/maputnik/dist",
+    # the Digitizer's page (app.py imports its code); its runs, sessions and
+    # photos are participant data and stay out
+    "digitizer/static",
 ):
     datas += add_tree(dirname)
+datas.append((str(root / "digitizer" / "legend.json"), "digitizer"))
 
 
 a = Analysis(
@@ -53,6 +57,11 @@ a = Analysis(
         "torch",
         "torchvision",
         "torchaudio",
+        # Unused by the app (the Digitizer's VLM needs torch, excluded above); on a machine that has
+        # them installed, PyInstaller's analysis drags them in and crashes importing them.
+        "transformers",
+        "tensorflow",
+        "sklearn",
         "osmnx",
         "networkx",
         "shapely",

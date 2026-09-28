@@ -18,7 +18,6 @@ reportlab
 osmnx
 networkx
 shapely
-concave_hull
 
 # Optional: screen capture
 mss

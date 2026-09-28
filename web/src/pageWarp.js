@@ -1,24 +1,20 @@
 (function () {
   var WARP_ID = 'projectionWarp';
   var STORAGE_KEY = 'compact-workshop-page-warp-v1';
-  var LEGACY_AUTO_KEY = 'compact-workshop-maptastic-layout-v1';
+  // Read as a fallback here and in home.js, and cleared by reset(); never written.
+  var LEGACY_KEY = 'compact-workshop-maptastic-layout-v1';
   var instance = null;
   var layerEl = null;
   var applyingLayout = false;
   var saveTimer = 0;
-  // Set by reset(). Nothing may write a layout back for the rest of this
-  // page's life once the alignment has been deliberately cleared.
+  // Set by reset(): nothing may write a layout back for the rest of this page's life.
   var savingBlocked = false;
-
-  function isFiniteNumber(v) {
-    return typeof v === 'number' && Number.isFinite(v);
-  }
 
   function isValidPointArray(points) {
     if (!Array.isArray(points) || points.length !== 4) return false;
     for (var i = 0; i < points.length; i++) {
       var p = points[i];
-      if (!Array.isArray(p) || p.length < 2 || !isFiniteNumber(Number(p[0])) || !isFiniteNumber(Number(p[1]))) {
+      if (!Array.isArray(p) || p.length < 2 || !Number.isFinite(Number(p[0])) || !Number.isFinite(Number(p[1]))) {
         return false;
       }
     }
@@ -30,7 +26,6 @@
   }
 
   function elementSize() {
-    if (!layerEl) return { width: 0, height: 0 };
     return {
       width: layerEl.offsetWidth || window.innerWidth || document.documentElement.clientWidth || 0,
       height: layerEl.offsetHeight || window.innerHeight || document.documentElement.clientHeight || 0
@@ -56,33 +51,19 @@
   }
 
   function readPayload() {
-    function parse(raw) {
-      if (!raw) return null;
-      try {
-        var payload = JSON.parse(raw);
-        return payload && payload.source !== 'settings-auto-corner-tags' ? payload : null;
-      } catch (_err) {
-        return null;
-      }
-    }
-
     try {
-      return parse(window.localStorage.getItem(STORAGE_KEY)) ||
-        parse(window.localStorage.getItem(LEGACY_AUTO_KEY));
+      return JSON.parse(window.localStorage.getItem(STORAGE_KEY) || window.localStorage.getItem(LEGACY_KEY));
     } catch (_err) {
       return null;
     }
   }
 
   function writePayload(payload) {
-    if (savingBlocked) return false;
+    if (savingBlocked) return;
     try {
-      var raw = JSON.stringify(payload);
-      window.localStorage.setItem(STORAGE_KEY, raw);
-      window.localStorage.setItem(LEGACY_AUTO_KEY, raw);
-      return true;
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     } catch (_err) {
-      return false;
+      // Storage unavailable.
     }
   }
 
@@ -110,7 +91,7 @@
 
     return {
       version: 2,
-      source: sourceLabel || 'manual-maptastic',
+      source: sourceLabel,
       id: WARP_ID,
       sourceSize: { width: size.width, height: size.height },
       sourcePoints: sourcePoints,
@@ -122,35 +103,19 @@
   }
 
   function layoutFromPayload(payload) {
+    if (!payload) return null;
     var size = elementSize();
-    if (!size.width || !size.height || !payload || typeof payload !== 'object') return null;
-
-    var sourcePoints = denormalizePoints(payload.sourcePointsNormalized, size.width, size.height);
     var targetPoints = denormalizePoints(payload.targetPointsNormalized, size.width, size.height);
-
-    if (!sourcePoints && isValidPointArray(payload.sourcePoints)) {
-      sourcePoints = clonePoints(payload.sourcePoints);
-    }
-    if (!targetPoints && isValidPointArray(payload.targetPoints)) {
-      targetPoints = clonePoints(payload.targetPoints);
-    }
-    if (!targetPoints && Array.isArray(payload.layout) && payload.layout.length && isValidPointArray(payload.layout[0].targetPoints)) {
-      targetPoints = clonePoints(payload.layout[0].targetPoints);
-    }
-    if (!sourcePoints) sourcePoints = defaultSourcePoints(size.width, size.height);
     if (!targetPoints) return null;
-
-    return [{
-      id: WARP_ID,
-      sourcePoints: sourcePoints,
-      targetPoints: targetPoints
-    }];
+    var sourcePoints = denormalizePoints(payload.sourcePointsNormalized, size.width, size.height)
+      || defaultSourcePoints(size.width, size.height);
+    return [{ id: WARP_ID, sourcePoints: sourcePoints, targetPoints: targetPoints }];
   }
 
   function saveCurrentLayout(sourceLabel) {
-    if (!instance || typeof instance.getLayout !== 'function') return false;
+    if (!instance) return;
     var payload = payloadFromLayout(instance.getLayout(), sourceLabel);
-    return payload ? writePayload(payload) : false;
+    if (payload) writePayload(payload);
   }
 
   function scheduleSave() {
@@ -162,108 +127,42 @@
     }, 80);
   }
 
+  // Maptastic calls onchange for layouts set from code too; applyingLayout
+  // keeps scheduleSave from treating those as manual edits.
   function applySavedLayout(force) {
-    if (!instance || typeof instance.setLayout !== 'function') return false;
+    if (!instance) return;
     var layout = layoutFromPayload(readPayload());
-    if (!layout) return false;
+    if (!layout) return;
     applyingLayout = true;
     try {
       instance.setLayout(layout);
     } catch (err) {
       console.error('Failed to apply page warp layout:', err);
-      return false;
+      return;
     } finally {
       window.setTimeout(function () { applyingLayout = false; }, 0);
     }
     if (force) saveCurrentLayout('page-warp-resize');
-    return true;
   }
 
-  function saveTargetPoints(targetPoints, sourceLabel) {
-    var size = elementSize();
-    if (!size.width || !size.height || !isValidPointArray(targetPoints)) return false;
-    var layout = [{
-      id: WARP_ID,
-      sourcePoints: defaultSourcePoints(size.width, size.height),
-      targetPoints: clonePoints(targetPoints)
-    }];
-    var payload = payloadFromLayout(layout, sourceLabel || 'target-points');
-    if (!payload || !writePayload(payload)) return false;
-    applySavedLayout(true);
-    return true;
-  }
-
-  // ---- viewport <-> layer coordinates -------------------------------------
-  // The projector paints the VIEWPORT, so a camera tag's uv (normalised inside
-  // the projected quad) names a viewport point. Content, though, is laid out
-  // inside #projectionWarp, which the warp transform then bends. To put an
-  // element under a tag you therefore need the layer point that the transform
-  // maps ONTO that viewport point -- i.e. the inverse warp. The layer is fixed
-  // at viewport 0,0 with transform-origin 0 0, so its transform alone relates
-  // the two and no bounding-rect offset is involved. Both are the identity when
-  // nothing is warped. (mapWarp.js does the same for the workshop map page.)
-  function layerMatrix() {
-    if (!layerEl) return null;
-    var transform = window.getComputedStyle(layerEl).transform;
-    if (!transform || transform === 'none') return null;
-    try {
-      return new DOMMatrixReadOnly(transform);
-    } catch (_err) {
-      return null;
-    }
-  }
-
-  function project(x, y, matrix) {
-    if (!matrix) return { x: x, y: y };
-    try {
-      var p = new DOMPoint(x, y, 0, 1).matrixTransform(matrix);
-      if (typeof p.w === 'number' && p.w && p.w !== 1) return { x: p.x / p.w, y: p.y / p.w };
-      return { x: p.x, y: p.y };
-    } catch (_err) {
-      return { x: x, y: y };
-    }
-  }
-
-  function screenToLayer(x, y) {
-    var m = layerMatrix();
-    if (!m) return { x: x, y: y };
-    try {
-      return project(x, y, m.inverse());
-    } catch (_err) {
-      return { x: x, y: y };
-    }
-  }
-
-  function layerToScreen(x, y) {
-    return project(x, y, layerMatrix());
-  }
-
-  // uv (0..1 across the projected surface) -> the layer point that lands there.
-  function uvToLayer(u, v, width, height) {
-    var w = width || window.innerWidth;
-    var h = height || window.innerHeight;
-    return screenToLayer(Number(u) * w, Number(v) * h);
-  }
-
-  // Clear the saved projection alignment and flatten the page now.
-  //
-  // Removing the storage keys is not enough on its own: this module saves the
-  // live layout on beforeunload, so a caller that cleared storage and then
-  // reloaded had its OWN unload handler write the still-warped layout straight
-  // back, and the page came up warped again -- which is exactly what the Reset
-  // button on the home page did. Blocking saves first is what makes the clear
-  // stick, and flattening the layout means the page straightens immediately
-  // whether or not the caller reloads.
+  // Clears the saved alignment and flattens the page now. Saving is blocked
+  // first, or this page's beforeunload save writes the warp straight back
+  // when the caller reloads.
   function reset() {
     savingBlocked = true;
-    if (saveTimer) { window.clearTimeout(saveTimer); saveTimer = 0; }
+    if (saveTimer) {
+      window.clearTimeout(saveTimer);
+      saveTimer = 0;
+    }
     try {
       window.localStorage.removeItem(STORAGE_KEY);
-      window.localStorage.removeItem(LEGACY_AUTO_KEY);
-    } catch (_err) { /* private mode: the layout below still straightens it */ }
+      window.localStorage.removeItem(LEGACY_KEY);
+    } catch (_err) {
+      // Private mode: flattening the layout below still straightens the page.
+    }
 
     var size = elementSize();
-    if (instance && typeof instance.setLayout === 'function' && size.width && size.height) {
+    if (instance && size.width && size.height) {
       var square = defaultSourcePoints(size.width, size.height);
       applyingLayout = true;
       try {
@@ -274,18 +173,9 @@
         window.setTimeout(function () { applyingLayout = false; }, 0);
       }
     }
-    return true;
   }
 
-  function shouldKeepOutsideWarp(node) {
-    if (!node || node.nodeType !== 1) return false;
-    if (node.hasAttribute('data-page-warp-exclude')) return true;
-    var id = String(node.id || '');
-    return id === 'cornerTags' || id === 'driftTagOverlay';
-  }
-
-  // Whether the page has declared itself non-scrolling (html or body with
-  // overflow hidden/clip), as the map pages and the workshop home do.
+  // Whether html or body is overflow hidden/clip, as on the map pages and the workshop home.
   function pageDeclaresNoScroll() {
     try {
       var body = window.getComputedStyle(document.body).overflowY;
@@ -296,59 +186,41 @@
     }
   }
 
-  function ensureLayer() {
-    var existing = document.getElementById(WARP_ID);
-    if (existing) {
-      layerEl = existing;
-      return existing;
-    }
-
-    var wrapper = document.createElement('div');
-    wrapper.id = WARP_ID;
-    wrapper.style.position = 'fixed';
-    wrapper.style.left = '0';
-    wrapper.style.top = '0';
-    wrapper.style.width = '100vw';
-    wrapper.style.height = '100vh';
-    // Once the body's children move in here, this layer IS the page's scroll
-    // container: body itself holds nothing. So a page that has declared
-    // itself non-scrolling must not grow scrollbars here either. It used to
-    // (overflow: auto regardless), and on the map pages any child poking past
-    // the viewport -- a sheet window at the table's edge, a pen menu near a
-    // corner, a popup -- popped both scrollbars up, shrank the layer's client
-    // box by their width, and the fixed-inset map with it; when the child
-    // moved back, the map grew again. Scrolling pages (results) keep the
-    // layer as their scroller.
-    //
-    // clip rather than hidden where the engine has it: a hidden scroller is
-    // still scrolled by focus() and scrollIntoView(), which would shift the
-    // whole page under the projector; clip never scrolls. An engine without
-    // clip ignores that assignment and keeps hidden.
+  // Moves the body's content into one fixed layer that Maptastic warps.
+  function createLayer() {
+    layerEl = document.createElement('div');
+    layerEl.id = WARP_ID;
+    layerEl.style.position = 'fixed';
+    layerEl.style.left = '0';
+    layerEl.style.top = '0';
+    layerEl.style.width = '100vw';
+    layerEl.style.height = '100vh';
+    // This layer becomes the page's scroll container. On a non-scrolling page
+    // scrollbars would pop up whenever a child pokes past the viewport and
+    // shrink the fixed-inset map with them. clip (where supported) also can't
+    // be scrolled by focus() or scrollIntoView(), which would shift the page
+    // under the projector.
     if (pageDeclaresNoScroll()) {
-      wrapper.style.overflow = 'hidden';
-      wrapper.style.overflow = 'clip';
+      layerEl.style.overflow = 'hidden';
+      layerEl.style.overflow = 'clip';
     } else {
-      wrapper.style.overflow = 'auto';
+      layerEl.style.overflow = 'auto';
     }
-    wrapper.style.transformOrigin = '0 0';
+    layerEl.style.transformOrigin = '0 0';
 
-    document.body.insertBefore(wrapper, document.body.firstChild);
+    document.body.insertBefore(layerEl, document.body.firstChild);
     var children = Array.prototype.slice.call(document.body.childNodes);
     for (var i = 0; i < children.length; i++) {
       var node = children[i];
-      if (node === wrapper) continue;
-      if (node.nodeType === 1 && String(node.tagName || '').toUpperCase() === 'SCRIPT') continue;
-      if (node.nodeType === 1 && shouldKeepOutsideWarp(node)) continue;
-      wrapper.appendChild(node);
+      if (node === layerEl) continue;
+      if (node.nodeType === 1 && (node.tagName === 'SCRIPT' || node.hasAttribute('data-page-warp-exclude'))) continue;
+      layerEl.appendChild(node);
     }
-    layerEl = wrapper;
-    return wrapper;
   }
 
   function init() {
-    if (instance) return instance;
-    var layer = ensureLayer();
-    if (!layer || typeof window.Maptastic !== 'function') return null;
+    createLayer();
+    if (typeof window.Maptastic !== 'function') return;
 
     instance = window.Maptastic({
       autoSave: false,
@@ -356,28 +228,19 @@
       onchange: scheduleSave,
       layers: [WARP_ID]
     });
-    window.maptastic = instance;
 
     applySavedLayout(false);
     window.addEventListener('beforeunload', function () { saveCurrentLayout('manual-maptastic'); });
     window.addEventListener('resize', function () {
       window.setTimeout(function () { applySavedLayout(true); }, 50);
     });
-    return instance;
   }
 
   window.CompactPageWarp = {
-    init: init,
     applySavedLayout: applySavedLayout,
-    saveCurrentLayout: saveCurrentLayout,
-    saveTargetPoints: saveTargetPoints,
     reset: reset,
-    screenToLayer: screenToLayer,
-    layerToScreen: layerToScreen,
-    uvToLayer: uvToLayer,
     isActive: function () { return !!instance; },
-    getLayer: function () { return layerEl; },
-    storageKey: STORAGE_KEY
+    getLayer: function () { return layerEl; }
   };
 
   if (document.readyState === 'loading') {

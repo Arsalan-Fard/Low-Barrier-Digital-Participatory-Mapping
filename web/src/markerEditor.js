@@ -1,562 +1,644 @@
-// Marker editor for the /marker page.
-    (function () {
-      var els = {
-        family: document.getElementById('markerFamily'),
-        size: document.getElementById('markerSizeCm'),
-        download: document.getElementById('markerDownload'),
-        body: document.getElementById('markerBody'),
-        status: document.getElementById('markerSaveStatus')
-      };
-      if (!els.family || !els.body) return;
+// The /marker page: which AprilTag each tool uses. The slot model (groups,
+// tools, the order of the screen's slots) must agree with tagAssignments.js,
+// which the map page reads, and sanitize_marker_settings on the server.
+(function () {
+  var els = {
+    family: document.getElementById('markerFamily'),
+    size: document.getElementById('markerSizeCm'),
+    download: document.getElementById('markerDownload'),
+    body: document.getElementById('markerBody'),
+    status: document.getElementById('markerSaveStatus')
+  };
 
-      var state = {
-        family: 'tag36h11',
-        tagSizeCm: 3,
-        slots: [],
-        availableFamilies: []
-      };
-      var saveTimer = 0;
-      var colorTools = { draw: true };
-      var defaultDrawOffsetCm = 3;
+  var state = {
+    family: 'tag36h11',
+    tagSizeCm: 3,
+    slots: [],
+    availableFamilies: []
+  };
+  var saveTimer = 0;
+  var defaultDrawOffsetCm = 3;
 
-      // Delete button shows for freely-removable draw slots and for ADDED
-      // post-its (extra-*). The keyboard location and the first post-it are
-      // fixed defaults and never get a delete button.
-      function canDeleteSlot(slot) {
-        if (!slot) return false;
-        if (slot.tool === 'draw') return true;
-        return String(slot.key || '').indexOf('extra-') === 0;
+  var GROUP_MULTI = 'Multi-state pointer';
+  var GROUP_SINGLE = 'Single-state pointer';
+  var GROUP_SCREEN = 'Street view screen';
+  var GROUP_HINTS = {};
+  GROUP_HINTS[GROUP_MULTI] = 'A folding pen made of two tags. Closed it points; pinched open it acts, and its tool-selection pair switches between draw, move, erase and sticker.';
+  GROUP_HINTS[GROUP_SINGLE] = 'One tag with a single job. Placed on the map it chooses where the street view looks from; turning it turns the view.';
+  GROUP_HINTS[GROUP_SCREEN] = 'A printed A3 sheet with tags round its border. Laid on the table it becomes the screen the street view is shown in. Without it the view floats next to the pointer.';
+
+  // The screen's border slots in frameTagIds order, with each one's place on
+  // the sheet diagram in percent of its width and height.
+  var SCREEN_SLOTS = [
+    { slot: 'tl', name: 'Top left', x: 0, y: 0 },
+    { slot: 'tr', name: 'Top right', x: 100, y: 0 },
+    { slot: 'br', name: 'Bottom right', x: 100, y: 100 },
+    { slot: 'bl', name: 'Bottom left', x: 0, y: 100 },
+    { slot: 'rm', name: 'Right middle', x: 100, y: 50 },
+    { slot: 'bm', name: 'Bottom middle', x: 50, y: 100 },
+    { slot: 'lm', name: 'Left middle', x: 0, y: 50 }
+  ];
+  // Ids "Assign automatically" never hands out because the map page uses them
+  // regardless of this page: the zoom and pan tags (21, 22).
+  var RESERVED_TAG_IDS = [21, 22];
+  var TAG_PROPS = ['tagId', 'tagId2', 'selectorTagId', 'selectorTagId2'];
+
+  function setMarkerStatus(text, kind) {
+    els.status.textContent = text || '';
+    els.status.className = 'status-line' + (kind ? ' ' + kind : '');
+  }
+
+  function normalizeOffsetCm(raw) {
+    var n = Number(raw);
+    if (!Number.isFinite(n)) n = defaultDrawOffsetCm;
+    return Math.max(0, Math.min(20, n));
+  }
+
+  function toId(raw) {
+    return raw == null || raw === '' ? null : Number(raw);
+  }
+
+  function cloneFrameTagIds(raw) {
+    var src = Array.isArray(raw) ? raw : [];
+    return SCREEN_SLOTS.map(function (_entry, index) { return toId(src[index]); });
+  }
+
+  function cloneSlot(slot) {
+    var tool = String(slot.tool || '');
+    var out = {
+      key: String(slot.key || ''),
+      group: String(slot.group || ''),
+      tool: tool,
+      label: String(slot.label || ''),
+      tagId: toId(slot.tagId),
+      tagId2: toId(slot.tagId2),
+      selectorTagId: toId(slot.selectorTagId),
+      selectorTagId2: toId(slot.selectorTagId2),
+      color: String(slot.color || ''),
+      offsetCm: tool === 'draw' ? normalizeOffsetCm(slot.offsetCm) : undefined
+    };
+    if (tool === 'street-screen') out.frameTagIds = cloneFrameTagIds(slot.frameTagIds);
+    return out;
+  }
+
+  function applyMarkerData(data) {
+    data = data && typeof data === 'object' ? data : {};
+    state.family = String(data.family || state.family || 'tag36h11');
+    state.tagSizeCm = Number(data.tagSizeCm) || 3;
+    state.slots = Array.isArray(data.slots) ? data.slots.map(cloneSlot) : [];
+    state.availableFamilies = Array.isArray(data.availableFamilies) ? data.availableFamilies : state.availableFamilies;
+    els.size.value = String(state.tagSizeCm);
+  }
+
+  function familyIds() {
+    for (var i = 0; i < state.availableFamilies.length; i++) {
+      if (state.availableFamilies[i].family === state.family) {
+        return Array.isArray(state.availableFamilies[i].ids) ? state.availableFamilies[i].ids : [];
       }
+    }
+    return [];
+  }
 
-      function setMarkerStatus(text, kind) {
-        els.status.textContent = text || '';
-        els.status.className = 'status-line' + (kind ? ' ' + kind : '');
-      }
+  function slotTagIds(slot) {
+    var ids = [];
+    TAG_PROPS.forEach(function (prop) {
+      if (slot[prop] != null) ids.push(Number(slot[prop]));
+    });
+    (slot.frameTagIds || []).forEach(function (id) { if (id != null) ids.push(Number(id)); });
+    return ids;
+  }
 
-      function normalizeOffsetCm(raw) {
-        var n = Number(raw);
-        if (!Number.isFinite(n)) n = defaultDrawOffsetCm;
-        return Math.max(0, Math.min(20, n));
-      }
+  function usedByTagId() {
+    var used = {};
+    state.slots.forEach(function (slot) {
+      slotTagIds(slot).forEach(function (id) { used[String(id)] = slot.key; });
+    });
+    return used;
+  }
 
-      function cloneSlot(slot) {
-        var tool = String(slot.tool || '');
-        return {
-          key: String(slot.key || ''),
-          group: String(slot.group || ''),
-          tool: tool,
-          label: String(slot.label || ''),
-          tagId: slot.tagId == null || slot.tagId === '' ? null : Number(slot.tagId),
-          tagId2: slot.tagId2 == null || slot.tagId2 === '' ? null : Number(slot.tagId2),
-          selectorTagId: slot.selectorTagId == null || slot.selectorTagId === '' ? null : Number(slot.selectorTagId),
-          selectorTagId2: slot.selectorTagId2 == null || slot.selectorTagId2 === '' ? null : Number(slot.selectorTagId2),
-          color: String(slot.color || ''),
-          offsetCm: tool === 'draw' || tool === 'eraser' ? normalizeOffsetCm(slot.offsetCm) : undefined
-        };
-      }
+  // An id belongs to one place only: giving it to `owner` (in `ownerProp`, or
+  // in frame position `ownerIndex`) takes it away from wherever else it was.
+  function claimTagId(owner, tagId, ownerProp, ownerIndex) {
+    if (tagId == null) return;
+    state.slots.forEach(function (slot) {
+      TAG_PROPS.forEach(function (prop) {
+        if (slot === owner && prop === ownerProp) return;
+        if (Number(slot[prop]) === Number(tagId) && slot[prop] != null) slot[prop] = null;
+      });
+      if (!slot.frameTagIds) return;
+      slot.frameTagIds = slot.frameTagIds.map(function (id, index) {
+        if (slot === owner && index === ownerIndex) return id;
+        return id != null && Number(id) === Number(tagId) ? null : id;
+      });
+    });
+  }
 
-      function applyMarkerData(data) {
-        data = data && typeof data === 'object' ? data : {};
-        state.family = String(data.family || state.family || 'tag36h11');
-        state.tagSizeCm = Number(data.tagSizeCm) || 3;
-        state.slots = Array.isArray(data.slots) ? data.slots.map(cloneSlot) : [];
-        state.availableFamilies = Array.isArray(data.availableFamilies) ? data.availableFamilies : state.availableFamilies;
-        els.size.value = String(state.tagSizeCm);
-      }
+  function scheduleMarkerSave() {
+    setMarkerStatus('Saving...', '');
+    if (saveTimer) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(saveMarkerSettings, 250);
+  }
 
-      function familyIds() {
-        for (var i = 0; i < state.availableFamilies.length; i++) {
-          if (state.availableFamilies[i].family === state.family) {
-            return Array.isArray(state.availableFamilies[i].ids) ? state.availableFamilies[i].ids : [];
-          }
+  function saveMarkerSettings() {
+    saveTimer = 0;
+    var httpStatus = 0;
+    return fetch('/api/marker-settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        family: state.family,
+        tagSizeCm: Number(state.tagSizeCm) || 3,
+        slots: state.slots
+      })
+    }).then(function (r) {
+      httpStatus = r.status;
+      // An error response's body carries the server's reason.
+      return r.json().catch(function () { return null; });
+    })
+      .then(function (data) {
+        if (!data || !data.ok) {
+          var reason = (data && (data.detail || data.error)) || ('HTTP ' + (httpStatus || '?'));
+          throw new Error(reason);
         }
-        return [];
-      }
-
-      function usedByTagId() {
-        var used = {};
-        state.slots.forEach(function (slot) {
-          if (slot.tagId != null && slot.tagId !== '') used[String(Number(slot.tagId))] = slot.key;
-          if (slot.tagId2 != null && slot.tagId2 !== '') used[String(Number(slot.tagId2))] = slot.key;
-          if (slot.selectorTagId != null && slot.selectorTagId !== '') used[String(Number(slot.selectorTagId))] = slot.key;
-          if (slot.selectorTagId2 != null && slot.selectorTagId2 !== '') used[String(Number(slot.selectorTagId2))] = slot.key;
-        });
-        return used;
-      }
-
-      function clearTagIdFromOtherSlots(ownerSlot, tagId) {
-        if (tagId == null) return;
-        state.slots.forEach(function (other) {
-          if (!other || other.key === ownerSlot.key) return;
-          ['tagId', 'tagId2', 'selectorTagId', 'selectorTagId2'].forEach(function (prop) {
-            if (Number(other[prop]) === Number(tagId)) other[prop] = null;
-          });
-        });
-      }
-
-      function clearMatchingTagIdOnSlot(slot, ownerProp, tagId) {
-        if (tagId == null || !slot) return;
-        ['tagId', 'tagId2', 'selectorTagId', 'selectorTagId2'].forEach(function (prop) {
-          if (prop !== ownerProp && Number(slot[prop]) === Number(tagId)) slot[prop] = null;
-        });
-      }
-
-      function scheduleMarkerSave() {
-        setMarkerStatus('Saving...', '');
-        if (saveTimer) window.clearTimeout(saveTimer);
-        saveTimer = window.setTimeout(saveMarkerSettings, 250);
-      }
-
-      function saveMarkerSettings() {
-        saveTimer = 0;
-        var httpStatus = 0;
-        fetch('/api/marker-settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            family: state.family,
-            tagSizeCm: Number(state.tagSizeCm) || 3,
-            slots: state.slots
-          })
-        }).then(function (r) {
-          httpStatus = r.status;
-          // Read the body even on error so we can surface the server's reason.
-          return r.json().catch(function () { return null; });
-        })
-          .then(function (data) {
-            if (!data || !data.ok) {
-              var reason = (data && (data.detail || data.error)) || ('HTTP ' + (httpStatus || '?'));
-              throw new Error(reason);
-            }
-            applyMarkerData(data);
-            renderMarkerEditor();
-            setMarkerStatus('Saved', 'ok');
-            window.setTimeout(function () {
-              if (els.status.textContent === 'Saved') setMarkerStatus('', '');
-            }, 1200);
-          })
-          .catch(function (err) {
-            // Surface the real reason (server detail / HTTP status / network) so
-            // failures are diagnosable instead of a blank "Save failed".
-            var msg = (err && err.message) ? String(err.message) : 'network error';
-            setMarkerStatus('Save failed: ' + msg, 'err');
-          });
-      }
-
-      function renderFamilyOptions() {
-        els.family.innerHTML = '';
-        state.availableFamilies.forEach(function (entry) {
-          var opt = document.createElement('option');
-          opt.value = entry.family;
-          opt.textContent = entry.family;
-          els.family.appendChild(opt);
-        });
-        els.family.value = state.family;
-      }
-
-      function markerSvgPath(tagId) {
-        return '/api/apriltag-svg/' + encodeURIComponent(state.family) + '/' + Number(tagId) + '.svg';
-      }
-
-      function renderMarkerCard(slot) {
-        var card = document.createElement('div');
-        card.className = 'marker-card';
-
-        var preview = document.createElement('div');
-        preview.className = 'marker-preview';
-        if (canDeleteSlot(slot)) {
-          var del = document.createElement('button');
-          del.className = 'marker-delete';
-          del.type = 'button';
-          del.title = 'Delete marker';
-          del.setAttribute('aria-label', 'Delete marker');
-          del.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">' +
-            '<path fill="currentColor" d="M9 3v1H4v2h16V4h-5V3H9zM6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13H6zm4 3h1.5v8H10v-8zm2.5 0H14v8h-1.5v-8z"/></svg>';
-          del.addEventListener('click', function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            state.slots = state.slots.filter(function (candidate) { return candidate.key !== slot.key; });
-            renderMarkerEditor();
-            scheduleMarkerSave();
-          });
-          preview.appendChild(del);
-        }
-        if (slot.tagId == null || slot.tagId === '') {
-          var empty = document.createElement('div');
-          empty.className = 'marker-empty';
-          empty.textContent = 'Empty';
-          preview.appendChild(empty);
-        } else {
-          var img = document.createElement('img');
-          img.alt = 'AprilTag ' + slot.tagId;
-          img.src = markerSvgPath(slot.tagId);
-          img.onerror = function () {
-            preview.innerHTML = '';
-            var missing = document.createElement('div');
-            missing.className = 'marker-empty';
-            missing.textContent = 'Missing';
-            preview.appendChild(missing);
-          };
-          preview.appendChild(img);
-        }
-        card.appendChild(preview);
-
-        var label = document.createElement('div');
-        label.className = 'marker-card-label' + (slot.tool === 'draw' ? ' draw-label' : '');
-        label.textContent = slot.label || slot.tool || '';
-        card.appendChild(label);
-
-        // Two-tag tools (draw / tool-selection pair) get a wider card so both tag dropdowns
-        // show their numbers instead of clipping. Comment tools are single-tag.
-        var twoTag = (slot.tool === 'draw' || slot.tool === 'eraser');
-        if (twoTag) card.classList.add('wide');
-
-        var controls = document.createElement('div');
-        var controlClasses = ['marker-controls'];
-        if (slot.tool === 'draw') controlClasses.push('draw-controls');
-        else if (slot.tool === 'eraser') controlClasses.push('eraser-controls');
-        else controlClasses.push('no-color');
-        controls.className = controlClasses.join(' ');
-
-        var select = document.createElement('select');
-        select.className = 'marker-tag-select';
-        select.title = slot.tool === 'comment-keyboard' ? 'Keyboard location tag'
-          : (slot.tool === 'comment-postit' ? 'Post-it tag' : 'Marker ID');
-
-        var emptyOpt = document.createElement('option');
-        emptyOpt.value = '';
-        emptyOpt.textContent = 'Empty';
-        select.appendChild(emptyOpt);
-
-        var used = usedByTagId();
-        familyIds().forEach(function (id) {
-          var opt = document.createElement('option');
-          opt.value = String(id);
-          opt.textContent = String(id);
-          if (used[String(id)] && used[String(id)] !== slot.key) {
-            opt.className = 'taken';
-            opt.title = 'Already used by another marker';
-          }
-          select.appendChild(opt);
-        });
-        select.value = slot.tagId == null ? '' : String(slot.tagId);
-        select.addEventListener('change', function () {
-          var next = select.value === '' ? null : Number(select.value);
-          if (next != null) {
-            clearTagIdFromOtherSlots(slot, next);
-            clearMatchingTagIdOnSlot(slot, 'tagId', next);
-          }
-          slot.tagId = next;
-          renderMarkerEditor();
-          scheduleMarkerSave();
-        });
-        controls.appendChild(select);
-
-        if (slot.tool === 'draw' || slot.tool === 'eraser') {
-          var select2 = document.createElement('select');
-          select2.className = 'marker-tag-select';
-          select2.title = slot.tool === 'eraser'
-            ? 'Fold-partner ID (second tag of the tool-selection pair)'
-            : 'Fold-partner ID (second tag of the drawing pair)';
-          var emptyOpt2 = document.createElement('option');
-          emptyOpt2.value = '';
-          emptyOpt2.textContent = 'Empty';
-          select2.appendChild(emptyOpt2);
-          familyIds().forEach(function (id) {
-            var opt = document.createElement('option');
-            opt.value = String(id);
-            opt.textContent = String(id);
-            if (used[String(id)] && used[String(id)] !== slot.key) {
-              opt.className = 'taken';
-              opt.title = 'Already used by another marker';
-            }
-            select2.appendChild(opt);
-          });
-          select2.value = slot.tagId2 == null ? '' : String(slot.tagId2);
-          select2.addEventListener('change', function () {
-            var next = select2.value === '' ? null : Number(select2.value);
-            if (next != null) {
-              clearTagIdFromOtherSlots(slot, next);
-              clearMatchingTagIdOnSlot(slot, 'tagId2', next);
-            }
-            slot.tagId2 = next;
-            renderMarkerEditor();
-            scheduleMarkerSave();
-          });
-          controls.appendChild(select2);
-        }
-
-        if (colorTools[slot.tool]) {
-          var color = document.createElement('input');
-          color.className = 'marker-color';
-          color.type = 'color';
-          color.value = /^#[0-9a-fA-F]{6}$/.test(slot.color || '') ? slot.color : '#ff5b5b';
-          color.title = 'Tool color';
-          color.addEventListener('input', function () {
-            slot.color = color.value;
-            scheduleMarkerSave();
-          });
-          controls.appendChild(color);
-        }
-        if (slot.tool === 'draw') {
-          var selectorWrap = document.createElement('div');
-          selectorWrap.className = 'marker-tool-selector-row';
-
-          var selectorLabel = document.createElement('div');
-          selectorLabel.className = 'marker-tool-selector-label';
-          selectorLabel.textContent = 'Tool selection';
-          selectorWrap.appendChild(selectorLabel);
-
-          var selectorGrid = document.createElement('div');
-          selectorGrid.className = 'marker-tool-selector-grid';
-          ['selectorTagId', 'selectorTagId2'].forEach(function (prop, index) {
-            var selectorSelect = document.createElement('select');
-            selectorSelect.className = 'marker-tag-select';
-            selectorSelect.title = index === 0
-              ? 'First tag of the tool-selection pair'
-              : 'Second tag of the tool-selection pair';
-            var selectorEmpty = document.createElement('option');
-            selectorEmpty.value = '';
-            selectorEmpty.textContent = 'Empty';
-            selectorSelect.appendChild(selectorEmpty);
-            familyIds().forEach(function (id) {
-              var option = document.createElement('option');
-              option.value = String(id);
-              option.textContent = String(id);
-              if (used[String(id)] && used[String(id)] !== slot.key) {
-                option.className = 'taken';
-                option.title = 'Already used by another marker';
-              }
-              selectorSelect.appendChild(option);
-            });
-            selectorSelect.value = slot[prop] == null ? '' : String(slot[prop]);
-            selectorSelect.addEventListener('change', function () {
-              var next = selectorSelect.value === '' ? null : Number(selectorSelect.value);
-              if (next != null) {
-                clearTagIdFromOtherSlots(slot, next);
-                clearMatchingTagIdOnSlot(slot, prop, next);
-              }
-              slot[prop] = next;
-              renderMarkerEditor();
-              scheduleMarkerSave();
-            });
-            selectorGrid.appendChild(selectorSelect);
-          });
-          selectorWrap.appendChild(selectorGrid);
-          controls.appendChild(selectorWrap);
-        }
-        if (slot.tool === 'draw' || slot.tool === 'eraser') {
-          var offsetBlock = document.createElement('div');
-          offsetBlock.className = 'marker-offset-block';
-
-          var offsetLabel = document.createElement('div');
-          offsetLabel.className = 'marker-offset-label';
-          offsetLabel.textContent = 'Offset';
-          offsetBlock.appendChild(offsetLabel);
-
-          var offsetWrap = document.createElement('label');
-          offsetWrap.className = 'marker-offset-wrap';
-          offsetWrap.title = (slot.tool === 'eraser' ? 'Tool-selection' : 'Drawing') + ' offset from each tag in centimeters';
-
-          var offset = document.createElement('input');
-          offset.className = 'marker-offset';
-          offset.type = 'number';
-          offset.min = '0';
-          offset.max = '20';
-          offset.step = '0.1';
-          offset.inputMode = 'decimal';
-          offset.value = String(normalizeOffsetCm(slot.offsetCm));
-          offset.setAttribute('aria-label', (slot.tool === 'eraser' ? 'Tool-selection' : 'Drawing') + ' offset in centimeters');
-          offset.addEventListener('input', function () {
-            var next = Number(offset.value);
-            if (!Number.isFinite(next)) return;
-            slot.offsetCm = Math.max(0, Math.min(20, next));
-            scheduleMarkerSave();
-          });
-          offset.addEventListener('change', function () {
-            slot.offsetCm = normalizeOffsetCm(offset.value);
-            offset.value = String(slot.offsetCm);
-            scheduleMarkerSave();
-          });
-
-          var offsetUnit = document.createElement('span');
-          offsetUnit.className = 'marker-offset-unit';
-          offsetUnit.textContent = 'cm';
-
-          offsetWrap.appendChild(offset);
-          offsetWrap.appendChild(offsetUnit);
-          offsetBlock.appendChild(offsetWrap);
-          controls.appendChild(offsetBlock);
-        }
-        card.appendChild(controls);
-        return card;
-      }
-
-      function addMarkerSlot(tool) {
-        var count = state.slots.filter(function (slot) { return slot.tool === tool; }).length + 1;
-        var isDraw = tool === 'draw';
-        var slot = {
-          key: 'extra-' + tool + '-' + Date.now().toString(36),
-          group: isDraw ? 'Drawing' : 'Comment',
-          tool: tool,
-          label: (isDraw ? 'Pointer ' : 'Post-it ') + count,
-          tagId: null,
-          tagId2: null,
-          selectorTagId: isDraw ? null : undefined,
-          selectorTagId2: isDraw ? null : undefined,
-          color: isDraw ? '#ff5b5b' : ''
-        };
-        if (isDraw) slot.offsetCm = defaultDrawOffsetCm;
-        state.slots.push(slot);
+        applyMarkerData(data);
         renderMarkerEditor();
-        scheduleMarkerSave();
+        setMarkerStatus('Saved', 'ok');
+        window.setTimeout(function () {
+          if (els.status.textContent === 'Saved') setMarkerStatus('', '');
+        }, 1200);
+        return true;
+      })
+      .catch(function (err) {
+        var msg = (err && err.message) ? String(err.message) : 'network error';
+        setMarkerStatus('Save failed: ' + msg, 'err');
+        return false;
+      });
+  }
+
+  function renderFamilyOptions() {
+    els.family.innerHTML = '';
+    state.availableFamilies.forEach(function (entry) {
+      var opt = document.createElement('option');
+      opt.value = entry.family;
+      opt.textContent = entry.family;
+      els.family.appendChild(opt);
+    });
+    els.family.value = state.family;
+  }
+
+  function markerSvgPath(tagId) {
+    return '/api/apriltag-svg/' + encodeURIComponent(state.family) + '/' + Number(tagId) + '.svg';
+  }
+
+  // Ids another slot holds are marked, not hidden: picking one moves it here.
+  function buildTagSelect(slot, current, title, onPick) {
+    var select = document.createElement('select');
+    select.className = 'marker-tag-select';
+    select.title = title;
+    var emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = 'Empty';
+    select.appendChild(emptyOpt);
+    var used = usedByTagId();
+    familyIds().forEach(function (id) {
+      var opt = document.createElement('option');
+      opt.value = String(id);
+      opt.textContent = String(id);
+      if (used[String(id)] && used[String(id)] !== slot.key) {
+        opt.className = 'taken';
+        opt.title = 'Already used by another marker';
       }
+      select.appendChild(opt);
+    });
+    select.value = current == null ? '' : String(current);
+    select.addEventListener('change', function () {
+      onPick(select.value === '' ? null : Number(select.value));
+      renderMarkerEditor();
+      scheduleMarkerSave();
+    });
+    return select;
+  }
 
-      // Build one titled group: its cards in a row, plus an "+" add button for
-      // the addable groups (Drawing = draw tools, Comment = keyboard-annotation).
-      function buildGroup(groupName) {
-        var wrap = document.createElement('div');
-        wrap.className = 'marker-group';
-        var title = document.createElement('h3');
-        title.textContent = groupName;
-        wrap.appendChild(title);
+  function buildPropSelect(slot, prop, title) {
+    return buildTagSelect(slot, slot[prop], title, function (next) {
+      claimTagId(slot, next, prop, -1);
+      slot[prop] = next;
+    });
+  }
 
-        var row = document.createElement('div');
-        row.className = 'marker-card-row';
-        state.slots.filter(function (slot) { return slot.group === groupName; }).forEach(function (slot) {
-          row.appendChild(renderMarkerCard(slot));
-        });
+  function renderMarkerCard(slot) {
+    // Multi-state pointers are the only slots that can be added or removed,
+    // and they get a wider card for their two pairs of dropdowns.
+    var isDraw = slot.tool === 'draw';
+    var card = document.createElement('div');
+    card.className = 'marker-card';
 
-        if (groupName === 'Drawing' || groupName === 'Comment') {
-          var add = document.createElement('button');
-          add.className = 'marker-add-card';
-          add.type = 'button';
-          add.textContent = '+';
-          add.title = groupName === 'Drawing' ? 'Add drawing tool' : 'Add post-it';
-          add.addEventListener('click', function () {
-            addMarkerSlot(groupName === 'Drawing' ? 'draw' : 'comment-postit');
-          });
-          row.appendChild(add);
-        }
-        wrap.appendChild(row);
-        return wrap;
-      }
-
-      function renderMarkerEditor() {
-        var pointerNumber = 0;
-        state.slots.forEach(function (slot) {
-          if (slot.tool === 'draw') {
-            pointerNumber += 1;
-            slot.label = 'Pointer ' + pointerNumber;
-          }
-        });
-        renderFamilyOptions();
-        els.body.innerHTML = '';
-        // Top: the two addable tool groups, each in its own bordered section.
-        ['Drawing', 'Comment'].forEach(function (groupName) {
-          var section = document.createElement('section');
-          section.className = 'marker-section';
-          section.appendChild(buildGroup(groupName));
-          els.body.appendChild(section);
-        });
-        // Bottom: fixed tool groups in a compact grid.
-        var section = document.createElement('section');
-        section.className = 'marker-section';
-        var grid = document.createElement('div');
-        grid.className = 'marker-bottom-grid';
-        ['Tools', 'Shortest-path', 'Analysis'].forEach(function (groupName) {
-          if (state.slots.some(function (slot) { return slot.group === groupName; })) {
-            grid.appendChild(buildGroup(groupName));
-          }
-        });
-        section.appendChild(grid);
-        els.body.appendChild(section);
-      }
-
-      function selectedMarkerEntries() {
-        var entries = [];
-        var seen = {};
-        function add(slot, prop, useLabel) {
-          if (!slot || slot[prop] == null || slot[prop] === '') return;
-          var id = Number(slot[prop]);
-          if (!Number.isFinite(id) || seen[String(id)]) return;
-          seen[String(id)] = true;
-          entries.push({
-            slot: slot,
-            tagId: id,
-            label: String(useLabel || slot.label || slot.group || 'Marker')
-          });
-        }
-        var pointerNumber = 0;
-        state.slots.forEach(function (slot) {
-          if (slot.tool === 'draw') {
-            pointerNumber += 1;
-            add(slot, 'tagId', 'Pointer ' + pointerNumber + ' (left)');
-            add(slot, 'tagId2', 'Pointer ' + pointerNumber + ' (right)');
-            add(slot, 'selectorTagId', 'Selector ' + pointerNumber + ' (left)');
-            add(slot, 'selectorTagId2', 'Selector ' + pointerNumber + ' (right)');
-          } else {
-            add(slot, 'tagId', '');
-            if (slot.tool === 'keyboard-annotation') {
-              add(slot, 'tagId2', String(slot.label || 'Keyboard') + ' keyboard');
-            }
-          }
-        });
-        return entries;
-      }
-
-      function downloadMarkerSheet() {
-        var entries = selectedMarkerEntries();
-        if (!entries.length) {
-          window.alert('No marker IDs selected.');
-          return;
-        }
-        var size = Math.max(1, Math.min(20, Number(state.tagSizeCm) || 3));
-        var params = new URLSearchParams();
-        params.set('family', state.family);
-        params.set('sizeCm', String(size));
-        params.set('entries', JSON.stringify(entries.map(function (item) {
-          return { id: item.tagId, use: item.label };
-        })));
-        var link = document.createElement('a');
-        link.href = '/api/marker-sheet.pdf?' + params.toString();
-        link.download = 'markers_' + state.family + '_' +
-          String(size).replace('.', '_') + 'cm.pdf';
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        setMarkerStatus('PDF download started', '');
-        window.setTimeout(function () { setMarkerStatus('', ''); }, 1800);
-      }
-
-      els.family.addEventListener('change', function () {
-        state.family = els.family.value || state.family;
-        var allowed = {};
-        familyIds().forEach(function (id) { allowed[String(id)] = true; });
-        state.slots.forEach(function (slot) {
-          if (slot.tagId != null && !allowed[String(slot.tagId)]) slot.tagId = null;
-          if (slot.tagId2 != null && !allowed[String(slot.tagId2)]) slot.tagId2 = null;
-          if (slot.selectorTagId != null && !allowed[String(slot.selectorTagId)]) slot.selectorTagId = null;
-          if (slot.selectorTagId2 != null && !allowed[String(slot.selectorTagId2)]) slot.selectorTagId2 = null;
-        });
+    var preview = document.createElement('div');
+    preview.className = 'marker-preview';
+    if (isDraw) {
+      var del = document.createElement('button');
+      del.className = 'marker-delete';
+      del.type = 'button';
+      del.title = 'Delete pointer';
+      del.setAttribute('aria-label', 'Delete pointer');
+      del.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">' +
+        '<path fill="currentColor" d="M9 3v1H4v2h16V4h-5V3H9zM6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13H6zm4 3h1.5v8H10v-8zm2.5 0H14v8h-1.5v-8z"/></svg>';
+      del.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        state.slots = state.slots.filter(function (candidate) { return candidate.key !== slot.key; });
         renderMarkerEditor();
         scheduleMarkerSave();
       });
-      els.size.addEventListener('change', function () {
-        state.tagSizeCm = Math.max(1, Math.min(20, Number(els.size.value) || 3));
-        els.size.value = String(state.tagSizeCm);
+      preview.appendChild(del);
+    }
+    if (slot.tagId == null) {
+      var empty = document.createElement('div');
+      empty.className = 'marker-empty';
+      empty.textContent = 'Empty';
+      preview.appendChild(empty);
+    } else {
+      var img = document.createElement('img');
+      img.alt = 'AprilTag ' + slot.tagId;
+      img.src = markerSvgPath(slot.tagId);
+      img.onerror = function () {
+        preview.innerHTML = '';
+        var missing = document.createElement('div');
+        missing.className = 'marker-empty';
+        missing.textContent = 'Missing';
+        preview.appendChild(missing);
+      };
+      preview.appendChild(img);
+    }
+    card.appendChild(preview);
+
+    var label = document.createElement('div');
+    label.className = 'marker-card-label' + (isDraw ? ' draw-label' : '');
+    label.textContent = slot.label || slot.tool || '';
+    card.appendChild(label);
+    if (isDraw) card.classList.add('wide');
+
+    var controls = document.createElement('div');
+    controls.className = 'marker-controls ' + (isDraw ? 'draw-controls' : 'no-color');
+    controls.appendChild(buildPropSelect(slot, 'tagId', isDraw ? 'First tag of the pen' : 'Marker ID'));
+    if (isDraw) {
+      controls.appendChild(buildPropSelect(slot, 'tagId2', 'Fold-partner ID (second tag of the pen)'));
+
+      var color = document.createElement('input');
+      color.className = 'marker-color';
+      color.type = 'color';
+      color.value = /^#[0-9a-fA-F]{6}$/.test(slot.color || '') ? slot.color : '#ff5b5b';
+      color.title = 'Tool color';
+      color.addEventListener('input', function () {
+        slot.color = color.value;
         scheduleMarkerSave();
       });
-      els.download.addEventListener('click', downloadMarkerSheet);
+      controls.appendChild(color);
 
-      fetch('/api/marker-settings', { cache: 'no-store' })
-        .then(function (r) { return r.json(); })
-        .then(function (data) { applyMarkerData(data); renderMarkerEditor(); })
-        .catch(function () {
-          var cfg = (window.CompactMapConfig && window.CompactMapConfig.CONFIG && window.CompactMapConfig.CONFIG.markerSettings) || {};
-          applyMarkerData(cfg);
-          renderMarkerEditor();
-          setMarkerStatus('Load failed', 'err');
+      var selectorWrap = document.createElement('div');
+      selectorWrap.className = 'marker-tool-selector-row';
+      var selectorLabel = document.createElement('div');
+      selectorLabel.className = 'marker-tool-selector-label';
+      selectorLabel.textContent = 'Tool selection';
+      selectorWrap.appendChild(selectorLabel);
+      var selectorGrid = document.createElement('div');
+      selectorGrid.className = 'marker-tool-selector-grid';
+      selectorGrid.appendChild(buildPropSelect(slot, 'selectorTagId', 'First tag of the tool-selection pair'));
+      selectorGrid.appendChild(buildPropSelect(slot, 'selectorTagId2', 'Second tag of the tool-selection pair'));
+      selectorWrap.appendChild(selectorGrid);
+      controls.appendChild(selectorWrap);
+
+      var offsetBlock = document.createElement('div');
+      offsetBlock.className = 'marker-offset-block';
+      var offsetLabel = document.createElement('div');
+      offsetLabel.className = 'marker-offset-label';
+      offsetLabel.textContent = 'Offset';
+      offsetBlock.appendChild(offsetLabel);
+
+      var offsetWrap = document.createElement('label');
+      offsetWrap.className = 'marker-offset-wrap';
+      offsetWrap.title = 'Distance from each tag to the pen tip, in centimeters';
+      var offset = document.createElement('input');
+      offset.className = 'marker-offset';
+      offset.type = 'number';
+      offset.min = '0';
+      offset.max = '20';
+      offset.step = '0.1';
+      offset.inputMode = 'decimal';
+      offset.value = String(normalizeOffsetCm(slot.offsetCm));
+      offset.setAttribute('aria-label', 'Pen tip offset in centimeters');
+      offset.addEventListener('input', function () {
+        var next = Number(offset.value);
+        if (!Number.isFinite(next)) return;
+        slot.offsetCm = Math.max(0, Math.min(20, next));
+        scheduleMarkerSave();
+      });
+      offset.addEventListener('change', function () {
+        slot.offsetCm = normalizeOffsetCm(offset.value);
+        offset.value = String(slot.offsetCm);
+        scheduleMarkerSave();
+      });
+      var offsetUnit = document.createElement('span');
+      offsetUnit.className = 'marker-offset-unit';
+      offsetUnit.textContent = 'cm';
+      offsetWrap.appendChild(offset);
+      offsetWrap.appendChild(offsetUnit);
+      offsetBlock.appendChild(offsetWrap);
+      controls.appendChild(offsetBlock);
+    }
+    card.appendChild(controls);
+    return card;
+  }
+
+  // The lowest free ids, in order. Ids the screen already holds count as free
+  // (they are being reassigned); ids any other tool holds do not.
+  function autoAssignScreen(slot) {
+    var taken = {};
+    RESERVED_TAG_IDS.forEach(function (id) { taken[String(id)] = true; });
+    state.slots.forEach(function (other) {
+      if (other === slot) return;
+      slotTagIds(other).forEach(function (id) { taken[String(id)] = true; });
+    });
+    var free = familyIds().filter(function (id) { return !taken[String(id)]; });
+    slot.frameTagIds = SCREEN_SLOTS.map(function (_entry, index) {
+      return index < free.length ? Number(free[index]) : null;
+    });
+    return Math.min(free.length, SCREEN_SLOTS.length);
+  }
+
+  function downloadScreenSheet() {
+    // The server draws the PDF from the SAVED settings, so a pending save goes first.
+    if (saveTimer) {
+      window.clearTimeout(saveTimer);
+      saveTimer = 0;
+    }
+    saveMarkerSettings().then(function (ok) {
+      if (!ok) return;
+      var link = document.createElement('a');
+      link.href = '/api/street-screen/frame.pdf';
+      link.download = 'street-view-screen-A3.pdf';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setMarkerStatus('PDF download started', '');
+      window.setTimeout(function () { setMarkerStatus('', ''); }, 1800);
+    });
+  }
+
+  function renderScreenCard(slot) {
+    if (!Array.isArray(slot.frameTagIds)) slot.frameTagIds = cloneFrameTagIds(null);
+    var card = document.createElement('div');
+    card.className = 'screen-card';
+
+    var sheet = document.createElement('div');
+    sheet.className = 'screen-sheet';
+    var inside = document.createElement('div');
+    inside.className = 'screen-sheet-inside';
+    inside.textContent = 'Street view';
+    sheet.appendChild(inside);
+    SCREEN_SLOTS.forEach(function (entry, index) {
+      var cell = document.createElement('div');
+      cell.className = 'screen-cell';
+      cell.style.left = entry.x + '%';
+      cell.style.top = entry.y + '%';
+      var id = slot.frameTagIds[index];
+      if (id != null) {
+        var img = document.createElement('img');
+        img.alt = '';
+        img.src = markerSvgPath(id);
+        cell.appendChild(img);
+      }
+      cell.appendChild(buildTagSelect(slot, id, entry.name + ' tag', function (next) {
+        claimTagId(slot, next, '', index);
+        slot.frameTagIds[index] = next;
+      }));
+      sheet.appendChild(cell);
+    });
+    card.appendChild(sheet);
+
+    var side = document.createElement('div');
+    side.className = 'screen-side';
+    var assigned = slot.frameTagIds.filter(function (id) { return id != null; }).length;
+    var count = document.createElement('div');
+    count.className = 'screen-count' + (assigned < 2 ? ' warn' : '');
+    count.textContent = assigned + ' of ' + SCREEN_SLOTS.length + ' tags assigned'
+      + (assigned < 2 ? ' — the screen needs at least 2' : '');
+    side.appendChild(count);
+
+    var auto = document.createElement('button');
+    auto.className = 'action';
+    auto.type = 'button';
+    auto.id = 'screenAutoAssign';
+    auto.textContent = 'Assign automatically';
+    auto.title = 'Give all seven positions the lowest tag ids no other tool is using';
+    auto.addEventListener('click', function () {
+      var got = autoAssignScreen(slot);
+      renderMarkerEditor();
+      scheduleMarkerSave();
+      if (got < SCREEN_SLOTS.length) {
+        window.setTimeout(function () {
+          setMarkerStatus('Only ' + got + ' free ids in ' + state.family + ' — pick a larger tag family for a full border.', 'err');
+        }, 400);
+      }
+    });
+    side.appendChild(auto);
+
+    var clear = document.createElement('button');
+    clear.className = 'action ghost';
+    clear.type = 'button';
+    clear.textContent = 'Clear';
+    clear.addEventListener('click', function () {
+      slot.frameTagIds = cloneFrameTagIds(null);
+      renderMarkerEditor();
+      scheduleMarkerSave();
+    });
+    side.appendChild(clear);
+
+    var pdf = document.createElement('button');
+    pdf.className = 'action ghost';
+    pdf.type = 'button';
+    pdf.id = 'screenDownload';
+    pdf.textContent = 'Download screen (A3 PDF)';
+    pdf.title = 'The sheet to print: page 1 is the screen, page 2 the street view pointer';
+    pdf.disabled = assigned < 2;
+    pdf.addEventListener('click', downloadScreenSheet);
+    side.appendChild(pdf);
+
+    card.appendChild(side);
+    return card;
+  }
+
+  function addPointerSlot() {
+    var count = state.slots.filter(function (slot) { return slot.tool === 'draw'; }).length + 1;
+    state.slots.push({
+      key: 'extra-draw-' + Date.now().toString(36),
+      group: GROUP_MULTI,
+      tool: 'draw',
+      label: 'Pointer ' + count,
+      tagId: null,
+      tagId2: null,
+      selectorTagId: null,
+      selectorTagId2: null,
+      color: '#ff5b5b',
+      offsetCm: defaultDrawOffsetCm
+    });
+    renderMarkerEditor();
+    scheduleMarkerSave();
+  }
+
+  function buildGroup(groupName) {
+    var wrap = document.createElement('div');
+    wrap.className = 'marker-group';
+    var title = document.createElement('h3');
+    title.textContent = groupName;
+    wrap.appendChild(title);
+    if (GROUP_HINTS[groupName]) {
+      var hint = document.createElement('p');
+      hint.className = 'marker-group-hint';
+      hint.textContent = GROUP_HINTS[groupName];
+      wrap.appendChild(hint);
+    }
+
+    var row = document.createElement('div');
+    row.className = 'marker-card-row';
+    state.slots.filter(function (slot) { return slot.group === groupName; }).forEach(function (slot) {
+      row.appendChild(slot.tool === 'street-screen' ? renderScreenCard(slot) : renderMarkerCard(slot));
+    });
+
+    if (groupName === GROUP_MULTI) {
+      var add = document.createElement('button');
+      add.className = 'marker-add-card';
+      add.type = 'button';
+      add.textContent = '+';
+      add.title = 'Add a multi-state pointer';
+      add.addEventListener('click', addPointerSlot);
+      row.appendChild(add);
+    }
+    wrap.appendChild(row);
+    return wrap;
+  }
+
+  function renderMarkerEditor() {
+    var pointerNumber = 0;
+    state.slots.forEach(function (slot) {
+      if (slot.tool === 'draw') {
+        pointerNumber += 1;
+        slot.label = 'Pointer ' + pointerNumber;
+      }
+    });
+    renderFamilyOptions();
+    // A re-render must not scroll the list back to the top.
+    var scrollTop = els.body.scrollTop;
+    els.body.innerHTML = '';
+    [GROUP_MULTI, GROUP_SINGLE, GROUP_SCREEN].forEach(function (groupName) {
+      var hasSlots = state.slots.some(function (slot) { return slot.group === groupName; });
+      if (!hasSlots && groupName !== GROUP_MULTI) return;
+      var section = document.createElement('section');
+      section.className = 'marker-section';
+      section.appendChild(buildGroup(groupName));
+      els.body.appendChild(section);
+    });
+    // The analysis tools go below, in a compact grid.
+    var section = document.createElement('section');
+    section.className = 'marker-section';
+    var grid = document.createElement('div');
+    grid.className = 'marker-bottom-grid';
+    ['Shortest-path', 'Analysis'].forEach(function (groupName) {
+      if (state.slots.some(function (slot) { return slot.group === groupName; })) {
+        grid.appendChild(buildGroup(groupName));
+      }
+    });
+    section.appendChild(grid);
+    els.body.appendChild(section);
+    els.body.scrollTop = scrollTop;
+  }
+
+  // What goes on the cut-out marker sheet. The screen's border tags are not
+  // on it: they are printed in place on the screen's own PDF.
+  function selectedMarkerEntries() {
+    var entries = [];
+    var seen = {};
+    function add(slot, prop, useLabel) {
+      if (slot[prop] == null) return;
+      var id = Number(slot[prop]);
+      if (!Number.isFinite(id) || seen[String(id)]) return;
+      seen[String(id)] = true;
+      entries.push({ tagId: id, label: String(useLabel || slot.label || slot.group || 'Marker') });
+    }
+    var pointerNumber = 0;
+    state.slots.forEach(function (slot) {
+      if (slot.tool === 'draw') {
+        pointerNumber += 1;
+        add(slot, 'tagId', 'Pointer ' + pointerNumber + ' (left)');
+        add(slot, 'tagId2', 'Pointer ' + pointerNumber + ' (right)');
+        add(slot, 'selectorTagId', 'Selector ' + pointerNumber + ' (left)');
+        add(slot, 'selectorTagId2', 'Selector ' + pointerNumber + ' (right)');
+      } else if (slot.tool === 'street-view') {
+        add(slot, 'tagId', 'Street view pointer');
+      } else {
+        add(slot, 'tagId', '');
+      }
+    });
+    return entries;
+  }
+
+  function downloadMarkerSheet() {
+    var entries = selectedMarkerEntries();
+    if (!entries.length) {
+      window.alert('No marker IDs selected.');
+      return;
+    }
+    var size = Math.max(1, Math.min(20, Number(state.tagSizeCm) || 3));
+    var params = new URLSearchParams();
+    params.set('family', state.family);
+    params.set('sizeCm', String(size));
+    params.set('entries', JSON.stringify(entries.map(function (item) {
+      return { id: item.tagId, use: item.label };
+    })));
+    var link = document.createElement('a');
+    link.href = '/api/marker-sheet.pdf?' + params.toString();
+    link.download = 'markers_' + state.family + '_' +
+      String(size).replace('.', '_') + 'cm.pdf';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setMarkerStatus('PDF download started', '');
+    window.setTimeout(function () { setMarkerStatus('', ''); }, 1800);
+  }
+
+  els.family.addEventListener('change', function () {
+    state.family = els.family.value || state.family;
+    var allowed = {};
+    familyIds().forEach(function (id) { allowed[String(id)] = true; });
+    state.slots.forEach(function (slot) {
+      TAG_PROPS.forEach(function (prop) {
+        if (slot[prop] != null && !allowed[String(slot[prop])]) slot[prop] = null;
+      });
+      if (slot.frameTagIds) {
+        slot.frameTagIds = slot.frameTagIds.map(function (id) {
+          return id != null && allowed[String(id)] ? id : null;
         });
-    })();
-  
+      }
+    });
+    renderMarkerEditor();
+    scheduleMarkerSave();
+  });
+  els.size.addEventListener('change', function () {
+    state.tagSizeCm = Math.max(1, Math.min(20, Number(els.size.value) || 3));
+    els.size.value = String(state.tagSizeCm);
+    scheduleMarkerSave();
+  });
+  els.download.addEventListener('click', downloadMarkerSheet);
+
+  fetch('/api/marker-settings', { cache: 'no-store' })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      applyMarkerData(data);
+      renderMarkerEditor();
+    })
+    .catch(function () {
+      applyMarkerData(window.CompactMapConfig.CONFIG.markerSettings || {});
+      renderMarkerEditor();
+      setMarkerStatus('Load failed', 'err');
+    });
+})();

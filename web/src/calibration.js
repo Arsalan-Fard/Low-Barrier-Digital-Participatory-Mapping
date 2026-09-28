@@ -11,14 +11,12 @@
 
     var active = false;
     var note = '';
-    var groupByKey = {};
     var groupByTagId = {};
     var controlsByKey = {};
     var offsets = {};
 
     for (var i = 0; i < CALIBRATION_GROUPS.length; i++) {
       var group = CALIBRATION_GROUPS[i];
-      groupByKey[group.key] = group;
       offsets[group.key] = defaultOffset(group);
       for (var j = 0; j < group.tagIds.length; j++) {
         groupByTagId[group.tagIds[j]] = group;
@@ -55,7 +53,7 @@
       return base;
     }
 
-    function makeSlider(label, min, max, value, step, onChange) {
+    function makeSlider(label, min, max, value, onChange) {
       var row = document.createElement('div');
       row.className = 'calib-row';
 
@@ -68,7 +66,7 @@
       slider.className = 'calib-slider';
       slider.min = min;
       slider.max = max;
-      slider.step = String(step);
+      slider.step = '1';
       slider.value = value;
 
       var val = document.createElement('span');
@@ -76,9 +74,8 @@
       val.textContent = String(value);
 
       slider.addEventListener('input', function () {
-        var next = Number(slider.value);
         val.textContent = slider.value;
-        onChange(next);
+        onChange(Number(slider.value));
       });
 
       row.appendChild(lbl);
@@ -98,15 +95,15 @@
 
       var state = offsets[group.key];
       var controls = {
-        x: makeSlider('X', -200, 200, state.ox, 1, function (v) { offsets[group.key].ox = v; }),
-        y: makeSlider('Y', -200, 200, state.oy, 1, function (v) { offsets[group.key].oy = v; })
+        x: makeSlider('X', -200, 200, state.ox, function (v) { offsets[group.key].ox = v; }),
+        y: makeSlider('Y', -200, 200, state.oy, function (v) { offsets[group.key].oy = v; })
       };
       section.appendChild(controls.x.row);
       section.appendChild(controls.y.row);
 
       if (group.allowComp) {
-        controls.cx = makeSlider('CX', -100, 100, state.compX, 1, function (v) { offsets[group.key].compX = v; });
-        controls.cy = makeSlider('CY', -100, 100, state.compY, 1, function (v) { offsets[group.key].compY = v; });
+        controls.cx = makeSlider('CX', -100, 100, state.compX, function (v) { offsets[group.key].compX = v; });
+        controls.cy = makeSlider('CY', -100, 100, state.compY, function (v) { offsets[group.key].compY = v; });
         section.appendChild(controls.cx.row);
         section.appendChild(controls.cy.row);
       }
@@ -124,28 +121,22 @@
     overlayEl.appendChild(crosshair);
     overlayEl.appendChild(panel);
 
-    function syncGroupSliders(groupKey) {
-      var group = groupByKey[groupKey];
-      var state = offsets[groupKey];
-      var controls = controlsByKey[groupKey];
-      if (!group || !state || !controls) return;
-
-      controls.x.slider.value = String(state.ox);
-      controls.x.val.textContent = String(state.ox);
-      controls.y.slider.value = String(state.oy);
-      controls.y.val.textContent = String(state.oy);
-
-      if (group.allowComp && controls.cx && controls.cy) {
-        controls.cx.slider.value = String(state.compX);
-        controls.cx.val.textContent = String(state.compX);
-        controls.cy.slider.value = String(state.compY);
-        controls.cy.val.textContent = String(state.compY);
-      }
+    function syncSlider(control, value) {
+      control.slider.value = String(value);
+      control.val.textContent = String(value);
     }
 
     function syncAllSliders() {
       for (var i = 0; i < CALIBRATION_GROUPS.length; i++) {
-        syncGroupSliders(CALIBRATION_GROUPS[i].key);
+        var group = CALIBRATION_GROUPS[i];
+        var state = offsets[group.key];
+        var controls = controlsByKey[group.key];
+        syncSlider(controls.x, state.ox);
+        syncSlider(controls.y, state.oy);
+        if (group.allowComp) {
+          syncSlider(controls.cx, state.compX);
+          syncSlider(controls.cy, state.compY);
+        }
       }
     }
 
@@ -170,16 +161,6 @@
       return { groups: groups };
     }
 
-    function applyLoadedGroups(rawGroups) {
-      if (!rawGroups || typeof rawGroups !== 'object') return false;
-      for (var i = 0; i < CALIBRATION_GROUPS.length; i++) {
-        var group = CALIBRATION_GROUPS[i];
-        offsets[group.key] = normalizeGroupOffset(group, rawGroups[group.key]);
-      }
-      syncAllSliders();
-      return true;
-    }
-
     async function saveSlot() {
       try {
         var res = await fetch('/api/calibration', {
@@ -188,15 +169,9 @@
           body: JSON.stringify(buildPayload())
         });
         var data = await res.json();
-        if (!res.ok || !data || data.ok !== true) {
-          note = 'Failed to save calibration';
-          return false;
-        }
-        note = 'Calibration saved (S)';
-        return true;
+        note = (res.ok && data && data.ok === true) ? 'Calibration saved (S)' : 'Failed to save calibration';
       } catch (_e) {
         note = 'Failed to save calibration';
-        return false;
       }
     }
 
@@ -204,28 +179,18 @@
       try {
         var res = await fetch('/api/calibration', { cache: 'no-store' });
         var data = await res.json();
-        if (!res.ok || !data || data.ok !== true) {
+        if (!res.ok || !data || data.ok !== true || !data.groups) {
           note = 'No saved calibration';
-          return false;
+          return;
         }
-
-        if (data.groups && applyLoadedGroups(data.groups)) {
-          note = 'Calibration loaded (L)';
-          return true;
+        for (var i = 0; i < CALIBRATION_GROUPS.length; i++) {
+          var group = CALIBRATION_GROUPS[i];
+          offsets[group.key] = normalizeGroupOffset(group, data.groups[group.key]);
         }
-
-        if (Number.isFinite(data.ox) && Number.isFinite(data.oy)) {
-          offsets.draw = normalizeGroupOffset(groupByKey.draw, data);
-          syncAllSliders();
-          note = 'Calibration loaded (L)';
-          return true;
-        }
-
-        note = 'No saved calibration';
-        return false;
+        syncAllSliders();
+        note = 'Calibration loaded (L)';
       } catch (_e) {
         note = 'Failed to load calibration';
-        return false;
       }
     }
 
@@ -281,11 +246,11 @@
       var group = groupByTagId[tagId];
       if (!group) return { x: x, y: y };
 
-      var state = offsets[group.key] || defaultOffset(group);
+      var state = offsets[group.key];
       var scaleX = 1;
       var scaleY = 1;
 
-      if (group.allowComp && tag && tag.uv) {
+      if (group.allowComp && tag.uv) {
         var dx = (tag.uv.u - 0.5) * 2;
         var dy = (tag.uv.v - 0.5) * 2;
         scaleX = 1 + (state.compX / 100) * dx;
@@ -303,13 +268,13 @@
       };
     }
 
-    async function handleKeyDown(e, tags, uvToPx) {
+    async function handleKeyDown(e) {
       if (e.repeat) return false;
       var t = e.target;
-      var name = String((t && t.tagName) || '').toUpperCase();
-      if (name === 'TEXTAREA' || name === 'SELECT' || (t && t.isContentEditable)) return false;
+      var name = String(t.tagName || '').toUpperCase();
+      if (name === 'TEXTAREA' || name === 'SELECT' || t.isContentEditable) return false;
       if (name === 'INPUT') {
-        var type = String((t && t.type) || '').toLowerCase();
+        var type = String(t.type || '').toLowerCase();
         if (type !== 'range' && type !== 'button' && type !== 'checkbox' && type !== 'radio') return false;
       }
       var key = String(e.key || '').toLowerCase();

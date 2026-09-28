@@ -1,7 +1,7 @@
 {
   "type": "FeatureCollection",
   "name": "workshop-schools",
-  "note": "The colleges this programme runs in, each marked with the red school POI. Drawn on the digitize map (web/imobyl.html, layer 'school-label') and in the map generation page's style (Maputnik liberty.json, source 'workshop-schools'), on every basemap, whatever the POI and label switches say. One feature per school; 'name' is what is printed. Coordinates are the OSM object's centroid; 'uai' is the Education nationale identifier.",
+  "note": "The colleges this programme runs in, each marked with the red school POI. Drawn by the map generation page's style (Maputnik liberty.json, source 'workshop-schools'), so they are printed on the paper sheets. The workshop map page takes them off its Paper map layer (web/src/paperMap.js, removeWorkshopSchools). One feature per school; 'name' is what is printed. Coordinates are the OSM object's centroid; 'uai' is the Education nationale identifier.",
   "features": [
     {
       "type": "Feature",

@@ -1,5 +1,0 @@
-.venv/
-.uv-cache/
-.runtime/
-__pycache__/
-weights/*.pt
