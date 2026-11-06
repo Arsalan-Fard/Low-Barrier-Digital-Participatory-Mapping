@@ -2,10 +2,8 @@
 
 The tags are printed at known page positions (``print.fiducials`` in the sheet
 record), so one homography maps the whole A3 page -- not only the map square --
-into the photo. From it we cut:
-
-* the map square, upright and at a known millimetre scale, for stickers and ink;
-* the side panel (the questionnaire), upright, for the VLM to read.
+into the photo. From it we cut the map square, upright and at a known
+millimetre scale, for stickers and ink.
 
 After the tag fit, the map square is nudged onto the clean render with ECC and
 then a smooth tile-based displacement field. Paper that curls between the tags
@@ -20,7 +18,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from .sheet import MapSheet, POINTS_PER_MM
+from .sheet import MapSheet
 
 TAG_DICTIONARY = cv2.aruco.DICT_APRILTAG_16h5
 
@@ -162,72 +160,6 @@ def rectify_map(photo_bgr: np.ndarray, sheet: MapSheet, registration: Registrati
                                    flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
                                    borderMode=cv2.BORDER_CONSTANT, borderValue=0)
     return image, coverage
-
-
-def rectify_panel(photo_bgr: np.ndarray, sheet: MapSheet, registration: Registration,
-                  side: str = "left", px_per_mm: float = 6.0, outer_margin_mm: float = 75.0,
-                  edge_margin_mm: float = 25.0, inner_margin_mm: float = 3.0) -> np.ndarray | None:
-    """The questionnaire panel beside the map, upright, for the VLM.
-
-    The panel's content is laid out in Word by the workshop team, not by this
-    app, and it sits far from the tags, so its real outer edge lands well past
-    where the sheet record puts it: the page pose extrapolated that far across
-    curled paper was measured 10-15 mm off, and on map 1 the paper itself ended
-    50-57 mm beyond the record's page edge (the print is laid out wider than
-    the record) -- a 25 mm margin cut the first checkbox column in half. So the
-    crop reaches ``outer_margin_mm`` past the panel on the outer side and is
-    then trimmed back to where the paper ends; top and bottom keep
-    ``edge_margin_mm``. The model does not mind margin, but a cut-off checkbox
-    column is unreadable.
-    """
-    rect = sheet.panels_pt.get(side)
-    if not rect:
-        return None
-    x, y, w, h = rect
-    outer, edge, inner = (m * POINTS_PER_MM for m in (outer_margin_mm, edge_margin_mm, inner_margin_mm))
-    left = x - (outer if side == "left" else inner)
-    right = x + w + (inner if side == "left" else outer)
-    top, bottom = y - edge, y + h + edge
-    corners = np.asarray([[left, top], [right, top], [right, bottom], [left, bottom]])
-    width_mm = (right - left) / POINTS_PER_MM
-    height_mm = (bottom - top) / POINTS_PER_MM
-    panel = rectify_quad(photo_bgr, registration, corners,
-                         int(round(width_mm * px_per_mm)), int(round(height_mm * px_per_mm)))
-    return _trim_to_paper(panel, px_per_mm, side)
-
-
-def _trim_to_paper(panel: np.ndarray, px_per_mm: float, side: str, keep_mm: float = 4.0) -> np.ndarray:
-    """Cut the table off the outer side of a panel crop.
-
-    Walking outwards from the map, the paper ends at the first 5 mm band of
-    columns that is mostly not paper-white (printed text and boxes never cover
-    most of a column). A few millimetres beyond it are kept; with no such band
-    (a white table, a photo cut at the page) nothing is cut. The walk only
-    starts counting once it has seen paper: the inner margin can reach onto
-    the map's grey print, which is not the table.
-    """
-    lab = cv2.cvtColor(panel, cv2.COLOR_BGR2LAB).astype(np.float32)
-    lightness = lab[..., 0]
-    chroma = np.hypot(lab[..., 1] - 128.0, lab[..., 2] - 128.0)
-    reference = float(np.median(lightness[:, lightness.shape[1] // 3: 2 * lightness.shape[1] // 3]))
-    paper = (lightness > min(165.0, 0.8 * reference)) & (chroma < 22.0)
-    band = max(3, int(round(5.0 * px_per_mm)))
-    window = np.ones(band) / band
-    # a true mean at the ends too ("same" alone pads with zeros: half the value at the edge)
-    profile = (np.convolve(paper.mean(axis=0), window, mode="same")
-               / np.convolve(np.ones(paper.shape[1]), window, mode="same"))
-    width = panel.shape[1]
-    keep = int(round(keep_mm * px_per_mm))
-    columns = range(width - 1, -1, -1) if side == "left" else range(width)
-    seen_paper = False
-    for column in columns:
-        if profile[column] >= 0.35:
-            seen_paper = True
-        elif seen_paper:
-            if side == "left":
-                return panel[:, max(0, column - band // 2 - keep):]
-            return panel[:, :min(width, column + band // 2 + keep)]
-    return panel
 
 
 # --------------------------------------------------------------------------

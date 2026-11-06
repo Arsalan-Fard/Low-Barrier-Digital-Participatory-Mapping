@@ -1,5 +1,5 @@
 // Map page startup, loaded last: creates the map and the modules drawn on it,
-// publishes window.CompactMapApp, wires the page flow, mouse and keyboard, and
+// publishes window.CompactMapApp, wires the page flow, and
 // starts polling /api/tags once the map has loaded. Creating the map here, in one
 // run with its 'load' handler, means no map event can fire before a handler exists.
 const mapRuntime = window.CompactMapSetup.initMap({
@@ -19,15 +19,6 @@ const mapWarpController = window.CompactMapWarp.createMapWarp({ mapViewEl: mapVi
 map.on('moveend', rebuildFloorplanWallSegments);
 map.on('zoomend', rebuildFloorplanWallSegments);
 map.on('resize', rebuildFloorplanWallSegments);
-const calibration = window.CompactCalibration.createCalibration({
-  overlayEl: document.getElementById('calibOverlay')
-});
-const overlays = window.CompactOverlays.createOverlays({
-  map,
-  maskSourceId: 'tag-mask-source',
-  maskLayerId: 'tag-mask-layer',
-  maskHoldMs: 500
-});
 const drawing = window.CompactDrawing.createDrawing({
   map,
   sourceId: 'draw-source',
@@ -44,13 +35,7 @@ const annotationPlacement = window.CompactAnnotationPlacement.createAnnotationPl
   lostHoldMs: 500,
   projectLngLatToPx: lngLatToPx
 });
-const customMapObjects = window.CompactCustomMapObjects.createCustomMapObjects({
-  map,
-  onStatusChange: function (note) {
-    setUiNote(note);
-    refreshHud();
-  }
-});
+const customMapObjects = window.CompactCustomMapObjects.createCustomMapObjects({ map });
 const stickerPlacement = window.CompactStickerPlacement.createStickerPlacement({
   map,
   holdMs: 2000,
@@ -77,207 +62,48 @@ const customGeoLayers = window.CompactCustomGeojsonLayers.createCustomGeojsonLay
 window.CompactCustomGeoLayers = customGeoLayers;
 window.CompactMapApp = mapAppApi;
 
-setHudVisible(false);
-window.addEventListener('pageshow', function () {
-  setHudVisible(false);
+// The tag tools for the mouse; the Project panel and the running workshop's bar show their buttons,
+// so they must exist before createPageFlow mounts the panel.
+window.CompactMouseTools = window.CompactMouseToolsModule.createMouseTools({
+  map,
+  mapView,
+  drawing,
+  stickerPlacement,
+  annotationPlacement,
+  isochrone,
+  routing,
+  eraserRadiusPx: ERASER_RADIUS_PX,
+  clientToMapPx: function (x, y) { return mapWarpController.screenToMap(x, y); },
+  mapPxToLngLat: pxToLngLat,
+  colors: tagAssignments.getMarkerSettings().slots
+    .filter(function (slot) { return slot.tool === 'draw'; })
+    .map(function (slot) { return { key: slot.key, label: slot.label, color: slot.color }; })
 });
-const streetViewScreen = window.CompactStreetViewScreen.createStreetViewScreen({
+
+const streetViewScreen = window.CompactPrintedScreen.createPrintedScreen({
+  frameUrl: '/api/street-screen/frame',
+  noteText: 'Place the street view pointer on the map',
   insetEl: streetViewInset,
   containerEl: mapView,
   onModeChange: handleStreetScreenModeChange
 });
+// One printed screen and inset per map view sheet (mapViewInset.js).
+createMapViewSheets();
 
 stickerPlacement.setEnabled(true);
 annotationPlacement.setEnabled(true);
 mapWarpController.initIfNeeded();
-refreshHud();
-window.CompactPageFlow.createPageFlow({
-  onBackToCamera: function () {
-    setUiNote('');
-    refreshHud();
-  }
-});
-
-mapView.addEventListener('mousedown', beginCursorTagGesture, true);
-mapView.addEventListener('mousemove', function (e) {
-  updateCursorTagFromEvent(e);
-  if (floorplanIsovistKeyboardMode) {
-    setFloorplanIsovistPointerFromClient(e.clientX, e.clientY);
-    updateFloorplanKeyboardIsovist();
-  }
-}, true);
-// Leaving the map ends a stroke, like a tag leaving the table.
-mapView.addEventListener('mouseleave', endCursorTagGesture);
-window.addEventListener('mouseup', endCursorTagGesture, true);
-window.addEventListener('resize', updateFloorplanKeyboardIsovist);
-
-watchViewFilterSlider(viewBrightness, 'View brightness', formatFilterValue);
-watchViewFilterSlider(viewSaturation, 'View saturation', formatFilterValue);
-watchViewFilterSlider(viewContrast, 'View contrast', formatFilterValue);
-watchViewFilterSlider(viewInvert, 'View invert', formatPercentValue);
-watchViewFilterSlider(viewSepia, 'View sepia', formatPercentValue);
-viewFilterReset.addEventListener('click', function () {
-  resetViewFilters();
-  setUiNote('View filters reset');
-  refreshHud();
-});
-viewFilterClose.addEventListener('click', function () {
-  setViewFilterPanelVisible(false);
-  setUiNote('View filters OFF');
-  refreshHud();
-});
-
-function shortcutInputBlocked(target) {
-  if (!target) return false;
-  const name = String(target.tagName || '').toUpperCase();
-  if (name === 'TEXTAREA' || name === 'SELECT' || !!target.isContentEditable) return true;
-  if (name !== 'INPUT') return false;
-  const type = String(target.type || '').toLowerCase();
-  return type !== 'range' && type !== 'button' && type !== 'checkbox' && type !== 'radio';
-}
-
-function clearAllInputs() {
-  drawing.clearAll();
-  stickerPlacement.clearAll();
-  annotationPlacement.clearAll();
-  floorplanIsovistKeyboardMode = false;
-  floorplanIsovist.clear();
-}
-
-function fetchOsmnxForView() {
-  if (osmnxNetwork.isFetching()) {
-    setUiNote('OSMnx fetch already in progress...');
-    refreshHud();
-    return;
-  }
-  setUiNote('Fetching OSMnx road network for current view...');
-  refreshHud();
-  osmnxNetwork.fetchForCurrentView(function (err, result) {
-    if (err) {
-      setUiNote('OSMnx fetch failed: ' + (err.message || err));
-    } else {
-      setUiNote('OSMnx network loaded (' + result.nodes + ' nodes, ' + result.edges + ' edges)');
-    }
-    refreshHud();
-  });
-}
-
-function saveSessionFromKey() {
-  dataExport.saveToBackend(function (err, result) {
-    setUiNote(err ? 'Failed to save session' : 'Session saved: ' + (result && result.filename));
-    refreshHud();
-  });
-  setUiNote('Saving session...');
-  refreshHud();
-}
-
-// Keys whose only work is a toggle and a note. B and W live in pageFlow.js.
-const SHORTCUT_TOGGLES = {
-  v: function () {
-    return toggleViewFilterPanelVisible() ? 'Light settings ON' : 'Light settings OFF';
-  },
-  t: function () {
-    return overlays.toggleMaskEnabled() ? 'Tag mask ON' : 'Tag mask OFF';
-  },
-  q: function () {
-    const labels = { draw: 'Draw', comment: 'Comment', erase: 'Erase', select: 'Select' };
-    return 'Cursor tool: ' + labels[cycleCursorToolMode()];
-  },
-  d: function () {
-    return toggleDebugMarkersVisible() ? 'Tag debug markers ON' : 'Tag debug markers OFF';
-  },
-  o: function () {
-    roadSnapping.toggleRoads();
-    return roadSnapping.isRoadsVisible() ? 'Roads layer ON' : 'Roads layer OFF';
-  },
-  n: function () {
-    const visible = customMapObjects.getPresentationMode() !== 'hidden';
-    customMapObjects.setPresentationMode(visible ? 'hidden' : 'expanded');
-    isochrone.setVisible(!visible);
-    routing.setVisible(!visible);
-    return visible ? 'Custom objects hidden' : 'Custom objects visible';
-  },
-  l: function () {
-    if (!mapConfig.useMapboxServices) return 'Mapbox views unavailable: add a token to token.txt';
-    const themeLabels = { streets: 'Streets view', satellite: 'Satellite view', topo: 'Topographic view' };
-    const nextTheme = toggleMapTheme();
-    return (themeLabels[nextTheme] || nextTheme) + ' ON';
-  },
-  x: function () {
-    clearAllInputs();
-    return 'All inputs cleared';
-  }
-};
-const CUSTOM_OBJECT_MODES = ['transportation', 'landmark', 'amenities'];
-const CUSTOM_OBJECT_MODE_LABELS = ['Transportation', 'Landmark', 'Amenities'];
-
-async function handleMapShortcut(e) {
-  if (e.repeat) return;
-  if (shortcutInputBlocked(e.target)) return;
-  if (await calibration.handleKeyDown(e)) {
-    refreshHud();
-    return;
-  }
-  const key = String(e.key || '').toLowerCase();
-  if (SHORTCUT_TOGGLES[key]) {
-    e.preventDefault();
-    setUiNote(SHORTCUT_TOGGLES[key]());
-    refreshHud();
-    return;
-  }
-  if (key === 'h') {
-    e.preventDefault();
-    if (toggleHudVisible()) {
-      setUiNote('HUD ON');
-      refreshHud();
-    }
-    return;
-  }
-  if (key === 'g') {
-    e.preventDefault();
-    fetchOsmnxForView();
-    return;
-  }
-  if (key === 'i' && isFloorplanMode) {
-    e.preventDefault();
-    setUiNote(toggleFloorplanKeyboardIsovistMode() ? 'Isovist ON' : 'Isovist OFF');
-    refreshHud();
-    return;
-  }
-  if (key === 'y') {
-    e.preventDefault();
-    toggleTimelineRecording();
-    return;
-  }
-  if (key === 's') {
-    e.preventDefault();
-    saveSessionFromKey();
-    return;
-  }
-  if (key >= '1' && key <= '3') {
-    e.preventDefault();
-    const idx = parseInt(key, 10) - 1;
-    const visible = customMapObjects.toggleMode(CUSTOM_OBJECT_MODES[idx]);
-    setUiNote(CUSTOM_OBJECT_MODE_LABELS[idx] + ' ' + (visible ? 'ON' : 'OFF'));
-    refreshHud();
-  }
-}
-window.addEventListener('keydown', handleMapShortcut);
+window.CompactPageFlow.createPageFlow();
 
 map.on('load', function () {
   defaultZoom = map.getZoom();
   activeMapTheme = mapRuntime.getCurrentTheme();
-  resetViewFilters();
-  setViewFilterPanelVisible(false);
-  overlays.ensureTagMaskLayer();
   drawing.ensureLayer();
   roadSnapping.ensureRoadsLayer();
   stickerPlacement.setEnabled(false);
   annotationPlacement.setEnabled(false);
-  customMapObjects.loadFromBackend().catch(function () {});
+  customMapObjects.loadFromBackend();
   customGeoLayers.refresh();
-  calibration.renderOverlay();
-  refreshHud();
   poll();
   setInterval(poll, 35);
 });

@@ -723,6 +723,11 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
   });
   const [maxTexture, setMaxTexture] = useState<number>(0);
   const [usedSheetIds, setUsedSheetIds] = useState<Set<string>>(new Set());
+  // The project the map is for (a school, a neighbourhood): a project of the workshop app's Project
+  // panel, picked from the list or typed to make a new one. Empty keeps a stored map's project.
+  const [projectName, setProjectName] = useState("");
+  const [usedSheetProjects, setUsedSheetProjects] = useState<Record<string, string>>({});
+  const [projectNames, setProjectNames] = useState<string[]>([]);
   const [exporting, setExporting] = useState<"" | "pdf" | "docx">("");
   const [panels, setPanels] = useState<SidePanels>({left: null, right: null});
   const [exportStatus, setExportStatus] = useState("");
@@ -1022,16 +1027,36 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
     }
   }, [plannedMapId, usedSheetIds]);
 
-  const refreshUsedSheetIds = useCallback(async () => {
+  const refreshStoredMaps = useCallback(async () => {
     try {
       const response = await fetch("/api/map-sheets", {cache: "no-store"});
       const data = await response.json();
       const items = data?.items || data?.sheets || data?.records || [];
       setUsedSheetIds(new Set(items.map((item: {id: unknown}) => String(item.id))));
+      setUsedSheetProjects(Object.fromEntries(items.map((item: {id: unknown, project?: unknown, title?: unknown}) =>
+        [String(item.id), String(item.project || item.title || "")])));
     } catch (_error) {
       setUsedSheetIds(new Set());
+      setUsedSheetProjects({});
+    }
+    try {
+      const response = await fetch("/api/workshops", {cache: "no-store"});
+      const data = await response.json();
+      const projects = Array.isArray(data?.workshops) ? data.workshops : [];
+      setProjectNames(projects.map((project: {name?: unknown}) => String(project?.name || "")).filter(Boolean));
+    } catch (_error) {
+      setProjectNames([]);
     }
   }, []);
+
+  // The stored map's project when the ID is taken: shown as the field's hint and kept if left empty.
+  const storedProject = useMemo(() => {
+    try {
+      return usedSheetProjects[plannedMapId()] || "";
+    } catch (_error) {
+      return "";
+    }
+  }, [plannedMapId, usedSheetProjects]);
 
   useEffect(() => {
     let active = true;
@@ -1046,11 +1071,11 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
           setExportStatus("Page layout unavailable");
         }
       });
-    refreshUsedSheetIds();
+    refreshStoredMaps();
     return () => {
       active = false;
     };
-  }, [refreshUsedSheetIds]);
+  }, [refreshStoredMaps]);
 
   useEffect(() => {
     try {
@@ -1396,7 +1421,7 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
           id,
-          title: `Map ${id}`,
+          project: projectName.trim(),
           image: printable.image,
           corners: printable.corners,
           camera: printable.camera,
@@ -1425,7 +1450,7 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
       document.body.appendChild(link);
       link.click();
       link.remove();
-      await refreshUsedSheetIds();
+      await refreshStoredMaps();
       setExportKind("ok");
       setExportStatus(`Downloaded map ${id}`);
     } catch (error) {
@@ -1443,7 +1468,8 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
     pageSize,
     panels,
     plannedMapId,
-    refreshUsedSheetIds,
+    projectName,
+    refreshStoredMaps,
     showBadge,
   ]);
 
@@ -1585,6 +1611,20 @@ export default function PaperMapTools(props: PaperMapToolsProps) {
             }
           }}
         />
+        <input
+          className="maputnik-paper-tools__project"
+          type="text"
+          maxLength={80}
+          list="maputnik-paper-tools-projects"
+          placeholder={storedProject || "Project"}
+          aria-label="Project"
+          title="The project this map is for (a school, a neighbourhood): its digitised sheets belong to that project in the workshop app's Project panel. Pick one, or type a new name to create it."
+          value={projectName}
+          onChange={event => setProjectName(event.target.value)}
+        />
+        <datalist id="maputnik-paper-tools-projects">
+          {projectNames.map(name => <option key={name} value={name} />)}
+        </datalist>
         <label
           className="maputnik-paper-tools__check"
           title="Print the MAP ID plate in the sheet's top-left corner, or at the foot of a side margin when one is open. Off leaves that spot blank -- the ID still names the stored map and still has to be typed in to digitize the scan."

@@ -15,18 +15,27 @@ APRILTAG_DICTS = {
 }
 DEFAULT_FAMILY = "tag36h11"
 DEFAULT_DRAW_OFFSET_CM = 3.0
-# The street view screen's border tags in this order everywhere (here, tagAssignments.js, the
-# marker page): corners clockwise from top-left, then the middles of the right, bottom and left edges.
-STREET_SCREEN_SLOTS = ("tl", "tr", "br", "bl", "rm", "bm", "lm")
+# The printed screens' border tags in this order everywhere (here, tagAssignments.js, the marker
+# page): corners clockwise from top-left, then the middles of the right, bottom and left edges.
+SCREEN_SLOTS = ("tl", "tr", "br", "bl", "rm", "bm", "lm")
+# The printed screens, one A3 sheet each: the street view and a close-up map round the same pointer.
+SCREEN_TOOLS = ("street-screen", "map-screen")
+# There can be several map view sheets: the first is "map-screen", the others are added on the
+# Marker Setting page as "map-screen-<n>". The number is printed on the sheet, so it stays with it.
+MAP_SHEET_KEY = "map-screen"
+MAX_MAP_SHEETS = 20
+_EXTRA_MAP_SHEET = re.compile(r"^map-screen-(\d{1,2})$")
 # Keep in step with DEFAULT_SLOTS in web/src/tagAssignments.js. Only "draw" slots (multi-state
-# pointers: closed they point, pinched open they act) can be added, removed or recoloured.
+# pointers: closed they point, pinched open they act) and extra map view sheets can be added or
+# removed, and only "draw" slots recoloured.
 MARKER_SLOT_DEFAULTS = [
-    {"key": "draw-1", "group": "Multi-state pointer", "tool": "draw", "label": "Pointer 1", "tagId": 11, "tagId2": None, "selectorTagId": 20, "selectorTagId2": 19, "color": "#ff5b5b", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
-    {"key": "draw-2", "group": "Multi-state pointer", "tool": "draw", "label": "Pointer 2", "tagId": 12, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#3b82f6", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
-    {"key": "draw-3", "group": "Multi-state pointer", "tool": "draw", "label": "Pointer 3", "tagId": 13, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#22cc66", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
-    {"key": "draw-4", "group": "Multi-state pointer", "tool": "draw", "label": "Pointer 4", "tagId": 14, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#111111", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
+    {"key": "draw-1", "group": "Pointer", "tool": "draw", "label": "Pointer 1", "tagId": 11, "tagId2": None, "selectorTagId": 20, "selectorTagId2": 19, "color": "#ff5b5b", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
+    {"key": "draw-2", "group": "Pointer", "tool": "draw", "label": "Pointer 2", "tagId": 12, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#3b82f6", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
+    {"key": "draw-3", "group": "Pointer", "tool": "draw", "label": "Pointer 3", "tagId": 13, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#22cc66", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
+    {"key": "draw-4", "group": "Pointer", "tool": "draw", "label": "Pointer 4", "tagId": 14, "tagId2": None, "selectorTagId": None, "selectorTagId2": None, "color": "#111111", "offsetCm": DEFAULT_DRAW_OFFSET_CM},
     {"key": "pointer-single-1", "group": "Single-state pointer", "tool": "street-view", "label": "Street view", "tagId": 23, "color": ""},
-    {"key": "street-screen", "group": "Street view screen", "tool": "street-screen", "label": "Screen", "tagId": None, "frameTagIds": [2, 3, 4, 5, 6, 7, 8], "color": ""},
+    {"key": "street-screen", "group": "Screens", "tool": "street-screen", "label": "Street view", "tagId": None, "frameTagIds": [2, 3, 4, 5, 6, 7, 8], "color": ""},
+    {"key": "map-screen", "group": "Screens", "tool": "map-screen", "label": "Map view", "tagId": None, "frameTagIds": [15, 16, 17, 18, 24, 25, 26], "color": ""},
     {"key": "route-origin", "group": "Shortest-path", "tool": "route-origin", "label": "Route start", "tagId": 9, "color": ""},
     {"key": "route-dest", "group": "Shortest-path", "tool": "route-dest", "label": "Route end", "tagId": 10, "color": ""},
     {"key": "isochrone-5", "group": "Analysis", "tool": "isochrone", "label": "Isochrone 5 min", "tagId": 38, "color": "", "minutes": 5},
@@ -34,6 +43,22 @@ MARKER_SLOT_DEFAULTS = [
     {"key": "isovist-1", "group": "Analysis", "tool": "isovist", "label": "Isovist", "tagId": 39, "color": ""},
 ]
 TAG_ID_PROPS = ("tagId", "tagId2", "selectorTagId", "selectorTagId2")
+
+
+def map_sheet_number(key):
+    """1 for the first map view sheet, n for "map-screen-<n>", None for anything else."""
+    key = str(key or "")
+    if key == MAP_SHEET_KEY:
+        return 1
+    match = _EXTRA_MAP_SHEET.match(key)
+    if match and 2 <= int(match.group(1)) <= MAX_MAP_SHEETS:
+        return int(match.group(1))
+    return None
+
+
+def map_sheet_label(number, sheet_count):
+    """"Map view" while it is the only map view sheet, else "Map view <n>"."""
+    return "Map view" if sheet_count <= 1 else f"Map view {number}"
 
 
 def _tag_count(family):
@@ -115,7 +140,7 @@ def _clean_frame_tag_ids(raw, fallback, allowed_ids):
     could not tell the two apart)."""
     source = raw if isinstance(raw, list) else fallback
     ids = []
-    for index in range(len(STREET_SCREEN_SLOTS)):
+    for index in range(len(SCREEN_SLOTS)):
         tag_id = _clean_tag_id(source[index] if index < len(source) else None, allowed_ids)
         if tag_id in ids:
             tag_id = None
@@ -174,7 +199,7 @@ def sanitize_marker_settings(payload):
         if tool == "draw":
             slot["color"] = _clean_color(src.get("color"), default["color"])
             _clean_pointer(slot, src, default, allowed)
-        if tool == "street-screen":
+        if tool in SCREEN_TOOLS:
             slot["tagId"] = None
             slot["frameTagIds"] = _clean_frame_tag_ids(src.get("frameTagIds"), default["frameTagIds"], allowed)
         if "minutes" in default:
@@ -192,22 +217,43 @@ def sanitize_marker_settings(payload):
             continue
         if any(slot["key"] == key for slot in slots):
             continue
-        extra = {"key": key, "group": "Multi-state pointer", "tool": "draw", "label": "",
+        extra = {"key": key, "group": "Pointer", "tool": "draw", "label": "",
                  "tagId": _clean_tag_id(src.get("tagId"), allowed),
                  "color": _clean_color(src.get("color"), "#ff5b5b")}
         _clean_pointer(extra, src, {}, allowed)
         slots.append(extra)
 
-    # Where the screen shares an id with another tool, the screen gives way: its ids are easy
-    # to hand out again, while a pointer's id is printed on a tool somebody is holding.
+    # Extra map view sheets go right after the first one, in number order.
+    extra_sheets = {}
+    for src in incoming:
+        if not isinstance(src, dict) or str(src.get("tool") or "").strip() != "map-screen":
+            continue
+        number = map_sheet_number(src.get("key"))
+        if number is None or number == 1 or number in extra_sheets:
+            continue
+        extra_sheets[number] = {"key": f"map-screen-{number}", "group": "Screens", "tool": "map-screen",
+                                "label": "", "tagId": None, "color": "",
+                                "frameTagIds": _clean_frame_tag_ids(src.get("frameTagIds"), [], allowed)}
+    if extra_sheets:
+        at = next((i + 1 for i, slot in enumerate(slots) if slot["key"] == MAP_SHEET_KEY), len(slots))
+        slots[at:at] = [extra_sheets[number] for number in sorted(extra_sheets)]
+    sheet_count = sum(1 for slot in slots if slot["tool"] == "map-screen")
+    for slot in slots:
+        if slot["tool"] == "map-screen":
+            slot["label"] = map_sheet_label(map_sheet_number(slot["key"]), sheet_count)
+
+    # Where a screen shares an id with another tool, the screen gives way: its ids are easy
+    # to hand out again, while a pointer's id is printed on a tool somebody is holding. Of two
+    # screens sharing an id the later one gives way, or the camera could not tell them apart.
     claimed = set()
     for slot in slots:
-        if slot["tool"] != "street-screen":
+        if slot["tool"] not in SCREEN_TOOLS:
             claimed.update(slot[prop] for prop in TAG_ID_PROPS if slot.get(prop) is not None)
     pointer_number = 0
     for slot in slots:
-        if slot["tool"] == "street-screen":
+        if slot["tool"] in SCREEN_TOOLS:
             slot["frameTagIds"] = [None if tag_id in claimed else tag_id for tag_id in slot["frameTagIds"]]
+            claimed.update(tag_id for tag_id in slot["frameTagIds"] if tag_id is not None)
         elif slot["tool"] == "draw":
             pointer_number += 1
             slot["label"] = f"Pointer {pointer_number}"

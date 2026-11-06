@@ -4,27 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Digitizer</title>
-  <!-- Relative URLs only: the page is served at /digitizer/ by the workshop app
-       and at / by `python -m digitizer serve`. -->
-  <link rel="stylesheet" href="static/review.css">
+  <!-- Served at /digitizer/; its own files and API are relative to that. -->
+  <link rel="stylesheet" href="static/review.css?v=2">
 </head>
-<body data-home="">
+<body>
   <header class="bar">
-    <a id="homeLink" class="home" href="/home" hidden title="Back to the main menu">&lsaquo; Menu</a>
+    <a id="homeLink" class="home" href="/home" title="Back to the main menu">&lsaquo; Menu</a>
     <h1>Digitizer</h1>
     <label class="run-picker">Sheet
       <select id="runSelect" aria-label="Digitised sheet"></select>
     </label>
-    <button id="newRunButton" class="primary" type="button">New sheet</button>
+    <button id="newRunButton" class="primary" type="button">Upload</button>
+    <label class="run-picker" title="Read the handwriting on the maps with a vision-language model, or not">Handwriting
+      <select id="vlmSelect" aria-label="Handwriting model"></select>
+    </label>
+    <button id="vlmServerButton" type="button" hidden title="Where the server model runs">Server…</button>
     <span class="sep"></span>
-    <div class="tools" role="toolbar" aria-label="Map tools">
-      <button type="button" data-mode="select" class="mode active" title="Select and inspect (S)">Select</button>
-      <button type="button" data-mode="sticker" class="mode" title="Click the map where a sticker was missed (A)">Add sticker</button>
-      <button type="button" data-mode="route" class="mode" title="Click points along a missed route, double-click to finish (R)">Draw route</button>
-      <span class="sep"></span>
+    <div class="tools" role="toolbar" aria-label="View">
       <button type="button" id="fitButton" title="Show the whole map or page (F)">Fit</button>
-      <label class="inline">Overlay <input id="overlayOpacity" type="range" min="0" max="100" value="80"></label>
-      <label class="inline" title="Also show pen lines too short to be a route (under 25 mm on paper): ticks, crosses, arrows, underlines. Hidden by default; a short stroke that really is part of a route can be turned into one.">
+      <label class="inline" title="How strongly the marks and routes are drawn">Overlay <input id="overlayOpacity" type="range" min="0" max="100" value="80"></label>
+      <label class="inline" title="How much of the map photo shows under the marks and routes">Map <input id="mapOpacity" type="range" min="0" max="100" value="100"></label>
+      <label class="inline" title="Also show pen lines too short to be a route (under 25 mm on paper): ticks, crosses, arrows, underlines. Hidden by default.">
         <input id="showMarks" type="checkbox"> Short strokes</label>
     </div>
     <span id="runStatus" class="status" role="status"></span>
@@ -34,52 +34,92 @@
     <section class="viewer-wrap" aria-label="Map">
       <div id="viewer" class="viewer">
         <svg id="map" xmlns="http://www.w3.org/2000/svg">
+          <rect id="mapPaper" x="0" y="0" fill="#fff"></rect>
           <image id="mapImage" x="0" y="0"></image>
           <g id="routesLayer"></g>
           <g id="stickersLayer"></g>
+          <g id="textsLayer"></g>
           <g id="draftLayer"></g>
+          <g id="ghostLayer"></g>
         </svg>
-        <div id="empty" class="empty">No sheet yet. Use <b>New sheet</b> to digitise a photo.</div>
+        <div id="empty" class="empty"><span>No sheet yet. Use <b>Upload</b> to digitise map photos.</span></div>
+        <!-- Move, eraser, undo/redo, then the photo's list -- its pens and, per colour name, its
+             sticker shapes -- with the pencil to edit the list and Digitize: filled in by review.js. -->
+        <div id="toolbox" class="toolbox" role="toolbar" aria-label="Edit tools"></div>
       </div>
-      <!-- The Answers tab shows the photographed checkbox side here instead of the map. -->
-      <div id="docs" class="docs" hidden></div>
     </section>
 
     <aside class="side">
       <nav class="tabs" role="tablist">
-        <button role="tab" data-tab="check" class="tab active">To check <span id="checkCount" class="count"></span></button>
-        <button role="tab" data-tab="stickers" class="tab">Stickers</button>
+        <button role="tab" data-tab="stickers" class="tab active">Marks</button>
         <button role="tab" data-tab="routes" class="tab">Routes</button>
-        <button role="tab" data-tab="answers" class="tab">Answers</button>
+        <button role="tab" data-tab="texts" class="tab">Texts</button>
         <button role="tab" data-tab="export" class="tab">Export</button>
       </nav>
       <div class="tab-body">
-        <div data-panel="check" class="panel active"><ul id="checkList" class="items"></ul></div>
-        <div data-panel="stickers" class="panel"><ul id="stickerList" class="items"></ul></div>
+        <div data-panel="stickers" class="panel active"><ul id="stickerList" class="items"></ul></div>
         <div data-panel="routes" class="panel"><ul id="routeList" class="items"></ul></div>
-        <div data-panel="answers" class="panel" id="answersPanel"></div>
+        <div data-panel="texts" class="panel"><div id="textTools" class="actions"></div><ul id="textList" class="items"></ul></div>
         <div data-panel="export" class="panel" id="exportPanel"></div>
       </div>
       <section id="inspector" class="inspector" aria-live="polite"></section>
     </aside>
   </main>
 
-  <dialog id="newRunDialog">
-    <form id="newRunForm" method="dialog">
-      <h2>Digitise a sheet</h2>
-      <label>Map ID <input name="mapId" required placeholder="e.g. 2"></label>
-      <label>Sheet number <small>(optional — next free number if empty)</small> <input name="sheetNumber" inputmode="numeric" placeholder="e.g. 5"></label>
-      <label>Map photo <input name="mapPhoto" type="file" accept="image/*" required></label>
-      <label>Session <input name="session" value="default"></label>
-      <label class="check"><input name="vlm" type="checkbox" checked> Read the questionnaire checkboxes with the VLM</label>
-      <p class="hint" id="vlmHint">Takes about a minute on the laptop GPU with the VLM, about 20 s without.</p>
+  <dialog id="newRunDialog" class="upload-dialog" aria-labelledby="newRunTitle">
+    <form id="newRunForm" method="dialog" novalidate>
+      <header class="dialog-head">
+        <div>
+          <h2 id="newRunTitle">Upload map photos</h2>
+          <p class="dialog-sub">Photos of one printed map, one photo per sheet.</p>
+        </div>
+        <button type="button" class="icon-button" id="closeNewRun" aria-label="Close" title="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </header>
+      <div class="field-row">
+        <label class="field">Map ID
+          <input name="mapId" required placeholder="e.g. 2" autocomplete="off"></label>
+        <label class="field" id="sheetNumberField">Sheet number <span class="optional">optional</span>
+          <input name="sheetNumber" inputmode="numeric" placeholder="Next free" autocomplete="off"></label>
+      </div>
+      <!-- Click or drop photos here; they are listed below, each removable. -->
+      <div id="dropZone" class="drop-zone" role="button" tabindex="0" aria-label="Add map photos">
+        <svg class="drop-icon" viewBox="0 0 48 48" aria-hidden="true">
+          <rect x="6" y="10" width="36" height="28" rx="5" />
+          <path d="M6 31l9-9 7 7 6-6 14 14" />
+          <circle cx="32" cy="19" r="3" />
+        </svg>
+        <p class="drop-title"><b>Drop photos here</b> or <span class="drop-link">browse</span></p>
+        <p class="drop-hint">JPG or PNG, one or more</p>
+        <input id="mapPhotoInput" type="file" accept="image/*" multiple hidden>
+      </div>
+      <ul id="uploadList" class="upload-list" hidden></ul>
+      <p id="uploadError" class="upload-error" role="alert" hidden></p>
       <div class="actions">
         <button type="button" id="cancelNewRun">Cancel</button>
-        <button type="submit" class="primary" id="submitNewRun">Start</button>
+        <button type="submit" class="primary" id="submitNewRun" disabled>Upload and digitise</button>
+      </div>
+    </form>
+  </dialog>
+  <!-- Photos dragged anywhere over the page open the upload with them. -->
+  <div id="pageDrop" class="page-drop" hidden><div><b>Drop to upload map photos</b></div></div>
+
+  <dialog id="vlmDialog">
+    <form id="vlmForm" method="dialog">
+      <h2>Handwriting server</h2>
+      <p class="hint">A server with an OpenAI-compatible API running Qwen3-VL 32B, started there with
+        e.g. <code>vllm serve Qwen/Qwen3-VL-32B-Instruct</code>.</p>
+      <label>Address <input name="serverUrl" placeholder="http://192.168.1.20:8000/v1"></label>
+      <label>Model <input name="serverModel" placeholder="Qwen/Qwen3-VL-32B-Instruct"></label>
+      <p id="vlmServerStatus" class="hint" role="status"></p>
+      <div class="actions">
+        <button type="button" id="closeVlm">Close</button>
+        <button type="submit" class="primary" id="saveVlm">Save and test</button>
       </div>
     </form>
   </dialog>
 
-  <script src="static/review.js"></script>
+  <script src="static/review.js?v=3"></script>
 </body>
 </html>

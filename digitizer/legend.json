@@ -1,6 +1,6 @@
 {
   "name": "i-mobyl, stock of September 2026",
-  "notes": "Colour examples are in the pipeline's corrected Lab space (OpenCV scale, L/a/b 0-255), measured on the 2026-09-24 capture of map 2 (the pale pink on map 1 sheet 1 and the 2026-09-16 capture: two pink stocks are in use). A new stock needs no code change: calibrate a session by labelling one sticker per colour in the review page, which adds examples to that session's palette. 'label' is what the review page shows; 'printed' is the French text on the sheets, which the VLM is asked to find and read.",
+  "notes": "The stock: what a new photo's list starts with, and how its stickers and pens look. Colour examples are in the pipeline's corrected Lab space (OpenCV scale, L/a/b 0-255), measured on the 2026-09-24 capture of map 2 (the pale pink on map 1 sheet 1 and the 2026-09-16 capture: two pink stocks are in use). A new colour or pen needs no change here: name it on a photo in the page and click one of its stickers or lines (the eyedropper); that look is kept with the sheet. 'label' is the name the page and the GeoJSON use. What a sticker means stays on the printed legend.",
   "stickers": {
     "sizesMm": {"circle": 10.0, "triangle": 17.0, "star": 24.0},
     "sizesNote": "Circumscribed diameter of the sharp-cornered template; the die-cut corners are rounded, so the visible sticker is smaller (triangles ~15 mm, stars ~21 mm tip to tip). The search tries 0.9-1.15x these.",
@@ -20,49 +20,27 @@
       {"id": "gold", "label": "Gold", "display": "#d9a92a",
        "examples": [[231, 123, 178], [209, 125, 166], [148, 133, 163], [125, 126, 152]]}
     ],
-    "coloursNote": "Gold only comes as stars and stars only come in gold (the classes below say so), so a star's colour is never measured and gold is never offered for circles or triangles. The gold examples are foil photographed bright (map 1 sheets 1 and 5) down to dull (sheets 2-4); they only decide where a star may be fitted.",
+    "coloursNote": "Gold only comes as stars and stars only come in gold (the classes below say so), so a star's colour is never measured and gold is never offered for circles or triangles. The gold examples are foil photographed bright (map 1 sheets 1 and 5) down to dull (sheets 2-4); they only decide where a star may be fitted. A photo whose list has one colour only for a shape treats that shape the same way.",
     "classes": [
-      {"shape": "circle", "colour": "blue", "category": "calme", "label": "Calm or relaxing", "printed": "Calme ou reposant"},
-      {"shape": "triangle", "colour": "blue", "category": "bruyant", "label": "Noisy or stressful", "printed": "Bruyant ou stressant"},
-      {"shape": "circle", "colour": "pink", "category": "securisant", "label": "Feels safe", "printed": "Sécurisant"},
-      {"shape": "triangle", "colour": "pink", "category": "dangereux", "label": "Dangerous", "printed": "Dangereux"},
-      {"shape": "circle", "colour": "red", "category": "interessant", "label": "Interesting or attractive", "printed": "Intéressant ou attractif"},
-      {"shape": "triangle", "colour": "red", "category": "ininteressant", "label": "Uninteresting or unattractive", "printed": "Inintéressant ou peu attractif"},
-      {"shape": "circle", "colour": "yellow", "category": "frequente", "label": "Visited with your friends", "printed": "Fréquenté avec tes ami·e·s"},
-      {"shape": "triangle", "colour": "yellow", "category": "non_frequente", "label": "Not visited", "printed": "Non-fréquenté"},
-      {"shape": "circle", "colour": "green", "category": "beau", "label": "Beautiful", "printed": "Beau"},
-      {"shape": "triangle", "colour": "green", "category": "laid", "label": "Ugly", "printed": "Laid"},
-      {"shape": "circle", "colour": "black", "category": "lieu_connu", "label": "Stop or known place", "printed": "Arrêt ou lieu connu"},
-      {"shape": "star", "colour": "gold", "category": "domicile", "label": "Home", "printed": "Domicile"}
+      {"shape": "circle", "colour": "blue"},
+      {"shape": "triangle", "colour": "blue"},
+      {"shape": "circle", "colour": "pink"},
+      {"shape": "triangle", "colour": "pink"},
+      {"shape": "circle", "colour": "red"},
+      {"shape": "triangle", "colour": "red"},
+      {"shape": "circle", "colour": "yellow"},
+      {"shape": "triangle", "colour": "yellow"},
+      {"shape": "circle", "colour": "green"},
+      {"shape": "triangle", "colour": "green"},
+      {"shape": "circle", "colour": "black"},
+      {"shape": "star", "colour": "gold"}
     ]
   },
   "pens": [
-    {"id": "red", "label": "Red felt pen", "display": "#e0301e", "mode": "walk", "modeLabel": "walking",
+    {"id": "red", "label": "Red", "display": "#e0301e",
      "examples": [[118, 194, 174], [133, 183, 160]]},
-    {"id": "blue", "label": "Blue felt pen", "display": "#1f4fd1", "mode": "bike_scooter", "modeLabel": "bike or scooter",
+    {"id": "blue", "label": "Blue", "display": "#1f4fd1",
      "examples": [[97, 132, 128]]}
   ],
-  "pensNote": "Route-core colours measured on the 2026-09-24 capture (red) and the 2026-09-16 capture (red, and the navy pen that photographs as neutral dark grey, L ~97). Faint light-grey lines (L 170-190) are misprint ghosts of street edges, not the blue pen.",
-  "questionnaire": {
-    "panel": "left",
-    "fields": [
-      {"id": "transport", "kind": "checkboxes", "label": "Transport used regularly",
-       "printed": "Coche tous les modes de transport que tu utilises régulièrement",
-       "layout": {"columns": [6, 5]},
-       "options": [
-         {"id": "marche", "label": "Walking", "printed": "Marche à pieds"},
-         {"id": "velo", "label": "Bike", "printed": "Vélo"},
-         {"id": "trottinette", "label": "Kick scooter", "printed": "Trottinette"},
-         {"id": "moto_scooter", "label": "Motorbike or moped", "printed": "Moto ou scooter"},
-         {"id": "bus", "label": "Bus", "printed": "Bus"},
-         {"id": "tram", "label": "Tram", "printed": "Tram"},
-         {"id": "metro", "label": "Metro", "printed": "Métro"},
-         {"id": "train", "label": "Train", "printed": "Train"},
-         {"id": "rer", "label": "RER (suburban train)", "printed": "RER"},
-         {"id": "voiture", "label": "Car", "printed": "Voiture"},
-         {"id": "autre", "label": "Other", "printed": "Autre (précise lequel)"}
-       ]},
-      {"id": "transport_other", "kind": "text", "label": "Other transport (which)", "printed": "Autre (précise lequel)"}
-    ]
-  }
+  "pensNote": "Route-core colours measured on the 2026-09-24 capture (red) and the 2026-09-16 capture (red, and the navy pen that photographs as neutral dark grey, L ~97). Faint light-grey lines (L 170-190) are misprint ghosts of street edges, not the blue pen."
 }

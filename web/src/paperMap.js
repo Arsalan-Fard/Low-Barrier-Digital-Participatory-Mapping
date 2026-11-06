@@ -265,11 +265,28 @@
     ['motorway', 'trunk'], 0, 'primary', 1, 'secondary', 2, 'tertiary', 3,
     ['minor', 'street'], 4, ['service', 'track'], 5, 6];
 
-  function applyRoadNameCollision(layerId) {
-    setLayout(layerId, 'text-allow-overlap', false);
-    setLayout(layerId, 'text-ignore-placement', false);
-    setLayout(layerId, 'text-overlap', 'never');
-    setLayout(layerId, 'symbol-sort-key', ROAD_CLASS_RANK);
+  // A street's name at most every ROAD_NAME_SPACING_PX along it, or every 40 % of the map's longer
+  // side on a bigger map. Liberty's 200 px is tuned for a small screen: on the large table map a long
+  // street showed its name three or four times in a row. No #labelDensity level packs them closer.
+  var ROAD_NAME_SPACING_PX = 700;
+
+  function roadNameSpacing(target) {
+    var el = target.getContainer && target.getContainer();
+    var side = el ? Math.max(el.clientWidth, el.clientHeight) : 0;
+    return Math.max(ROAD_NAME_SPACING_PX, Math.round(side * 0.4));
+  }
+
+  // target: another map drawn in this style (a map view sheet's inset); the table map by default.
+  function applyRoadNameCollision(layerId, target) {
+    var m = target || map;
+    function set(prop, value) {
+      try { m.setLayoutProperty(layerId, prop, value); } catch (_e) {}
+    }
+    set('text-allow-overlap', false);
+    set('text-ignore-placement', false);
+    set('text-overlap', 'never');
+    set('symbol-sort-key', ROAD_CLASS_RANK);
+    set('symbol-spacing', roadNameSpacing(m));
   }
 
   // Captured from the unmodified style, so repeated edits never compound.
@@ -502,4 +519,15 @@
   }
   map.on('style.load', onStyleLoad);
   if (map.isStyleLoaded()) onStyleLoad();
+
+  // The other maps drawn in the paper style (map view sheets, the basemap preview) take the same
+  // street-name spacing and collision, without the rest of the restyling.
+  window.CompactPaperRoadNames = {
+    apply: function (otherMap) {
+      if (!otherMap || !otherMap.getLayer) return;
+      ROAD_NAME_LAYERS.forEach(function (id) {
+        if (otherMap.getLayer(id)) applyRoadNameCollision(id, otherMap);
+      });
+    }
+  };
 })();

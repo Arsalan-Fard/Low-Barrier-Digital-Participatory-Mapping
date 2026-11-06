@@ -9,44 +9,11 @@
   <script src="src/util.js"></script>
   <script src="src/maplibreCompat.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/glowbox/maptastic@master/build/maptastic.min.js"></script>
-  <link href="styles/map.css?v=1" rel="stylesheet" />
+  <link href="styles/map.css?v=13" rel="stylesheet" />
 </head>
 <body>
   <div id="main_container">
     <div id="map"></div>
-    <div id="hud">Waiting for backend...</div>
-    <div id="viewFilterPanel" class="hidden" aria-label="Light settings controls">
-      <div class="view-filter-title">Light Settings</div>
-      <label class="view-filter-row" for="viewBrightness">
-        <span class="view-filter-label">Brightness</span>
-        <input id="viewBrightness" class="view-filter-slider" type="range" min="0.5" max="2" step="0.05" value="1" />
-        <span id="viewBrightnessValue" class="view-filter-value">1.00x</span>
-      </label>
-      <label class="view-filter-row" for="viewSaturation">
-        <span class="view-filter-label">Saturation</span>
-        <input id="viewSaturation" class="view-filter-slider" type="range" min="0" max="2" step="0.05" value="1" />
-        <span id="viewSaturationValue" class="view-filter-value">1.00x</span>
-      </label>
-      <label class="view-filter-row" for="viewContrast">
-        <span class="view-filter-label">Contrast</span>
-        <input id="viewContrast" class="view-filter-slider" type="range" min="0.5" max="2" step="0.05" value="1" />
-        <span id="viewContrastValue" class="view-filter-value">1.00x</span>
-      </label>
-      <label class="view-filter-row" for="viewInvert">
-        <span class="view-filter-label">Invert</span>
-        <input id="viewInvert" class="view-filter-slider" type="range" min="0" max="1" step="0.05" value="0" />
-        <span id="viewInvertValue" class="view-filter-value">0%</span>
-      </label>
-      <label class="view-filter-row" for="viewSepia">
-        <span class="view-filter-label">Sepia</span>
-        <input id="viewSepia" class="view-filter-slider" type="range" min="0" max="1" step="0.05" value="0" />
-        <span id="viewSepiaValue" class="view-filter-value">0%</span>
-      </label>
-      <div class="view-filter-actions">
-        <button id="viewFilterClose" class="view-filter-reset" type="button">Hide</button>
-        <button id="viewFilterReset" class="view-filter-reset" type="button">Reset</button>
-      </div>
-    </div>
     <div id="streetViewInset" class="street-view-inset" aria-hidden="true">
       <!-- The JS panorama, turned in place; the iframe is the fallback until the Maps SDK loads. -->
       <div id="streetViewPanorama" class="street-view-inset__pano"></div>
@@ -59,7 +26,7 @@
         title="Telecom Paris Street View">
       </iframe>
     </div>
-    <div id="calibOverlay"></div>
+    <!-- mapViewInset.js adds one map inset per map view sheet here; each shows only on its printed sheet. -->
   </div>
 
   <!-- The Paper map basemap's settings, read by src/paperMap.js on every style load. Nothing
@@ -101,38 +68,40 @@
   </div>
 
   <script src="src/pageWarp.js"></script>
-  <script src="src/config.js"></script>
+  <script src="src/config.js?v=2"></script>
   <script src="src/mapSetup.js"></script>
   <script src="src/mapWarp.js"></script>
-  <script src="src/calibration.js"></script>
-  <script src="src/tagAssignments.js?v=6"></script>
-  <script src="src/workshopRuntime.js?v=10"></script>
-  <script src="src/workshopEditor.js?v=9"></script>
-  <script src="src/pageFlow.js?v=6"></script>
-  <script src="src/overlays.js"></script>
+  <script src="src/tagAssignments.js?v=7"></script>
+  <script src="src/workshopRuntime.js?v=18"></script>
+  <script src="src/basemapPreviews.js?v=2"></script>
+  <script src="src/workshopEditor.js?v=18"></script>
+  <script src="src/resultsLayer.js?v=5"></script>
+  <script src="src/pageFlow.js?v=11"></script>
   <script src="src/foldGeometry.js"></script>
-  <script src="src/drawing.js?v=4"></script>
+  <script src="src/drawing.js?v=6"></script>
   <script src="src/roadSnapping.js"></script>
-  <script src="src/stickerPlacement.js"></script>
-  <script src="src/annotationPlacement.js"></script>
-  <script src="src/customMapObjects.js"></script>
+  <script src="src/stickerPlacement.js?v=1"></script>
+  <script src="src/annotationPlacement.js?v=2"></script>
+  <script src="src/customMapObjects.js?v=1"></script>
   <script src="src/dataExport.js"></script>
-  <script src="src/isochrone.js"></script>
-  <script src="src/routing.js"></script>
-  <script src="src/osmnxNetwork.js"></script>
-  <script src="src/customGeojsonLayers.js"></script>
-  <script src="src/floorplanIsovist.js"></script>
-  <script src="src/streetViewScreen.js?v=1"></script>
+  <script src="src/isochrone.js?v=4"></script>
+  <script src="src/routing.js?v=3"></script>
+  <script src="src/osmnxNetwork.js?v=1"></script>
+  <script src="src/customGeojsonLayers.js?v=1"></script>
+  <script src="src/floorplanIsovist.js?v=1"></script>
+  <script src="src/printedScreen.js?v=4"></script>
   <!-- The map page, in load order; mapStartup.js creates the map and must come last. -->
-  <script src="src/mapBase.js?v=1"></script>
-  <script src="src/mapLayers.js?v=1"></script>
-  <script src="src/mapHud.js?v=1"></script>
+  <script src="src/mapBase.js?v=4"></script>
+  <script src="src/mapLayers.js?v=5"></script>
+  <script src="src/mapRecording.js?v=2"></script>
   <script src="src/foldPen.js?v=1"></script>
-  <script src="src/toolModes.js?v=1"></script>
-  <script src="src/streetViewInset.js?v=1"></script>
-  <script src="src/tagPolling.js?v=1"></script>
-  <script src="src/mapStartup.js?v=1"></script>
+  <script src="src/toolModes.js?v=4"></script>
+  <script src="src/streetViewInset.js?v=2"></script>
+  <script src="src/mapViewInset.js?v=6"></script>
+  <script src="src/tagPolling.js?v=6"></script>
+  <script src="src/mouseTools.js?v=1"></script>
+  <script src="src/mapStartup.js?v=7"></script>
   <!-- Restyles the Paper map basemap on the map mapStartup.js created, so it loads after it. -->
-  <script src="src/paperMap.js?v=1"></script>
+  <script src="src/paperMap.js?v=2"></script>
 </body>
 </html>

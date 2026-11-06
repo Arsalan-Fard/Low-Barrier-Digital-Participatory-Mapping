@@ -12,12 +12,9 @@ const PAN_TAG_FAST_PX = 6;
 const TAG21_ZOOM_DX_PX = 60;
 const TAG21_ZOOM_STEP_DELTA = 1.0;
 const TAG21_MISSING_RESET_MS = 1500;
+// A dot on the map for every tag the camera sees, in its assignment's colour.
 const markers = new Map();
-let debugMarkersVisible = true;
 let lastTags = [];
-let lastSource = 'unknown';
-let lastFrame = { width: 0, height: 0, seq: 0 };
-let lastCorners = [null, null, null, null];
 let pollInFlight = false;
 let defaultZoom = 16;
 const panTagRuntime = {
@@ -59,16 +56,6 @@ function perfReport() {
   _perfLastReport = now;
 }
 
-function applyDebugMarkerVisibility(marker) {
-  marker.getElement().style.display = debugMarkersVisible ? '' : 'none';
-}
-
-function toggleDebugMarkersVisible() {
-  debugMarkersVisible = !debugMarkersVisible;
-  for (const marker of markers.values()) applyDebugMarkerVisibility(marker);
-  return debugMarkersVisible;
-}
-
 function makeMarker(id) {
   const el = document.createElement('div');
   el.className = 'dot';
@@ -77,16 +64,14 @@ function makeMarker(id) {
   el.title = assignment
     ? `Tag ${id} (${assignment.tool} ${assignment.colorName})`
     : `Tag ${id}`;
-  const marker = new mapboxgl.Marker({ element: el }).setLngLat([0, 0]).addTo(map);
-  applyDebugMarkerVisibility(marker);
-  return marker;
+  return new mapboxgl.Marker({ element: el }).setLngLat([0, 0]).addTo(map);
 }
 
 function applyZoomTag(entries, nowMs) {
   let rawX = null;
   for (const entry of entries) {
-    if (Number(entry.tag.id) === 21 && Number.isFinite(entry.raw.x)) {
-      rawX = entry.raw.x;
+    if (Number(entry.tag.id) === 21 && Number.isFinite(entry.point.x)) {
+      rawX = entry.point.x;
       break;
     }
   }
@@ -177,7 +162,7 @@ function findMoveTagTarget(selectorPoint) {
 }
 
 // The select tool grabs the nearest placed sticker or annotation and keeps it
-// until the selector (a tag, a fold pair or the cursor) changes or lets go.
+// until the selector (a tag or a fold pair) changes or lets go.
 function moveTagTargetTo(selectorPoint) {
   var key = String(selectorPoint.selectorKey || '');
   if (key && moveTagSelectorKey && key !== moveTagSelectorKey) {
@@ -207,19 +192,12 @@ async function poll() {
       if (!res.ok) throw new Error('tags ' + res.status);
       data = await res.json();
     } catch (_fetchErr) {
-      data = {
-        tags: [],
-        corners: [null, null, null, null],
-        source: 'static',
-        frame: { width: 0, height: 0, seq: 0 }
-      };
+      data = { tags: [] };
     }
 
     lastTags = Array.isArray(data.tags) ? data.tags : [];
-    lastCorners = Array.isArray(data.corners) ? data.corners : [null, null, null, null];
-    lastSource = data.source || 'unknown';
-    lastFrame = data.frame || { width: 0, height: 0, seq: 0 };
-    refreshHud();
+    // Camera Tuning's jitter threshold for the printed sheets.
+    if (data.screenJitterPx != null) window.CompactPrintedScreen.setJitterPx(data.screenJitterPx);
 
     const seen = new Set();
     const currentMapPolygon = mapViewportPolygon();
@@ -228,7 +206,6 @@ async function poll() {
     const annotationPointsByTagId = {};
     const eraserPoints = [];
     const visibleTagEntries = [];
-    const visibleDrawTagMap = {};
     let panPoint = null;
     let moveSelectorPoint = null;
     let isochroneTagPoint = null;
@@ -252,26 +229,22 @@ async function poll() {
       const id = String(tag.id);
       if (!markers.has(id)) markers.set(id, makeMarker(id));
       seen.add(id);
-      const raw = uvToPx(tag.uv.u, tag.uv.v);
-      const fixed = calibration.applyTagOffset(tag, raw.x, raw.y, uvToPx);
+      const point = uvToPx(tag.uv.u, tag.uv.v);
       const assignment = effectiveAssignmentForTag(tag.id, tagAssignments.getAssignment(tag.id));
-      visibleTagEntries.push({ tag: tag, id: id, raw: raw, fixed: fixed, assignment: assignment, marker: markers.get(id) });
-      if (isDrawToolTagId(tag.id)) {
-        visibleDrawTagMap[Number(tag.id)] = true;
-      }
+      visibleTagEntries.push({ tag: tag, id: id, point: point, assignment: assignment, marker: markers.get(id) });
       if (!assignment) continue;
       if (assignment.tool === 'street-view') {
-        const lngLat = pxToLngLat(fixed.x, fixed.y);
-        streetViewAnchorPointNow = { x: fixed.x, y: fixed.y };
+        const lngLat = pxToLngLat(point.x, point.y);
+        streetViewAnchorPointNow = { x: point.x, y: point.y };
         streetViewLngLatNow = { lng: lngLat[0], lat: lngLat[1] };
-        streetViewStateNow = pointInPolygon(fixed, currentMapPolygon) ? 'inside' : 'outside';
+        streetViewStateNow = pointInPolygon(point, currentMapPolygon) ? 'inside' : 'outside';
         streetViewHeadingNow = streetViewHeadingForTag(tag);
       }
       if (assignment.tool === 'pan' && Number(tag.id) === 22) {
-        panPoint = { x: raw.x, y: raw.y };
+        panPoint = { x: point.x, y: point.y };
       }
       if (assignment.tool === 'drag') {
-        const selectorLngLat = pxToLngLat(fixed.x, fixed.y);
+        const selectorLngLat = pxToLngLat(point.x, point.y);
         offerMoveSelector({
           lng: selectorLngLat[0],
           lat: selectorLngLat[1],
@@ -281,36 +254,22 @@ async function poll() {
       }
     }
 
-    // The cursor joins in as one more draw-tool tag, without a marker. Comment mode acts
-    // once, at the click point, so the comment box does not chase the mouse.
-    const cursor = cursorTagEntry(currentMapPolygon, visibleDrawTagMap);
-    if (cursor && cursorTag.mode === 'select') {
-      const cursorLngLat = pxToLngLat(cursor.point.x, cursor.point.y);
-      offerMoveSelector({ lng: cursorLngLat[0], lat: cursorLngLat[1], tagId: CURSOR_TAG_ID, selectorKey: 'cursor' });
-    } else if (cursor) {
-      visibleTagEntries.push({
-        tag: { id: CURSOR_TAG_ID },
-        id: String(CURSOR_TAG_ID),
-        fixed: cursor.point,
-        assignment: cursor.assignment
-      });
-    }
-
-    streetViewScreen.update(lastTags, uvToPx, Date.now());
-    refreshStreetViewInset(streetViewStateNow, streetViewAnchorPointNow, streetViewLngLatNow, streetViewHeadingNow);
     const nowMs = Date.now();
+    streetViewScreen.update(lastTags, uvToPx, nowMs);
+    updateMapViewScreens(lastTags, uvToPx, nowMs);
+    refreshStreetViewInset(streetViewStateNow, streetViewAnchorPointNow, streetViewLngLatNow, streetViewHeadingNow);
+    refreshMapViewInset(streetViewStateNow, streetViewLngLatNow, streetViewHeadingNow, nowMs);
     applyZoomTag(visibleTagEntries, nowMs);
     applyPanTag(panPoint, nowMs);
-    overlays.updateTagMasks(lastTags, uvToLngLat);
 
     for (const entry of visibleTagEntries) {
       const tag = entry.tag;
-      const fixed = entry.fixed;
+      const point = entry.point;
       const assignment = entry.assignment;
-      const lngLat = pxToLngLat(fixed.x, fixed.y);
+      const lngLat = pxToLngLat(point.x, point.y);
       if (entry.marker) entry.marker.setLngLat(lngLat);
       if (!assignment) continue;
-      const inMap = pointInPolygon(fixed, currentMapPolygon);
+      const inMap = pointInPolygon(point, currentMapPolygon);
       if (assignment.tool === 'annotation') {
         annotationPointsByTagId[entry.id] = {
           lng: lngLat[0],
@@ -319,28 +278,28 @@ async function poll() {
           tagSizePx: tagSizePx(tag)
         };
       }
-      // A lone eraser is a draw-tool tag in erase mode (in practice the cursor); eraser pairs go
+      // A lone eraser is a draw-tool tag in erase mode seen without its pair; eraser pairs go
       // through applyFoldPairs.
       if (assignment.tool === 'eraser' && isDrawToolTagId(tag.id) && inMap) {
         eraserPoints.push({ lng: lngLat[0], lat: lngLat[1] });
       }
       if (assignment.tool === 'isochrone') {
         if (inMap) {
-          isochroneTagPoint = { x: fixed.x, y: fixed.y };
+          isochroneTagPoint = { x: point.x, y: point.y };
           isochroneMinutes = Number(assignment.minutes) || 15;
         } else {
           isochroneTagOutsideMap = true;
         }
       }
       if (assignment.tool === 'isovist' && inMap) {
-        isovistTagPoint = { x: fixed.x, y: fixed.y };
+        isovistTagPoint = { x: point.x, y: point.y };
       }
       if (assignment.tool === 'route-origin') {
-        if (inMap) routeOriginTagPoint = { x: fixed.x, y: fixed.y };
+        if (inMap) routeOriginTagPoint = { x: point.x, y: point.y };
         else routeTagOutsideMap = true;
       }
       if (assignment.tool === 'route-dest') {
-        if (inMap) routeDestTagPoint = { x: fixed.x, y: fixed.y };
+        if (inMap) routeDestTagPoint = { x: point.x, y: point.y };
         else routeTagOutsideMap = true;
       }
     }
@@ -380,8 +339,6 @@ async function poll() {
       }
     }
   } catch (_err) {
-    hud.textContent = 'Backend not reachable';
-    overlays.updateTagMasks([], uvToLngLat);
     floorplanIsovist.clear();
     stickerPlacement.update({}, Date.now(), false);
     annotationPlacement.update({}, Date.now(), false);

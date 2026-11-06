@@ -178,7 +178,8 @@
   }
 
   &__minutes,
-  &__map-id {
+  &__map-id,
+  &__project {
     height: 24px;
     padding: 2px 5px;
     color: vars.$color-white;
@@ -201,6 +202,10 @@
     width: 60px;
   }
 
+
+  &__project {
+    width: 160px;
+  }
 
   &__map-id {
     width: 72px;

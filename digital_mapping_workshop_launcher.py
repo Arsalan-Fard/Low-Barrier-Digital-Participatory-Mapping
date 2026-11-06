@@ -37,9 +37,8 @@ def _use_folders(resource_root, user_root):
     config.BACKEND_RECORDINGS_DIR = user_root / "backend_recordings"
     config.OSMNX_NETWORK_FILE = data_dir / "osmnx_network.geojson"
     config.MAP_SHEETS_DIR = data_dir / "map_sheets"
-    config.DIGITIZER_RUNS_DIR = user_root / "digitizer" / "runs"
-    config.DIGITIZER_SESSIONS_DIR = user_root / "digitizer" / "sessions"
-    config.CALIBRATION_FILE = user_root / "calibration_offsets.json"
+    config.DIGITIZED_SHEETS_DIR = data_dir / "digitized_sheets"
+    config.DIGITIZER_VLM_FILE = data_dir / "vlm.json"
 
     external_token = user_root / "token.txt"
     if not external_token.exists():

@@ -1,7 +1,74 @@
+// Fullscreen always ends when the page changes. So while the menu is fullscreen, the page a menu
+// button opens is shown in a frame over the menu instead, which keeps fullscreen. That page's own
+// way back to the menu loads /home in the frame, and the script at the top of home.html then
+// closes the frame.
+(function () {
+  'use strict';
+  var frame = null;
+  var menuUrl = window.location.pathname + window.location.search + window.location.hash;
+  var menuTitle = document.title;
+
+  function announce(isOpen) {
+    window.dispatchEvent(new CustomEvent('menuframechange', { detail: { open: isOpen } }));
+  }
+
+  function open(url) {
+    if (frame) return;
+    frame = document.createElement('iframe');
+    frame.id = 'menuFrame';
+    frame.title = 'Page';
+    frame.setAttribute('data-page-warp-exclude', '');
+    frame.setAttribute('allow', 'fullscreen; clipboard-read; clipboard-write; autoplay');
+    frame.allowFullscreen = true;
+    // The title and address follow the page in the frame, so a reload opens that page.
+    frame.addEventListener('load', function () {
+      try {
+        var loc = frame.contentWindow.location;
+        document.title = frame.contentDocument.title || menuTitle;
+        window.history.replaceState(window.history.state, '', loc.pathname + loc.search + loc.hash);
+        frame.contentWindow.focus();
+      } catch (_err) {
+        // Closed while loading.
+      }
+    });
+    frame.src = url;
+    document.body.appendChild(frame);
+    document.body.classList.add('menu-frame-open');
+    try { window.history.replaceState(window.history.state, '', url); } catch (_err) { }
+    frame.focus();
+    announce(true);
+  }
+
+  function close() {
+    if (!frame) return;
+    var old = frame;
+    frame = null;
+    old.remove();
+    document.body.classList.remove('menu-frame-open');
+    document.title = menuTitle;
+    try { window.history.replaceState(window.history.state, '', menuUrl); } catch (_err) { }
+    window.focus();
+    announce(false);
+  }
+
+  window.CompactMenuFrame = {
+    open: open,
+    close: close,
+    isOpen: function () { return !!frame; },
+    // Opens a page from the menu: in the frame while fullscreen, else as a normal page change.
+    go: function (url) {
+      if (document.fullscreenElement) open(url);
+      else window.location.href = url;
+    }
+  };
+})();
+
 (function () {
   'use strict';
 
   function $(id) { return document.getElementById(id); }
+
+  var menuFrame = window.CompactMenuFrame;
 
   function setStatus(el, message, kind) {
     el.textContent = message || '';
@@ -42,8 +109,17 @@
   introLinkRo.observe(document.querySelector('.intro-photo img.setup'));
   introLinkRo.observe(document.querySelector('.intro-tool__media'));
 
-  function goMap() { window.location.href = '/map'; }
-  function goResults() { window.location.href = '/results'; }
+  function goMap() { menuFrame.go('/map'); }
+
+  // The menu's links keep fullscreen too (a plain click only; Ctrl+click and the like are left be).
+  ['goGenerate', 'goDigitize', 'goMarker'].forEach(function (id) {
+    var link = $(id);
+    link.addEventListener('click', function (e) {
+      if (!document.fullscreenElement || e.button !== 0 || e.ctrlKey || e.shiftKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      menuFrame.open(link.getAttribute('href'));
+    });
+  });
   function doExit() {
     if (!window.confirm('Exit the application?')) return;
     fetch('/api/shutdown', { method: 'POST' }).catch(function () { });
@@ -54,7 +130,6 @@
       + 'Shutting down… you can close this window.</div>';
   }
   $('goMap').addEventListener('click', goMap);
-  $('goResults').addEventListener('click', goResults);
 
   // A panel takes the nav's place instead of opening a page, so the camera
   // view keeps streaming: it is the feedback for the tuning sliders.
@@ -84,38 +159,21 @@
   $('goTuning').addEventListener('click', function () { showPanel('tuningPanel'); });
   $('exitBtn').addEventListener('click', doExit);
 
+  // The menu has no keyboard shortcuts. Esc only closes what lies on top of it: the automatic
+  // definition's grid (it covers the whole page, so there is no button to reach), the guide or a panel.
   window.addEventListener('keydown', function (e) {
+    // A page is open over the menu: the menu's keys are not for it.
+    if (menuFrame.isOpen()) return;
     var key = String(e.key || '').toLowerCase();
-    // Before the focus check: the grid covers the whole page, so the way out
-    // must work wherever focus was left.
     if (autoCalibActive && (key === 'escape' || key === 'backspace')) {
       e.preventDefault();
       stopAutoCalib(false);
       setStatus(cornerStatus, 'Automatic definition cancelled.');
       return;
     }
-    var tag = String(e.target.tagName || '').toUpperCase();
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-    if (key === 'escape') {
-      if (!introOverlay.hidden) closeIntro();
-      else if (openPanel) closePanel();
-      else doExit();
-    } else if (introOverlay.hidden) {
-      // With a modifier held 1-4 are left to the browser (Ctrl+1 switches tabs).
-      if (/^[1-4]$/.test(key) && !e.ctrlKey && !e.altKey && !e.metaKey && !autoCalibActive) {
-        e.preventDefault();
-        toggleCorner(Number(key) - 1);
-        return;
-      }
-      if (key === 'enter' || key === 'm') {
-        goMap();
-      } else if (key === 'r') {
-        goResults();
-      } else if (key === 't') {
-        if (openPanel === 'tuningPanel') closePanel();
-        else showPanel('tuningPanel');
-      }
-    }
+    if (key !== 'escape') return;
+    if (!introOverlay.hidden) closeIntro();
+    else if (openPanel) closePanel();
   });
 
   var srcSmartphone = $('srcSmartphone');
@@ -136,12 +194,43 @@
 
   var webcamIndexWrap = $('webcamIndexWrap');
   var webcamIndex = $('webcamIndex');
+  var camGuide = $('camGuide');
+  // On a Mac the guide also has steps for an iPhone (Continuity Camera: one of the Mac's cameras,
+  // opened with Webcam), picked with the Android / iPhone switch above it.
+  var camGuideIphone = $('camGuideIphone');
+  var guidePhoneSwitch = $('guidePhoneSwitch');
+  var guidePhoneBtns = guidePhoneSwitch.querySelectorAll('[data-guide-phone]');
+  var onMac = false;
+  var guidePhone = 'android';
+  try { if (localStorage.getItem('guidePhone') === 'iphone') guidePhone = 'iphone'; } catch (_err) { }
+
+  function refreshGuide() {
+    var iphone = onMac && guidePhone === 'iphone';
+    // The Android steps are for Smartphone; the iPhone's stay up with Webcam, since they pick its device.
+    camGuide.hidden = iphone || currentSource === 'webcam';
+    camGuideIphone.hidden = !iphone;
+    guidePhoneSwitch.hidden = !onMac || (currentSource === 'webcam' && !iphone);
+    guidePhoneBtns.forEach(function (btn) {
+      var on = btn.dataset.guidePhone === (iphone ? 'iphone' : 'android');
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+
+  guidePhoneBtns.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      guidePhone = btn.dataset.guidePhone;
+      try { localStorage.setItem('guidePhone', guidePhone); } catch (_err) { }
+      refreshGuide();
+    });
+  });
 
   function markSource(kind) {
     currentSource = kind;
     srcSmartphone.classList.toggle('active', kind === 'smartphone');
     srcWebcam.classList.toggle('active', kind === 'webcam');
     webcamIndexWrap.hidden = kind !== 'webcam';
+    refreshGuide();
   }
 
   function connect(kind, payload) {
@@ -207,6 +296,7 @@
   var lastTags = [];
 
   function startFeed() {
+    if (menuFrame.isOpen()) return;
     if (!camFeed.getAttribute('src')) camFeed.src = '/video_feed?q=70&t=' + Date.now();
     camFeedWrap.style.display = 'block';
     camPlaceholder.style.display = 'none';
@@ -349,10 +439,10 @@
     var n = cornersSetCount();
     screenState.classList.toggle('ok', n === 4);
     screenStateText.textContent = n === 4 ? 'Corners set' : (n + '/4 corners');
+    // At rest the line stays empty (the badge above shows the count); it only guides manual picking.
     if (activeCornerIndex === null && !autoCalibActive) {
-      if (n === 4) setStatus(cornerStatus, 'All 4 corners set ✓', 'ok');
-      else if (manualDefineOpen()) setStatus(cornerStatus, n + '/4 corners set — pick a number (or press 1–4), then click the camera view where that corner is.');
-      else setStatus(cornerStatus, n + '/4 corners set — define the screen manually or automatically.');
+      if (n < 4 && manualDefineOpen()) setStatus(cornerStatus, n + '/4 corners set — pick a number, then click the camera view where that corner is.');
+      else setStatus(cornerStatus, '');
     }
     refreshReady();
   }
@@ -599,11 +689,22 @@
   }
 
   function pollCameraStatus() {
-    fetch('/api/camera/status', { cache: 'no-store' })
+    // While a page is open over the menu (CompactMenuFrame) the menu rests, as if it had been left.
+    if (menuFrame.isOpen()) return Promise.resolve();
+    return fetch('/api/camera/status', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         var connected = !!(data && data.connected);
         var src = String((data && data.source) || '');
+        // On a Mac the phone's camera comes over USB debugging (adb), not USB tethering, and the guide
+        // has the iPhone's steps too.
+        var mac = !!(data && data.mac);
+        $('guideTether').hidden = mac;
+        $('guideAdb').hidden = !mac;
+        if (mac !== onMac) {
+          onMac = mac;
+          refreshGuide();
+        }
         var kind = detectSourceKind(src);
         if (connected && kind && kind !== currentSource && !cameraConnected) markSource(kind);
         setCameraConnected(connected, src);
@@ -612,7 +713,7 @@
   }
 
   function pollTags() {
-    if (!cameraConnected) return;
+    if (!cameraConnected || menuFrame.isOpen()) return;
     fetch('/api/tags', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -629,15 +730,25 @@
       .catch(function () { });
   }
 
-  pollCameraStatus();
+  function retrySmartphone() {
+    if (menuFrame.isOpen()) return;
+    if (currentSource === 'smartphone' && !cameraConnected && !smartphoneConnectInFlight) connectSmartphone();
+  }
+
+  // The camera view stops streaming while a page is open over the menu, and resumes after.
+  window.addEventListener('menuframechange', function (e) {
+    if (e.detail && e.detail.open) stopFeed();
+    else pollCameraStatus();
+  });
+
+  // Look for the phone straight away (not 10 s later), so the view says at once whether it was found.
+  pollCameraStatus().then(retrySmartphone);
   setInterval(pollCameraStatus, 2500);
   setInterval(pollTags, 150);
   setInterval(function () {
     if (openPanel === 'tuningPanel') window.CompactHomeTuning.refreshReadout(cameraConnected, lastTags.length);
   }, 250);
-  setInterval(function () {
-    if (currentSource === 'smartphone' && !cameraConnected && !smartphoneConnectInFlight) connectSmartphone();
-  }, 10000);
+  setInterval(retrySmartphone, 10000);
 })();
 
 (function () {

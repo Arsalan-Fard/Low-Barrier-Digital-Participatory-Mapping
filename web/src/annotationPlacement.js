@@ -127,6 +127,7 @@
           marker: marker,
           step: currentStep
         };
+        if (entry.input) item.input = entry.input;
         applyItemAppearance(item);
         placed.push(item);
       }
@@ -140,7 +141,9 @@
       return distanceSq(last, projectLngLatToPx(point.lng, point.lat)) >= (rearmThresholdPx * rearmThresholdPx);
     }
 
-    function createActive(tagId, point, nowMs, initialText, editIndex) {
+    // opts.manual: a textbox the mouse opened, which stays until Enter or Esc rather than closing when
+    // its tag is gone; opts.input: what wrote it when not a tag ('mouse').
+    function createActive(tagId, point, nowMs, initialText, editIndex, opts) {
       var key = String(tagId);
       removeActiveForTag(key);
 
@@ -182,7 +185,9 @@
         boxEl: box,
         editIndex: Number.isInteger(editIndex) ? editIndex : null,
         angleDeg: point.angleDeg,
-        lastSeenMs: nowMs
+        lastSeenMs: nowMs,
+        manual: !!(opts && opts.manual),
+        input: (opts && opts.input) ? String(opts.input) : ''
       };
 
       input.addEventListener('input', function () {
@@ -192,7 +197,9 @@
       input.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') {
           e.preventDefault();
-          placeActiveForTag(key);
+          // An empty mouse textbox closes on Enter; a tag's waits for text.
+          var open = activeByTagId[key];
+          if (!placeActiveForTag(key) && open && open.manual) removeActiveForTag(key);
           return;
         }
         if (e.key === 'Escape') {
@@ -200,7 +207,7 @@
           removeActiveForTag(key);
           return;
         }
-        // Keep the page's keyboard shortcuts from firing while typing.
+        // Keep typed keys from the page (Maptastic toggles projection alignment on Shift+Space).
         e.stopPropagation();
       });
 
@@ -210,7 +217,7 @@
       }, 0);
     }
 
-    function beginEditPlaced(index, sourceTagId, nowMs) {
+    function beginEditPlaced(index, sourceTagId, nowMs, opts) {
       var item = placed[index];
       if (!item) return null;
       var key = String(sourceTagId);
@@ -223,7 +230,7 @@
         entry.marker.setLngLat([item.lng, item.lat]);
         setBoxRotation(entry.boxEl, entry.angleDeg);
       } else {
-        createActive(key, { lng: item.lng, lat: item.lat, angleDeg: Number(item.angleDeg || 0) }, nowMs, item.text, index);
+        createActive(key, { lng: item.lng, lat: item.lat, angleDeg: Number(item.angleDeg || 0) }, nowMs, item.text, index, opts);
       }
       return { index: index, tagId: item.tagId, text: item.text, lng: item.lng, lat: item.lat };
     }
@@ -262,10 +269,10 @@
         entry.marker.setLngLat([parsed.lng, parsed.lat]);
       }
 
-      // An unseen textbox closes after lostHoldMs, unless it holds text or edits a chip.
+      // An unseen textbox closes after lostHoldMs, unless it holds text, edits a chip or is the mouse's.
       for (var openKey in activeByTagId) {
         var open = activeByTagId[openKey];
-        if (seen[openKey] || open.editIndex !== null || open.inputEl.value.trim()) continue;
+        if (seen[openKey] || open.manual || open.editIndex !== null || open.inputEl.value.trim()) continue;
         if ((nowMs - open.lastSeenMs) > lostHoldMs) removeActiveForTag(openKey);
       }
     }
@@ -301,9 +308,11 @@
       return {
         type: 'FeatureCollection',
         features: placed.map(function (p) {
+          var properties = { sourceType: 'annotation', tagId: p.tagId, text: p.text, step: p.step };
+          if (p.input) properties.input = p.input;
           return {
             type: 'Feature',
-            properties: { sourceType: 'annotation', tagId: p.tagId, text: p.text, step: p.step },
+            properties: properties,
             geometry: { type: 'Point', coordinates: [p.lng, p.lat] }
           };
         })
@@ -352,9 +361,88 @@
       return true;
     }
 
+    // ---------------------------------------------------------------- the mouse (mouseTools.js)
+    // Its textboxes are upright on the screen: setBoxRotation turns a box by angleDeg + 180.
+    var UPRIGHT_DEG = 180;
+
+    function openAt(key, lng, lat, opts) {
+      createActive(key, { lng: Number(lng), lat: Number(lat), angleDeg: UPRIGHT_DEG }, Date.now(), '', null,
+        { manual: true, input: opts && opts.input });
+    }
+
+    function editPlacedAt(key, index, opts) {
+      return beginEditPlaced(index, key, Date.now(), { manual: true, input: opts && opts.input });
+    }
+
+    function hasActive(key) {
+      return !!activeByTagId[String(key)];
+    }
+
+    // Closes the key's textbox: placing what it holds when keepText, else dropping it. Returns
+    // whether a comment was placed.
+    function closeActive(key, keepText) {
+      key = String(key);
+      if (!activeByTagId[key]) return false;
+      if (keepText && placeActiveForTag(key)) return true;
+      removeActiveForTag(key);
+      return false;
+    }
+
+    function clientRectOf(item) {
+      var el = item.marker.getElement();
+      return el ? el.getBoundingClientRect() : null;
+    }
+
+    // The placed comment drawn under a screen point (client px), topmost first, or -1.
+    function placedIndexAtClient(x, y) {
+      for (var i = placed.length - 1; i >= 0; i--) {
+        if (!isItemVisible(placed[i])) continue;
+        var r = clientRectOf(placed[i]);
+        if (r && r.width && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i;
+      }
+      return -1;
+    }
+
+    function isBeingEdited(index) {
+      for (var key in activeByTagId) {
+        if (activeByTagId[key].editIndex === index) return true;
+      }
+      return false;
+    }
+
+    // Removes the shown comments whose text the circle (client px) touches, except ones being edited.
+    function eraseAtClientCircle(x, y, radius) {
+      var removed = [];
+      placed.forEach(function (item, index) {
+        if (!isItemVisible(item) || isBeingEdited(index)) return;
+        var r = clientRectOf(item);
+        if (!r || !r.width) return;
+        var dx = x - Math.max(r.left, Math.min(x, r.right));
+        var dy = y - Math.max(r.top, Math.min(y, r.bottom));
+        if (dx * dx + dy * dy <= radius * radius) removed.push(index);
+      });
+      if (!removed.length) return false;
+      removed.forEach(function (index) { placed[index].marker.remove(); });
+      placed = placed.filter(function (_item, index) { return removed.indexOf(index) === -1; });
+      // Textboxes editing a later comment follow it to its new place in the list.
+      for (var key in activeByTagId) {
+        var entry = activeByTagId[key];
+        if (entry.editIndex === null) continue;
+        var shift = removed.filter(function (index) { return index < entry.editIndex; }).length;
+        entry.editIndex -= shift;
+      }
+      return true;
+    }
+
     return {
       setEnabled: setEnabled,
       update: update,
+      openAt: openAt,
+      editPlacedAt: editPlacedAt,
+      hasActive: hasActive,
+      closeActive: closeActive,
+      placedIndexAtClient: placedIndexAtClient,
+      eraseAtClientCircle: eraseAtClientCircle,
       getPlacedGeoJSON: getPlacedGeoJSON,
       clearAll: clearAll,
       findNearestPlaced: findNearestPlaced,

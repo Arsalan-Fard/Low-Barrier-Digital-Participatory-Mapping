@@ -1,16 +1,20 @@
 (function () {
   var DEFAULT_DRAW_OFFSET_CM = 3;
-  // The street view screen's border tags, in the same order as the marker page
-  // and app.py: corners clockwise from top-left, then right, bottom, left middles.
+  // The printed screens' border tags, in the same order as the marker page and
+  // marker_settings.py: corners clockwise from top-left, then right, bottom, left middles.
   var SCREEN_SLOTS = ['tl', 'tr', 'br', 'bl', 'rm', 'bm', 'lm'];
-  // Keep in step with MARKER_SLOT_DEFAULTS in app.py.
+  var SCREEN_TOOLS = { 'street-screen': true, 'map-screen': true };
+  // Map view sheets after the first, as marker_settings.py names them.
+  var EXTRA_MAP_SHEET = /^map-screen-\d{1,2}$/;
+  // Keep in step with MARKER_SLOT_DEFAULTS in backend/marker_settings.py.
   var DEFAULT_SLOTS = [
     { key: 'draw-1', group: 'Multi-state pointer', tool: 'draw', label: 'Pointer 1', tagId: 11, tagId2: null, selectorTagId: 20, selectorTagId2: 19, color: '#ff5b5b', offsetCm: DEFAULT_DRAW_OFFSET_CM },
     { key: 'draw-2', group: 'Multi-state pointer', tool: 'draw', label: 'Pointer 2', tagId: 12, tagId2: null, selectorTagId: null, selectorTagId2: null, color: '#3b82f6', offsetCm: DEFAULT_DRAW_OFFSET_CM },
     { key: 'draw-3', group: 'Multi-state pointer', tool: 'draw', label: 'Pointer 3', tagId: 13, tagId2: null, selectorTagId: null, selectorTagId2: null, color: '#22cc66', offsetCm: DEFAULT_DRAW_OFFSET_CM },
     { key: 'draw-4', group: 'Multi-state pointer', tool: 'draw', label: 'Pointer 4', tagId: 14, tagId2: null, selectorTagId: null, selectorTagId2: null, color: '#111111', offsetCm: DEFAULT_DRAW_OFFSET_CM },
     { key: 'pointer-single-1', group: 'Single-state pointer', tool: 'street-view', label: 'Street view', tagId: 23, color: '' },
-    { key: 'street-screen', group: 'Street view screen', tool: 'street-screen', label: 'Screen', tagId: null, frameTagIds: [2, 3, 4, 5, 6, 7, 8], color: '' },
+    { key: 'street-screen', group: 'Screens', tool: 'street-screen', label: 'Street view', tagId: null, frameTagIds: [2, 3, 4, 5, 6, 7, 8], color: '' },
+    { key: 'map-screen', group: 'Screens', tool: 'map-screen', label: 'Map view', tagId: null, frameTagIds: [15, 16, 17, 18, 24, 25, 26], color: '' },
     { key: 'route-origin', group: 'Shortest-path', tool: 'route-origin', label: 'Route start', tagId: 9, color: '' },
     { key: 'route-dest', group: 'Shortest-path', tool: 'route-dest', label: 'Route end', tagId: 10, color: '' },
     { key: 'isochrone-5', group: 'Analysis', tool: 'isochrone', label: 'Isochrone 5 min', tagId: 38, color: '', minutes: 5 },
@@ -102,7 +106,7 @@
       normalized.selectorTagId2 = normalizeTagId(own(src, base, 'selectorTagId2'));
       normalized.offsetCm = normalizeOffsetCm(own(src, base, 'offsetCm'), base.offsetCm);
     }
-    if (tool === 'street-screen') {
+    if (SCREEN_TOOLS[tool]) {
       normalized.tagId = null;
       normalized.frameTagIds = normalizeFrameTagIds(src.frameTagIds, base.frameTagIds);
     }
@@ -127,6 +131,14 @@
       if (incoming.length && !incomingByKey[defaultSlot.key] && REMOVABLE_TOOLS[defaultSlot.tool]) continue;
       slots.push(normalizeSlot(incomingByKey[defaultSlot.key], defaultSlot));
     }
+    // Extra map view sheets ("map-screen-<n>", already ordered by the server) follow the first one.
+    var sheetsAt = slots.findIndex(function (s) { return s.key === 'map-screen'; }) + 1 || slots.length;
+    var extraSheets = incoming.filter(function (s) {
+      return s && typeof s === 'object' && EXTRA_MAP_SHEET.test(String(s.key || '')) && String(s.tool || '').trim() === 'map-screen';
+    }).map(function (s) {
+      return normalizeSlot(s, { key: String(s.key), group: 'Screens', tool: 'map-screen', label: 'Map view', tagId: null, frameTagIds: [], color: '' });
+    });
+    Array.prototype.splice.apply(slots, [sheetsAt, 0].concat(extraSheets));
     for (var j = 0; j < incoming.length; j++) {
       var slot = incoming[j];
       if (!slot || typeof slot !== 'object') continue;
@@ -136,7 +148,7 @@
       if (tool !== 'draw') continue;
       slots.push(normalizeSlot(slot, {
         key: key,
-        group: 'Multi-state pointer',
+        group: 'Pointer',
         tool: tool,
         label: 'Pointer',
         tagId: null,
@@ -178,10 +190,10 @@
     markerSettings.slots.forEach(function (slot) {
       var assignment = assignmentFromSlot(slot);
       if (assignment) out[String(assignment.tagId)] = assignment;
-      // The screen's border tags are claimed too, so nothing else reads them.
-      if (slot.tool === 'street-screen') {
+      // The screens' border tags are claimed too, so nothing else reads them.
+      if (SCREEN_TOOLS[slot.tool]) {
         normalizeFrameTagIds(slot.frameTagIds).forEach(function (id) {
-          if (id !== null) out[String(id)] = { tagId: id, tool: 'street-screen', colorName: '', color: '' };
+          if (id !== null) out[String(id)] = { tagId: id, tool: slot.tool, colorName: '', color: '' };
         });
       }
       // The pen's second tag draws in the same colour.
@@ -268,7 +280,22 @@
     return normalizeSettings(markerSettings);
   }
 
+  // The map view sheets in Marker Setting order: [{ key, label, tagIds }]. A sheet needs two of
+  // its border tags before the map page can find it.
+  function getMapSheets() {
+    return markerSettings.slots
+      .filter(function (slot) { return slot.tool === 'map-screen'; })
+      .map(function (slot) {
+        return {
+          key: slot.key,
+          label: slot.label || 'Map view',
+          tagIds: normalizeFrameTagIds(slot.frameTagIds).filter(function (id) { return id !== null; })
+        };
+      });
+  }
+
   window.CompactTagAssignments = {
+    getMapSheets: getMapSheets,
     getAssignment: getAssignment,
     getDrawColor: getDrawColor,
     getToolTagIds: getToolTagIds,

@@ -1,7 +1,6 @@
 (function () {
   function createCustomMapObjects(options) {
     var map = options.map;
-    var onStatusChange = options.onStatusChange;
 
     var MODE_LABELS = {
       transportation: 'Transportation',
@@ -18,13 +17,8 @@
 
     var items = [];
     var markersById = {};
-    // 'expanded' shows the objects, 'hidden' hides them.
+    // 'expanded' shows the objects, 'hidden' hides them (a workshop part's data layers decide).
     var presentationMode = 'hidden';
-    var modeVisibility = {
-      transportation: true,
-      landmark: true,
-      amenities: true
-    };
 
     function makeId() {
       return 'custom_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
@@ -91,7 +85,7 @@
     }
 
     function applyMarkerState(item) {
-      var visible = modeVisibility[item.mode] && presentationMode !== 'hidden';
+      var visible = presentationMode !== 'hidden';
       markersById[item.id].getElement().style.display = visible ? '' : 'none';
     }
 
@@ -112,7 +106,7 @@
       return el;
     }
 
-    function persist(successNote) {
+    function persist() {
       fetch('/api/custom-objects', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -120,13 +114,9 @@
       })
         .then(function (res) {
           if (!res.ok) throw new Error('save_failed');
-          return res.json();
         })
-        .then(function () {
-          onStatusChange(successNote);
-        })
-        .catch(function () {
-          onStatusChange('Failed to save custom objects');
+        .catch(function (err) {
+          console.warn('[custom objects] save failed:', err);
         });
     }
 
@@ -144,7 +134,7 @@
         item.lng = Number(lngLat.lng);
         item.lat = Number(lngLat.lat);
         markerEl.classList.remove('dragging');
-        persist('Custom object saved');
+        persist();
       });
       markerEl.addEventListener('contextmenu', function (event) {
         event.preventDefault();
@@ -161,26 +151,13 @@
       markersById[id].remove();
       delete markersById[id];
       items = remaining;
-      persist('Custom object deleted');
+      persist();
     }
 
     function clear() {
       items.forEach(function (item) { markersById[item.id].remove(); });
       items = [];
       markersById = {};
-    }
-
-    function toggleMode(mode) {
-      var key = normalizeMode(mode);
-      modeVisibility[key] = !modeVisibility[key];
-      items.forEach(function (item) {
-        if (item.mode === key) applyMarkerState(item);
-      });
-      return modeVisibility[key];
-    }
-
-    function isModeVisible(mode) {
-      return !!modeVisibility[normalizeMode(mode)];
     }
 
     function setPresentationMode(mode) {
@@ -205,17 +182,13 @@
           });
         })
         .catch(function (err) {
-          onStatusChange('Failed to load custom objects');
-          throw err;
+          console.warn('[custom objects] load failed:', err);
         });
     }
 
     return {
-      isModeVisible: isModeVisible,
       loadFromBackend: loadFromBackend,
-      setPresentationMode: setPresentationMode,
-      getPresentationMode: function () { return presentationMode; },
-      toggleMode: toggleMode
+      setPresentationMode: setPresentationMode
     };
   }
 

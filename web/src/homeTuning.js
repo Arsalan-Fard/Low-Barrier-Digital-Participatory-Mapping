@@ -14,11 +14,14 @@
   var tuningBuilt = false;
   var cameraControlsBuilt = false;
 
-  function groupTitle(text) {
-    var el = document.createElement('div');
-    el.className = 'tune-group';
-    el.textContent = text;
-    return el;
+  // A setting's name, then which way helps ("higher = ...") in smaller text beside it.
+  function setLabel(el, text, hint) {
+    el.appendChild(document.createTextNode(text));
+    if (!hint) return;
+    var span = document.createElement('span');
+    span.className = 'tune-hint';
+    span.textContent = hint;
+    el.appendChild(span);
   }
 
   function checkboxRow(labelText, checked, onChange) {
@@ -33,13 +36,13 @@
     return wrap;
   }
 
-  function sliderRow(c, onCommit, defaultText) {
+  function sliderRow(c, onCommit) {
     var row = document.createElement('div');
     row.className = 'tune-row';
 
     var label = document.createElement('label');
     label.className = 'tune-row__label';
-    label.textContent = c.label;
+    setLabel(label, c.label, c.hint);
 
     var val = document.createElement('span');
     val.className = 'tune-row__val';
@@ -56,12 +59,6 @@
     row.appendChild(label);
     row.appendChild(val);
     row.appendChild(slider);
-    if (defaultText) {
-      var def = document.createElement('span');
-      def.className = 'tune-row__def';
-      def.textContent = defaultText;
-      row.appendChild(def);
-    }
 
     var timer = null;
     slider.addEventListener('input', function () {
@@ -90,19 +87,13 @@
       .then(function (data) {
         if (!data || !Array.isArray(data.controls)) return;
         arucoTuningEl.innerHTML = '';
-        var heading = 'Tag detection';
-        if (data.activeBackend && data.activeBackend !== 'aruco') {
-          heading += ' (inactive, detector is ' + data.activeBackend + ')';
-        }
-        arucoTuningEl.appendChild(groupTitle(heading));
         data.controls.forEach(function (c) {
-          arucoTuningEl.appendChild(sliderRow(c, function (v) { putOne(c.key, v); }, 'OpenCV default ' + c.default));
+          arucoTuningEl.appendChild(sliderRow(c, function (v) { putOne(c.key, v); }));
         });
 
         // Upscaling rejected tag-shaped regions rescues small or distant tags
         // but is costly, so it has its own toggle.
         if (Array.isArray(data.upscale)) {
-          arucoTuningEl.appendChild(groupTitle('Rescue distant tags'));
           arucoTuningEl.appendChild(checkboxRow('Upscale small regions (slower)', !!data.upscaleEnabled, function (v) {
             putTuning({ upEnabled: v });
           }));
@@ -110,6 +101,11 @@
             arucoTuningEl.appendChild(sliderRow(c, function (v) { putOne(c.key, v); }));
           });
         }
+
+        // How far a printed sheet's tags must move before the view projected onto it follows.
+        (data.screen || []).forEach(function (c) {
+          arucoTuningEl.appendChild(sliderRow(c, function (v) { putOne(c.key, v); }));
+        });
         tuningBuilt = true;
       })
       .catch(function () { });
@@ -122,8 +118,6 @@
         if (!data || !data.ok || !Array.isArray(data.controls)) return;
         cameraControlsEl.innerHTML = '';
         if (data.kind === 'none') return;
-        cameraControlsEl.appendChild(
-          groupTitle('Camera (' + (data.kind === 'ip' ? 'phone' : 'webcam') + ')'));
 
         function putControl(name, value) {
           fetch('/api/camera/control', {
@@ -133,14 +127,22 @@
           }).catch(function () { });
         }
 
-        // Setting exposure or focus turns its auto mode off on the backend, so
-        // untick the matching box to agree.
+        // The boxes follow what the backend does: setting exposure or focus turns its auto mode off,
+        // Smart exposure turns the phone's own Auto exposure off, and setting the exposure by hand
+        // (Auto exposure or the slider) turns Smart exposure off.
         var autoCbByKey = {};
         var pairedAuto = { exposure: 'exposureAuto', focus: 'focusAuto' };
+        function untick(key) {
+          if (autoCbByKey[key]) autoCbByKey[key].checked = false;
+        }
 
         data.controls.forEach(function (c) {
           if (c.type === 'toggle') {
-            var wrap = checkboxRow(c.label, Number(c.value) !== 0, function (v) { putControl(c.key, v); });
+            var wrap = checkboxRow(c.label, Number(c.value) !== 0, function (v) {
+              if (c.key === 'smartExposure' && v) untick('exposureAuto');
+              if (c.key === 'exposureAuto') untick('smartExposure');
+              putControl(c.key, v);
+            });
             autoCbByKey[c.key] = wrap.querySelector('input');
             cameraControlsEl.appendChild(wrap);
             return;
@@ -150,7 +152,7 @@
             row.className = 'tune-row';
             var label = document.createElement('label');
             label.className = 'tune-row__label';
-            label.textContent = c.label;
+            setLabel(label, c.label, c.hint);
             row.appendChild(label);
             row.appendChild(document.createElement('span'));
             var sel = document.createElement('select');
@@ -168,8 +170,8 @@
             return;
           }
           cameraControlsEl.appendChild(sliderRow(c, function (v) {
-            var ak = pairedAuto[c.key];
-            if (ak && autoCbByKey[ak]) autoCbByKey[ak].checked = false;
+            if (pairedAuto[c.key]) untick(pairedAuto[c.key]);
+            if (c.key === 'exposure') untick('smartExposure');
             putControl(c.key, v);
           }));
         });

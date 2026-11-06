@@ -15,41 +15,18 @@ import webbrowser
 
 from flask import Flask, jsonify
 
-from backend import (camera, config, detection, floorplan, map_sheets, markers, pages, recorder, sessions,
-                     shutdown_event, street_network, street_screen, surface, workshops)
+from backend import (camera, config, detection, floorplan, map_sheets, markers, pages, paper_watch, recorder,
+                     sessions, shutdown_event, street_network, street_screen, surface, workshops)
+from digitizer import server as digitizer
 
 app = Flask(__name__, static_folder=str(config.WEB_DIR), static_url_path="")
-for feature in (pages, camera, detection, surface, markers, street_screen, map_sheets, floorplan, sessions,
-                workshops, recorder, street_network):
+for feature in (pages, camera, detection, surface, markers, street_screen, paper_watch, map_sheets, floorplan,
+                sessions, workshops, recorder, street_network):
     app.register_blueprint(feature.bp)
-
-# The Digitizer (digitizer/, a package that also runs on its own) is mounted at /digitizer/.
-# Without torch and transformers it digitises sheets without its VLM.
-try:
-    from digitizer.server import bp as digitizer_blueprint
-    DIGITIZER_UNAVAILABLE = ""
-except ImportError as exc:
-    digitizer_blueprint = None
-    DIGITIZER_UNAVAILABLE = f"{type(exc).__name__}: {exc}"
+# The Digitizer (digitizer/): photographed paper sheets to data, reviewed by hand.
+app.register_blueprint(digitizer.bp, url_prefix="/digitizer")
 
 kiosk_browser_process = None
-
-
-def configure_digitizer():
-    """Point the Digitizer at this app's folders; its "Move to Results" writes into SESSIONS_DIR."""
-    app.config.update(DIGITIZER_RUNS=str(config.DIGITIZER_RUNS_DIR), DIGITIZER_SESSIONS=str(config.DIGITIZER_SESSIONS_DIR),
-                      DIGITIZER_HOME="/home", DIGITIZER_RESULTS=str(config.SESSIONS_DIR))
-    os.environ["DIGITIZER_SHEETS"] = str(config.MAP_SHEETS_DIR)
-
-
-configure_digitizer()
-if digitizer_blueprint is not None:
-    app.register_blueprint(digitizer_blueprint, url_prefix="/digitizer")
-else:
-    @app.route("/digitizer/")
-    def digitizer_unavailable():
-        return (f"<p>The Digitizer could not be loaded ({DIGITIZER_UNAVAILABLE}). Install its packages: "
-                "<code>pip install -r digitizer/requirements.txt</code>. <a href='/home'>Back</a></p>", 503)
 
 
 @app.route("/api/shutdown", methods=["POST"])
@@ -120,8 +97,8 @@ def find_available_port(host, preferred_port, search_limit=100):
     return try_bind(0)
 
 
-def open_browser_when_ready(host, port, kiosk):
-    """Open the app once the server accepts connections; kiosk = Chrome/Edge fullscreen app window."""
+def open_browser_when_ready(host, port):
+    """Open the app in a Chrome/Edge fullscreen app window once the server accepts connections."""
     target_host = "127.0.0.1" if host in ("0.0.0.0", "", None) else host
     url = f"http://{target_host}:{port}/"
 
@@ -136,17 +113,16 @@ def open_browser_when_ready(host, port, kiosk):
                 time.sleep(0.1)
         if shutdown_event.is_set():
             return
-        if kiosk:
-            browser = find_chromium_browser()
-            if browser:
-                try:
-                    # --app gives a window without tabs or address bar; F11 / Esc still leave fullscreen.
-                    kiosk_browser_process = subprocess.Popen([browser, f"--app={url}", "--start-fullscreen"])
-                    print("[Browser] fullscreen app mode — F11 or Esc to toggle, or use the on-screen Exit button")
-                    return
-                except Exception:
-                    pass
-            print("[Browser] kiosk requested but no Chrome/Edge found — falling back to default browser")
+        browser = find_chromium_browser()
+        if browser:
+            try:
+                # --app gives a window without tabs or address bar; F11 / Esc still leave fullscreen.
+                kiosk_browser_process = subprocess.Popen([browser, f"--app={url}", "--start-fullscreen"])
+                print("[Browser] fullscreen app mode — F11 or Esc to toggle, or use the on-screen Exit button")
+                return
+            except Exception:
+                pass
+        print("[Browser] no Chrome/Edge found — opening the default browser")
         # In a frozen macOS .app the webbrowser module can fail silently; `open` does not.
         if sys.platform == "darwin":
             try:
@@ -163,7 +139,6 @@ def open_browser_when_ready(host, port, kiosk):
 
 
 def parse_args():
-    default_threads = max(1, int(round((os.cpu_count() or 2) / 2.0)))
     parser = argparse.ArgumentParser(description="Digital Mapping Workshop AprilTag backend")
     parser.add_argument("--source", default=None,
                         help="Camera source (0, 1, or URL). If omitted, auto-discovers :8080/video")
@@ -181,54 +156,24 @@ def parse_args():
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=5000,
                         help="Preferred local port. If occupied, the app automatically uses the next available port.")
-    parser.add_argument("--detector", choices=["pupil", "aruco"], default="aruco",
-                        help="Detection backend: 'aruco' (default, OpenCV ArUco) or 'pupil' (pupil_apriltags)")
     parser.add_argument("--apriltag-family", default=None, nargs="+",
                         help="Initial AprilTag family/families. Defaults to the marker settings, whose changes "
                              "then update the detector live.")
-    parser.add_argument("--apriltag-threads", type=int, default=default_threads + 5)
-    parser.add_argument("--apriltag-quad-decimate", type=float, default=1.0)
-    parser.add_argument("--apriltag-quad-sigma", type=float, default=0.0)
-    parser.add_argument("--apriltag-refine-edges", dest="apriltag_refine_edges", action="store_true")
-    parser.add_argument("--no-apriltag-refine-edges", dest="apriltag_refine_edges", action="store_false")
-    parser.add_argument("--apriltag-decode-sharpening", type=float, default=0.25)
     parser.add_argument("--aruco-min-area", type=float, default=200,
-                        help="Minimum tag area in px² for the ArUco backend (filters small false positives)")
-    parser.add_argument("--no-browser", action="store_true",
-                        help="Don't open the app in a browser when the server starts")
-    parser.add_argument("--kiosk", dest="kiosk", action="store_true",
-                        help="Open in Chrome/Edge fullscreen app mode (already the default; kept for compatibility)")
-    parser.add_argument("--windowed", "--no-kiosk", dest="kiosk", action="store_false",
-                        help="Open in a normal browser window instead of the default fullscreen app mode")
-    parser.add_argument("--no-recording-hotkey", action="store_true",
-                        help="Disable the Ctrl+Shift+R backend camera+voice recording hotkey")
-    parser.add_argument("--recording-fps", type=float, default=20.0, help="FPS for backend camera recordings")
-    parser.add_argument("--recording-audio-device", default=None,
-                        help="Microphone device index or name for backend recordings")
-    parser.add_argument("--recording-output", choices=["mp4", "raw"], default="mp4",
-                        help="Backend recording output format. Default: mp4")
-    parser.add_argument("--keep-recording-raw", action="store_true",
-                        help="Keep temporary AVI/WAV streams after successful MP4 creation")
-    parser.add_argument("--recording-segment-minutes", type=float, default=5.0,
-                        help="Rotate backend recording files every N minutes. Default: 5")
-    parser.add_argument("--no-recording-indicator", action="store_true",
-                        help="Disable the small red recording indicator dot")
-    parser.add_argument("--list-audio-devices", action="store_true",
-                        help="Print available microphone input devices and exit")
-    parser.set_defaults(auto_exposure=False, apriltag_refine_edges=True, kiosk=True)
+                        help="Minimum tag area in px² (filters small false positives)")
+    parser.set_defaults(auto_exposure=False)
     return parser.parse_args()
 
 
 def main():
-    configure_digitizer()  # the standalone launcher may have moved the data folders since import
     args = parse_args()
-    if args.list_audio_devices:
-        recorder.print_audio_devices()
-        return
 
     source = camera.parse_source(args.source)
     if source is None:
-        source = camera.discover_ip_camera()
+        try:
+            source = camera.discover_ip_camera()
+        except Exception as exc:  # an odd network must not stop the app; the home page retries
+            print(f"[Camera] Looking for an IP camera failed: {exc}")
         if source is None:
             print("[Camera] No IP camera found on :8080/video — starting without a camera. "
                   "Pass --source 0/1/URL to attach one.")
@@ -238,10 +183,14 @@ def main():
 
     threading.Thread(target=camera.camera_loop, daemon=True).start()
     threading.Thread(target=detection.detector_loop, daemon=True).start()
-    if args.auto_exposure:
-        threading.Thread(target=camera.auto_exposure_loop, daemon=True,
-                         args=(args.auto_exposure_target, args.auto_exposure_floor)).start()
-    recorder.setup_recorder(args)
+    # Photographs the pen drawings on the map view sheets whenever no hand is over them.
+    threading.Thread(target=paper_watch.watch_loop, daemon=True).start()
+    # Smart exposure starts as the command line says; Camera Tuning turns it on and off from there.
+    camera.camera_control_values.update(smartExposure=1 if args.auto_exposure else 0,
+                                        smartTarget=args.auto_exposure_target,
+                                        smartFloor=args.auto_exposure_floor)
+    threading.Thread(target=camera.auto_exposure_loop, daemon=True).start()
+    recorder.setup_recorder()
 
     port = find_available_port(args.host, args.port)
     if port != args.port:
@@ -249,8 +198,7 @@ def main():
     display_host = "127.0.0.1" if args.host in ("0.0.0.0", "", None) else args.host
     print(f"[Backend] http://{display_host}:{port}")
     print(f"[Camera] source: {source if source is not None else '(none)'}")
-    if not args.no_browser:
-        open_browser_when_ready(args.host, port, args.kiosk)
+    open_browser_when_ready(args.host, port)
 
     logging.getLogger("werkzeug").setLevel(logging.ERROR)  # no per-request access log
     try:

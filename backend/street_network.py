@@ -1,4 +1,4 @@
-"""The walking network from OpenStreetMap (OSMnx): fetching it, shortest paths and walking reach."""
+"""The saved walking network (data/osmnx_network.geojson, from OSMnx): shortest paths and walking reach."""
 import json
 import math
 import threading
@@ -13,25 +13,12 @@ from . import config
 bp = Blueprint("street_network", __name__)
 
 network_lock = threading.Lock()
-graph_cache = {"graph": None, "bbox": None}  # the last network fetched, bbox = (min_lng, min_lat, max_lng, max_lat)
+graph_cache = {"graph": None, "bbox": None}  # the saved network, bbox = (min_lng, min_lat, max_lng, max_lat)
 BBOX_MARGIN = 0.0005
 
 
-def _save_network(geojson, bbox, network_type):
-    """Store the network with the bbox that was requested: the streets' own extent is always a little
-    smaller, and a cache that looks smaller than the request would be downloaded again."""
-    try:
-        payload = dict(geojson)
-        payload["bbox"] = [float(v) for v in bbox]
-        payload["networkType"] = str(network_type or "walk")
-        config.OSMNX_NETWORK_FILE.parent.mkdir(exist_ok=True)
-        config.OSMNX_NETWORK_FILE.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass
-
-
 def load_cached_network():
-    """Rebuild the graph from the saved GeoJSON, so routes work after a restart without fetching."""
+    """Rebuild the graph from the saved GeoJSON."""
     if not config.OSMNX_NETWORK_FILE.exists():
         return
     try:
@@ -117,30 +104,6 @@ def _bbox_contains(bbox, lng, lat, margin=BBOX_MARGIN):
     return min_lng - margin <= lng <= max_lng + margin and min_lat - margin <= lat <= max_lat + margin
 
 
-def _graph_to_geojson(graph):
-    features = []
-    for u, v, data in graph.edges(data=True):
-        geometry = data.get("geometry")
-        if geometry is not None:
-            coords = [[float(x), float(y)] for x, y in geometry.coords]
-        else:
-            start = graph.nodes[u]
-            end = graph.nodes[v]
-            coords = [[float(start["x"]), float(start["y"])], [float(end["x"]), float(end["y"])]]
-        try:
-            length = float(data["length"]) if data.get("length") is not None else None
-        except Exception:
-            length = None
-        highway = data.get("highway")
-        features.append({
-            "type": "Feature",
-            "properties": {"u": int(u), "v": int(v), "length": length,
-                           "highway": highway if isinstance(highway, str) else None},
-            "geometry": {"type": "LineString", "coordinates": coords},
-        })
-    return {"type": "FeatureCollection", "features": features}
-
-
 def _cached_graph():
     with network_lock:
         return graph_cache["graph"], graph_cache["bbox"]
@@ -163,45 +126,6 @@ def _best_edge(graph, u, v):
     return min(data.values(), key=lambda edge: edge.get("length", float("inf")))
 
 
-@bp.route("/api/osmnx-fetch", methods=["POST"])
-def api_osmnx_fetch():
-    try:
-        import osmnx as ox
-    except Exception as exc:
-        return jsonify({"ok": False, "error": "osmnx_unavailable", "detail": str(exc)}), 500
-    payload = request.get_json(silent=True) or {}
-    try:
-        bbox = tuple(float(payload[key]) for key in ("minLng", "minLat", "maxLng", "maxLat"))
-    except Exception:
-        return jsonify({"ok": False, "error": "invalid_bbox"}), 400
-    min_lng, min_lat, max_lng, max_lat = bbox
-    if not all(math.isfinite(v) for v in bbox) or min_lng >= max_lng or min_lat >= max_lat:
-        return jsonify({"ok": False, "error": "invalid_bbox"}), 400
-    network_type = str(payload.get("networkType") or "walk").strip() or "walk"
-
-    try:
-        try:
-            graph = ox.graph_from_bbox(bbox=bbox, network_type=network_type, simplify=True)  # osmnx 2.x
-        except TypeError:
-            graph = ox.graph_from_bbox(north=max_lat, south=min_lat, east=max_lng, west=min_lng,
-                                       network_type=network_type, simplify=True)
-    except Exception as exc:
-        return jsonify({"ok": False, "error": "osmnx_fetch_failed", "detail": str(exc)}), 502
-
-    geojson = _graph_to_geojson(graph)
-    _save_network(geojson, bbox, network_type)
-    with network_lock:
-        graph_cache["graph"] = graph
-        graph_cache["bbox"] = bbox
-    return jsonify({
-        "ok": True,
-        "bbox": list(bbox),
-        "nodes": int(graph.number_of_nodes()),
-        "edges": int(graph.number_of_edges()),
-        "geojson": geojson,
-    })
-
-
 @bp.route("/api/osmnx-shortest-path", methods=["POST"])
 def api_osmnx_shortest_path():
     payload = request.get_json(silent=True) or {}
@@ -213,7 +137,7 @@ def api_osmnx_shortest_path():
     graph, bbox = _cached_graph()
     if graph is None:
         return jsonify({"ok": False, "error": "no_graph_cached"}), 409
-    # Both ends must lie in the fetched area; otherwise the page falls back to an online router.
+    # Both ends must lie in the saved network's area; otherwise the page falls back to an online router.
     if not (_bbox_contains(bbox, a_lng, a_lat) and _bbox_contains(bbox, b_lng, b_lat)):
         return jsonify({"ok": False, "error": "out_of_bounds"}), 404
     try:
@@ -265,7 +189,7 @@ def walking_isochrone(lng, lat, minutes, speed_mps):
     graph, bbox = _cached_graph()
     if graph is None:
         return {"ok": False, "error": "no_graph_cached"}, 409
-    # The origin, and a rough circle of the walking range, must fit in the fetched area or the
+    # The origin, and a rough circle of the walking range, must fit in the saved network's area or the
     # polygon would be clipped; the page then falls back to an online service.
     radius_m = minutes * 60.0 * speed_mps
     deg_lat = radius_m / 111000.0

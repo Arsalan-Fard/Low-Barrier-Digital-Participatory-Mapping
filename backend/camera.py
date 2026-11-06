@@ -1,6 +1,7 @@
 """The live camera: finding it, reading frames, exposure, controls and the MJPEG feed."""
 import json
 import socket
+import sys
 import threading
 import time
 import urllib.error
@@ -30,23 +31,37 @@ video_feed_cache = {"seq": -1, "quality": -1, "data": None}
 
 CAMERA_MANUAL_ISO = 100
 CAMERA_FOCUS_AF_MODE = "continuous-video"
+# Camera Tuning's camera controls, in their order on the page. "hint" says which way helps, beside the
+# name; "phone" ones only work on the IP Webcam phone and are not offered for a webcam.
 CAMERA_CONTROLS = {
     "exposureAuto": {"label": "Auto exposure", "type": "toggle", "default": 1},
     # 8 ms looks near-black but gives the decoder crisp, motion-free tag edges under a projector.
-    "exposure": {"label": "Exposure (ms)", "type": "range", "min": 1, "max": 300, "step": 1, "default": 8},
+    "exposure": {"label": "Exposure (ms)", "type": "range", "min": 1, "max": 300, "step": 1, "default": 8,
+                 "hint": "lower = sharper tags, darker picture"},
+    # The app's own exposure (AutoExposure below): keeps the brightest parts just under washing out
+    # while the projector shines on the table, so tag borders stay readable.
+    "smartExposure": {"label": "Smart exposure for the projector", "type": "toggle", "default": 0, "phone": True},
+    "smartTarget": {"label": "Smart: brightest", "type": "range", "min": 150, "max": 250, "step": 5,
+                    "default": 205, "phone": True, "hint": "lower = less glare on tags, darker"},
+    "smartFloor": {"label": "Smart: never darker than", "type": "range", "min": 40, "max": 160, "step": 5,
+                   "default": 100, "phone": True, "hint": "higher = brighter picture, more glare"},
     "focusAuto": {"label": "Autofocus", "type": "toggle", "default": 1},
-    "focus": {"label": "Focus", "type": "range", "min": 0.5, "max": 3, "step": 0.1, "default": 1},
+    "focus": {"label": "Focus", "type": "range", "min": 0.5, "max": 3, "step": 0.1, "default": 1,
+              "hint": "higher = focuses nearer: set until tags look sharp"},
     "resolution": {"label": "Resolution", "type": "select", "default": "1920x1080",
-                   "options": ["640x480", "1280x720", "1920x1080"]},
+                   "options": ["640x480", "1280x720", "1920x1080"], "hint": "higher = smaller tags read, slower"},
 }
 camera_control_values = {key: meta["default"] for key, meta in CAMERA_CONTROLS.items()}
 
 
 def get_ipv4_candidates():
     out = set()
-    for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
-        if ip and not ip.startswith("127."):
-            out.add(ip)
+    try:
+        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+            if ip and not ip.startswith("127."):
+                out.add(ip)
+    except OSError:   # a Mac's own name often does not resolve; the route below still finds its address
+        pass
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.connect(("8.8.8.8", 80))
@@ -86,18 +101,22 @@ def is_tcp_port_open(ip, port, timeout=0.2):
 
 
 def discover_ip_camera(port=8080, path="/video"):
-    """URL of the first IP Webcam phone on the LAN whose stream opens, or None."""
+    """URL of the first IP Webcam phone whose stream opens, or None. A phone on a USB cable whose port
+    is forwarded to this computer (``adb forward tcp:8080 tcp:8080``) is tried first, then the LAN."""
     candidates = lan_neighbours()
-    open_ips = []
+    open_ips = ["127.0.0.1"] if is_tcp_port_open("127.0.0.1", port) else []
     with ThreadPoolExecutor(max_workers=min(64, max(1, len(candidates)))) as pool:
         tasks = {pool.submit(is_tcp_port_open, ip, port): ip for ip in candidates}
         for future in as_completed(tasks):
             if future.result():
                 open_ips.append(tasks[future])
 
+    # A port that takes the connection but sends no video (not a phone, or a stalled one) is given up
+    # after a few seconds instead of holding up the app's start.
+    timeouts = [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 4000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 4000]
     for ip in open_ips:
         source = f"http://{ip}:{port}{path}"
-        cap = cv2.VideoCapture(source)
+        cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG, timeouts)
         ok = cap.isOpened() and cap.read()[0]
         cap.release()
         if ok:
@@ -293,16 +312,22 @@ class AutoExposure:
         self.hold_time = now
 
 
-def auto_exposure_loop(target, floor):
-    """Drive an IP Webcam's exposure from its frames; idles while the source is anything else."""
-    control = AutoExposure(target_hi=target, mid_floor=floor)
+def auto_exposure_loop():
+    """Drive an IP Webcam's exposure from its frames while Smart exposure is on (Camera Tuning, or
+    --auto-exposure); idles while it is off or the source is anything else."""
+    control = AutoExposure()
     last_seq = -1
     while not shutdown_event.is_set():
         base = camera_base_url()
-        if not base:
+        if not base or not camera_control_values.get("smartExposure"):
             control.reset()
             time.sleep(0.5)
             continue
+        target = float(camera_control_values["smartTarget"])
+        floor = float(camera_control_values["smartFloor"])
+        if (target, floor) != (control.target_hi, control.mid_floor):
+            control.target_hi, control.mid_floor = target, floor
+            control.holding = False   # settle again at once, not at the next recheck
         seq, frame = new_frame(last_seq)
         if frame is None:
             time.sleep(0.05)
@@ -375,6 +400,22 @@ def apply_camera_control(name, value):
     except (TypeError, ValueError):
         return False, "invalid_value", sent
 
+    if CAMERA_CONTROLS[name].get("phone"):
+        if not base:
+            return False, "phone_only", sent
+        if name == "smartExposure":
+            on = round(number) != 0
+            camera_control_values[name] = 1 if on else 0
+            if on:   # it sets the phone's exposure itself (auto_exposure_loop)
+                camera_control_values["exposureAuto"] = 0
+            return True, camera_control_values[name], sent
+        meta = CAMERA_CONTROLS[name]
+        camera_control_values[name] = min(meta["max"], max(meta["min"], number))
+        return True, camera_control_values[name], sent
+
+    if name in ("exposureAuto", "exposure"):   # setting the exposure by hand ends Smart exposure
+        camera_control_values["smartExposure"] = 0
+
     if name == "exposureAuto":
         auto = round(number) != 0
         if base:
@@ -444,7 +485,9 @@ def _read_ip_cam_settings():
 
 @bp.route("/api/camera/status")
 def api_camera_status():
-    return jsonify({"ok": True, "connected": capture is not None, "source": camera_source})
+    # mac: the home page's phone guide then shows USB debugging (adb) instead of USB tethering.
+    return jsonify({"ok": True, "connected": capture is not None, "source": camera_source,
+                    "mac": sys.platform == "darwin"})
 
 
 @bp.route("/api/camera/connect", methods=["POST"])
@@ -483,7 +526,9 @@ def api_camera_controls_get():
 
     controls = []
     for key, meta in CAMERA_CONTROLS.items():
-        control = {"key": key, "label": meta["label"], "type": meta["type"],
+        if meta.get("phone") and kind != "ip":
+            continue
+        control = {"key": key, "label": meta["label"], "hint": meta.get("hint", ""), "type": meta["type"],
                    "value": camera_control_values.get(key, meta["default"]), "default": meta["default"]}
         if meta["type"] == "range":
             control.update(min=meta["min"], max=meta["max"], step=meta["step"])

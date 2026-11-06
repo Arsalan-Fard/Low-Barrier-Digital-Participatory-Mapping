@@ -184,60 +184,6 @@ body {
   color: var(--green-dark);
 }
 
-.tip-wrap {
-  position: relative;
-  display: inline-flex;
-}
-
-.tip {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 50;
-  width: 320px;
-  padding: 12px 14px 12px 4px;
-  border-radius: 12px;
-  background: #fff;
-  border: 1px solid var(--line);
-  box-shadow: 0 16px 36px rgba(22, 48, 43, 0.16);
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(-4px);
-  transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
-}
-
-.tip-wrap:hover .tip,
-.tip-wrap:focus-within .tip {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
-}
-
-.tip::before {
-  content: '';
-  position: absolute;
-  top: -6px;
-  left: 24px;
-  width: 11px;
-  height: 11px;
-  background: #fff;
-  border-left: 1px solid var(--line);
-  border-top: 1px solid var(--line);
-  transform: rotate(45deg);
-}
-
-.tip ol {
-  margin: 0;
-  padding-left: 22px;
-  font-size: 13px;
-  line-height: 1.55;
-  color: #35514c;
-}
-
-.tip li {
-  margin-bottom: 2px;
-}
-
 .corner-btn {
   width: 36px;
   height: 36px;
@@ -403,13 +349,161 @@ body {
 }
 
 .view-placeholder {
-  font-size: clamp(19px, 1.55vw, 26px);
-  font-weight: 500;
-  line-height: 1.5;
-  color: var(--muted);
-  padding: 24px;
+  width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 20px 24px;
   text-align: center;
-  max-width: 30em;
+  color: var(--muted);
+}
+
+/* The guide's pictures are sized from the camera view itself (cq units), so they fill it on any screen. */
+#camView {
+  container-type: size;
+}
+
+/* The three steps for connecting a phone, shown in the camera view until a camera is connected. */
+.cam-guide {
+  /* Picture height: what the view's height leaves after the message and captions (~205px), capped
+     so a phone screenshot (about 9:20) still fits its column's width. */
+  --shot-h: clamp(140px, min(100cqh - 205px, ((100cqw - 110px) / 3 - 26px) * 2.2), 680px);
+  list-style: none;
+  margin: 0 auto;
+  padding: 0;
+  display: flex;
+  justify-content: center;
+  gap: clamp(14px, 1.8vw, 28px);
+  max-width: 1150px;
+}
+
+.cam-guide[hidden] {
+  display: none;
+}
+
+.cam-guide li[hidden] {
+  display: none;
+}
+
+/* On a Mac: whether the steps are for an Android phone or an iPhone (home.js). */
+.cam-guide-switch {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin: 0 auto 16px;
+}
+
+.cam-guide-switch[hidden],
+.cam-guide-iphone[hidden] {
+  display: none;
+}
+
+/* The switch above takes room from the pictures. */
+.view-placeholder:has(.cam-guide-switch:not([hidden])) .cam-guide {
+  --shot-h: clamp(140px, min(100cqh - 260px, ((100cqw - 110px) / 3 - 26px) * 2.2), 680px);
+}
+
+/* The iPhone's steps are drawings, not phone screenshots: lower cards, the drawing larger in them,
+   and room for the note under them. (An id, to win over the rule above.) */
+#camGuideIphone .cam-guide {
+  --shot-h: clamp(110px, min(100cqh - 330px, 260px), 260px);
+}
+
+.cam-guide-iphone .cam-guide__art {
+  height: 82%;
+}
+
+.cam-guide-note {
+  margin: 18px auto 0;
+  max-width: 760px;
+  font-size: clamp(13px, 0.95vw, 15px);
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.cam-guide li {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* The white card holds only the picture; the caption sits under it. */
+.cam-guide__card {
+  height: calc(var(--shot-h) + 26px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.cam-guide__shot {
+  height: 100%;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.cam-guide__art {
+  height: 55%;
+  width: auto;
+  max-width: 100%;
+  color: var(--green-dark);
+}
+
+/* A drawn phone screen: as tall as the screenshots beside it. */
+.cam-guide__art--phone {
+  height: 100%;
+}
+
+.cam-guide__text {
+  margin: 0;
+  font-size: clamp(15px, 1.15vw, 19px);
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.cam-guide__num {
+  display: inline-grid;
+  place-items: center;
+  width: 1.6em;
+  height: 1.6em;
+  margin-right: 0.45em;
+  border-radius: 50%;
+  background: var(--green);
+  color: #fff;
+  font-size: 0.85em;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.cam-guide__app-icon {
+  width: 1.5em;
+  height: 1.5em;
+  margin: 0 0.1em;
+  vertical-align: middle;
+}
+
+/* The camera's connection message, large above the hint (home.js rewrites its class, so no own class). */
+.view-placeholder .status-line {
+  display: block;
+  margin-bottom: 14px;
+  font-size: clamp(24px, 2vw, 34px);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+/* An empty status line takes no room, so the toolbar sits close to the camera view. */
+.status-line:empty {
+  display: none;
 }
 
 #rightCol {
@@ -602,21 +696,6 @@ body {
   padding-right: 4px;
 }
 
-.tune-group {
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  margin: 14px 0 8px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--line);
-}
-
-.tune-group:first-child {
-  margin-top: 0;
-}
-
 .tune-row {
   display: grid;
   grid-template-columns: 1fr 44px;
@@ -629,6 +708,14 @@ body {
   font-size: 12.5px;
   font-weight: 600;
   color: var(--ink);
+}
+
+/* Which way helps, beside a setting's name. */
+.tune-hint {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
 }
 
 .tune-row__val {
@@ -644,12 +731,6 @@ body {
   width: 100%;
   accent-color: var(--green);
   margin: 0;
-}
-
-.tune-row__def {
-  grid-column: 1 / -1;
-  font-size: 11px;
-  color: var(--muted);
 }
 
 .tune-row__select {
@@ -1120,3 +1201,16 @@ body {
     display: block;
   }
 }
+
+/* A page opened from the menu while fullscreen (home.js CompactMenuFrame), over the whole menu. */
+#menuFrame {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  z-index: 2147483000;
+  background: #fff;
+}
+
+body.menu-frame-open { overflow: hidden; }

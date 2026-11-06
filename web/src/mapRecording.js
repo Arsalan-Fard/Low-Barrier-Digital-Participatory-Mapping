@@ -1,135 +1,10 @@
-// Map page: the HUD line and its note, the Light settings panel (CSS filters on
-// #map) and timeline recording with its on-screen toast.
-const hud = document.getElementById('hud');
-const viewFilterPanel = document.getElementById('viewFilterPanel');
-const viewBrightness = document.getElementById('viewBrightness');
-const viewSaturation = document.getElementById('viewSaturation');
-const viewContrast = document.getElementById('viewContrast');
-const viewInvert = document.getElementById('viewInvert');
-const viewSepia = document.getElementById('viewSepia');
-const viewBrightnessValue = document.getElementById('viewBrightnessValue');
-const viewSaturationValue = document.getElementById('viewSaturationValue');
-const viewContrastValue = document.getElementById('viewContrastValue');
-const viewInvertValue = document.getElementById('viewInvertValue');
-const viewSepiaValue = document.getElementById('viewSepiaValue');
-const viewFilterClose = document.getElementById('viewFilterClose');
-const viewFilterReset = document.getElementById('viewFilterReset');
+// Map page: timeline recording (the top bar's Record button), with its on-screen toast and the
+// backend camera + microphone recorder started and stopped alongside it.
 const TIMELINE_SAMPLE_MS = 1000;
 const TIMELINE_MAX_FRAMES = 3600;
 // Autosaving keeps a recording nobody stopped (or a crash) from being lost.
 const TIMELINE_AUTOSAVE_MS = 5000;
-let uiNote = '';
-let hudVisible = true;
-let viewFilterPanelVisible = false;
 let timelineRecording = null;
-
-function setUiNote(text) {
-  uiNote = String(text || '');
-}
-
-function setHudVisible(visible) {
-  hudVisible = !!visible;
-  hud.classList.toggle('hidden', !hudVisible);
-  return hudVisible;
-}
-
-function toggleHudVisible() {
-  return setHudVisible(!hudVisible);
-}
-
-function cornersSetCount(corners) {
-  if (!Array.isArray(corners)) return 0;
-  let n = 0;
-  for (let i = 0; i < corners.length; i++) {
-    if (overlays.isFinitePoint(corners[i])) n++;
-  }
-  return n;
-}
-
-function refreshHud() {
-  const mode = calibration.isActive() ? 'ON' : 'OFF';
-  const mask = overlays.isMaskEnabled() ? 'ON' : 'OFF';
-  const roads = roadSnapping.isRoadsVisible() ? 'ON' : 'OFF';
-  const debug = debugMarkersVisible ? 'ON' : 'OFF';
-  const timeline = timelineRecording ? 'ON' : 'OFF';
-  const transport = customMapObjects.isModeVisible('transportation') ? 'ON' : 'OFF';
-  const landmark = customMapObjects.isModeVisible('landmark') ? 'ON' : 'OFF';
-  const amenities = customMapObjects.isModeVisible('amenities') ? 'ON' : 'OFF';
-  const parts = [
-    `Source: ${lastSource}`,
-    `frame: ${lastFrame.width}x${lastFrame.height}`,
-    `corners: ${cornersSetCount(lastCorners)}/4`,
-    `tags: ${lastTags.length}`,
-    `theme: ${activeMapTheme.toUpperCase()}`,
-    `C: ${mode}`,
-    `mask(T): ${mask}`,
-    `roads(O): ${roads}`,
-    `tags(D): ${debug}`,
-    `timeline(Y): ${timeline}`,
-    'N: object',
-    `1 transport: ${transport}`,
-    `2 landmark: ${landmark}`,
-    `3 amenities: ${amenities}`,
-    'L: theme', 'V: view filters', 'H: HUD', 'X: clear', 'S: save'
-  ];
-  if (isFloorplanMode) parts.push('I: isovist');
-  parts.push(calibration.getHint(), 'B: main menu');
-  const note = uiNote || calibration.getNote();
-  if (note) parts.push(note);
-  hud.textContent = parts.join(' | ');
-}
-
-function formatFilterValue(value) {
-  return Number(value).toFixed(2) + 'x';
-}
-
-function formatPercentValue(value) {
-  return Math.round(Number(value) * 100) + '%';
-}
-
-function applyViewFilters() {
-  const brightness = Number(viewBrightness.value || 1);
-  const saturation = Number(viewSaturation.value || 1);
-  const contrast = Number(viewContrast.value || 1);
-  const invert = Number(viewInvert.value || 0);
-  const sepia = Number(viewSepia.value || 0);
-  const isDefault = brightness === 1 && saturation === 1 && contrast === 1 && invert === 0 && sepia === 0;
-  const filter = `brightness(${brightness}) saturate(${saturation}) contrast(${contrast}) invert(${invert}) sepia(${sepia})`;
-  // #map only: a filter on #main_container (the Maptastic target) breaks its position:fixed and loops map resizes.
-  document.getElementById('map').style.filter = isDefault ? '' : filter;
-  viewBrightnessValue.textContent = formatFilterValue(brightness);
-  viewSaturationValue.textContent = formatFilterValue(saturation);
-  viewContrastValue.textContent = formatFilterValue(contrast);
-  viewInvertValue.textContent = formatPercentValue(invert);
-  viewSepiaValue.textContent = formatPercentValue(sepia);
-}
-
-function setViewFilterPanelVisible(visible) {
-  viewFilterPanelVisible = !!visible;
-  viewFilterPanel.classList.toggle('hidden', !viewFilterPanelVisible);
-  return viewFilterPanelVisible;
-}
-
-function toggleViewFilterPanelVisible() {
-  return setViewFilterPanelVisible(!viewFilterPanelVisible);
-}
-
-function resetViewFilters() {
-  viewBrightness.value = '1';
-  viewSaturation.value = '1';
-  viewContrast.value = '1';
-  viewInvert.value = '0';
-  viewSepia.value = '0';
-  applyViewFilters();
-}
-
-function watchViewFilterSlider(slider, label, format) {
-  slider.addEventListener('input', function () {
-    applyViewFilters();
-    setUiNote(label + ' ' + format(slider.value));
-    refreshHud();
-  });
-}
 
 function collectTimelineState(commitActive) {
   var state = dataExport.collectAll({ commitActive: !!commitActive });
@@ -185,16 +60,16 @@ function autosaveTimelineRecording() {
   dataExport.saveTimelineToBackend(payload, function () {});
 }
 
-// A banner that stays visible with the HUD hidden. kind 'rec' stays up; 'done' and 'err' fade.
+// A banner over the page. kind 'rec' stays up; 'done' and 'err' fade.
 function showRecordToast(html, kind) {
   var el = document.getElementById('recordToast');
   if (!el) {
     el = document.createElement('div');
     el.id = 'recordToast';
     el.style.cssText = 'position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:99999;'
-      + 'background:rgba(17,22,29,.96);color:#fff;border:2px solid #2a323d;border-radius:11px;'
+      + 'background:#fff;color:#16302b;border:2px solid #cfe6e0;border-radius:11px;'
       + 'padding:10px 18px;font:600 14px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;'
-      + 'box-shadow:0 8px 30px rgba(0,0,0,.5);max-width:80vw;text-align:center;'
+      + 'box-shadow:0 8px 30px rgba(22,48,43,.25);max-width:80vw;text-align:center;'
       + 'transition:opacity .25s;pointer-events:none;';
     document.body.appendChild(el);
   }
@@ -217,7 +92,7 @@ function toastDetail(text) {
   return '<br><span style="font-weight:400;font-size:12px;opacity:.85">' + text + '</span>';
 }
 
-// The backend camera + mic recorder, the same one Ctrl+Shift+R drives.
+// The backend camera + mic recorder.
 function recordCamera(action, callback) {
   fetch('/api/record', {
     method: 'POST',
@@ -249,8 +124,6 @@ function startTimelineRecording() {
   }, TIMELINE_SAMPLE_MS);
   autosaveTimelineRecording();
   timelineRecording.autosaveTimer = window.setInterval(autosaveTimelineRecording, TIMELINE_AUTOSAVE_MS);
-  setUiNote('Timeline recording ON');
-  refreshHud();
   showRecordToast('&#9679; Starting&hellip;', 'rec');
   recordCamera('start', function (err, j) {
     if (!err && j && (j.ok || j.error === 'already_recording')) {
@@ -272,9 +145,7 @@ function stopTimelineRecording() {
   timelineRecording = null;
 
   var payload = buildTimelinePayload(recorder, true);
-  setUiNote('Saving timeline...');
   showRecordToast('Saving&hellip;', 'done');
-  refreshHud();
 
   // Report once both the map timeline and the camera recorder have answered.
   var res = { tl: null, cam: null };
@@ -286,9 +157,7 @@ function stopTimelineRecording() {
   }
   dataExport.saveTimelineToBackend(payload, function (err, result) {
     var ok = !err && !!result && result.ok === true;
-    setUiNote(ok ? ('Timeline saved: ' + result.filename) : 'Timeline save failed');
     res.tl = ok ? 'map timeline saved' : 'map timeline FAILED';
-    refreshHud();
     maybeReport();
   });
   recordCamera('stop', function (err, j) {

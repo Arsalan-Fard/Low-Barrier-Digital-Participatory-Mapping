@@ -1,13 +1,16 @@
-// The street view screen: a printed A3 sheet with AprilTags round its border. While the
-// camera sees the sheet on the table, the page's street view inset is warped into the
-// sheet's white inside; the tag layout comes from /api/street-screen/frame.
+// A printed screen: an A3 sheet with AprilTags round its border. While the camera sees the
+// sheet on the table, an inset of the page is warped into the sheet's white inside. One per
+// sheet, each with its own tags: the street view (/api/street-screen/frame) and each map view
+// sheet (/api/map-screen/frame, with ?sheet=<key> for all but the first).
 (function () {
   var MIN_TAGS = 2;          // one tag extrapolates ~20x its own size to the far corner, and jitters to match
   var HOLD_MS = 1800;        // keep the last pose this long once the sheet is lost
-  var SMOOTH = 0.4;          // per-frame blend toward the freshly fitted quad
-  var STILL_PX = 1.5;        // a corner has to move this far before the screen is redrawn
+  var SMOOTH = 0.4;          // per-frame ease of the drawn quad toward the pose it follows
+  var SETTLE_FRAMES = 8;     // once the sheet stops, this many fits are averaged into its resting pose
   var VIEW_W = 960;          // the inset's own width before it is warped onto the sheet
-  var SVG_NS = 'http://www.w3.org/2000/svg';
+  // How far, on average, the sheet's tags must move (map container px) before the view follows
+  // them; smaller shifts are taken as detection jitter. Camera Tuning sets it through /api/tags.
+  var jitterPx = 3;
 
   // Gaussian elimination with partial pivoting; null when singular.
   function solve(M, r) {
@@ -77,13 +80,15 @@
 
   // The sheet's pose from the border tags in view: each seen tag pairs its four corners with
   // where they were printed. toPx turns a surface uv into a pixel of the map container.
-  // Returns { quad, cells }, or null while fewer than MIN_TAGS border tags are seen.
+  // Returns { quad, centers: {tag id: [x, y]}, count }, or null while fewer than MIN_TAGS
+  // border tags are seen.
   function sheetPose(layout, tags, toPx) {
     var byId = {};
     tags.forEach(function (tag) {
       if (Array.isArray(tag.uvCorners) && tag.uvCorners.length === 4) byId[tag.id] = tag;
     });
     var pairs = [];
+    var centers = {};
     var seen = 0;
     layout.tags.forEach(function (tag) {
       var live = byId[tag.id];
@@ -97,6 +102,9 @@
       if (!ok) return;
       seen += 1;
       Array.prototype.push.apply(pairs, mine);
+      var mid = toPx((mine[0].u + mine[1].u + mine[2].u + mine[3].u) / 4,
+                     (mine[0].v + mine[1].v + mine[2].v + mine[3].v) / 4);
+      centers[tag.id] = [mid.x, mid.y];
     });
     if (seen < MIN_TAGS) return null;
     var H = homography(pairs, 100);
@@ -107,14 +115,10 @@
       return [px.x, px.y];
     }
     var I = layout.interiorMm;
-    // Every cell, seen or not, so a tag the camera has lost is still kept dark.
-    var half = (layout.cellMm || layout.borderMm) / 2;
     return {
       quad: [toScreen(I[0], I[1]), toScreen(I[2], I[1]), toScreen(I[2], I[3]), toScreen(I[0], I[3])],
-      cells: layout.tags.map(function (tag) {
-        return [toScreen(tag.cx - half, tag.cy - half), toScreen(tag.cx + half, tag.cy - half),
-                toScreen(tag.cx + half, tag.cy + half), toScreen(tag.cx - half, tag.cy + half)];
-      })
+      centers: centers,
+      count: seen
     };
   }
 
@@ -132,52 +136,80 @@
       .map(function (value) { return Number(value.toFixed(8)); }).join(',') + ')';
   }
 
-  function moved(old, fresh, byPx) {
-    if (!old) return true;
-    return fresh.some(function (point, i) {
-      return Math.hypot(point[0] - old[i][0], point[1] - old[i][1]) >= byPx;
+  // How far the tags seen in both sets moved, on average; Infinity when none is in both.
+  function meanShift(from, to) {
+    var sum = 0;
+    var n = 0;
+    Object.keys(to).forEach(function (id) {
+      var a = from[id];
+      if (!a) return;
+      sum += Math.hypot(to[id][0] - a[0], to[id][1] - a[1]);
+      n += 1;
+    });
+    return n ? sum / n : Infinity;
+  }
+
+  // One SMOOTH step of the drawn quad toward the target, landing on it once within a tenth of a pixel.
+  function ease(old, target) {
+    if (!old) return target;
+    var near = true;
+    var next = target.map(function (point, i) {
+      var dx = point[0] - old[i][0];
+      var dy = point[1] - old[i][1];
+      if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) near = false;
+      return [old[i][0] + dx * SMOOTH, old[i][1] + dy * SMOOTH];
+    });
+    return near ? target : next;
+  }
+
+  // Running sums of the fits made while the sheet rests after a move.
+  function startSettle(pose) {
+    var settle = { n: 0, quad: [[0, 0], [0, 0], [0, 0], [0, 0]], centers: {} };
+    addToSettle(settle, pose);
+    return settle;
+  }
+
+  function addToSettle(settle, pose) {
+    settle.n += 1;
+    pose.quad.forEach(function (point, i) {
+      settle.quad[i][0] += point[0];
+      settle.quad[i][1] += point[1];
+    });
+    Object.keys(pose.centers).forEach(function (id) {
+      var sum = settle.centers[id] || (settle.centers[id] = [0, 0, 0]);
+      sum[0] += pose.centers[id][0];
+      sum[1] += pose.centers[id][1];
+      sum[2] += 1;
     });
   }
 
-  function blend(old, fresh) {
-    if (!old) return fresh;
-    return fresh.map(function (point, i) {
-      return [old[i][0] + (point[0] - old[i][0]) * SMOOTH,
-              old[i][1] + (point[1] - old[i][1]) * SMOOTH];
-    });
-  }
-
-  function createStreetViewScreen(options) {
+  function createPrintedScreen(options) {
     var insetEl = options.insetEl;
     var containerEl = options.containerEl;
     var onModeChange = options.onModeChange;
 
     var layout = null;
-    var quad = null; // the sheet's inside, four container pixels
-    var cellQuads = null; // one four-point quad per tag cell
+    var quad = null;    // the sheet's inside as drawn, four container pixels
+    var target = null;  // the pose the drawn quad eases toward
+    var anchor = null;  // the tag centres target was fitted from; the tags must move away from these
+    var anchorCount = 0;
+    var settle = null;  // sums of the fits since the last move, until SETTLE_FRAMES of them
     var lastSeen = 0;
+    var seenTags = 0; // of this sheet's tags, how many the last frame saw
     var active = false;
     var appliedTransform = '';
 
     // Shown in the sheet while there is no street view to show in it.
     var noteEl = document.createElement('div');
-    noteEl.className = 'street-screen-note';
+    noteEl.className = 'printed-screen-note';
     noteEl.hidden = true;
-    noteEl.textContent = 'Place the street view pointer on the map';
+    noteEl.textContent = options.noteText;
     containerEl.appendChild(noteEl);
 
-    // The tag cells stand into the inside, so the view would land on them; these black
-    // polygons above it keep every printed tag dark for the camera under the projector.
-    var cellsEl = document.createElementNS(SVG_NS, 'svg');
-    cellsEl.setAttribute('class', 'street-screen-cells');
-    cellsEl.setAttribute('aria-hidden', 'true');
-    cellsEl.style.display = 'none';
-    containerEl.appendChild(cellsEl);
-
-    fetch('/api/street-screen/frame', { cache: 'no-store' })
+    fetch(options.frameUrl, { cache: 'no-store' })
       .then(function (response) { return response.json(); })
       .then(function (data) {
-        // Not ok just means no screen is set up on the Marker Setting page.
+        // Not ok just means this screen is not set up on the Marker Setting page.
         if (data && data.ok && Array.isArray(data.tags) && data.tags.length >= MIN_TAGS) layout = data;
       })
       .catch(function () {});
@@ -197,15 +229,13 @@
         insetEl.style.height = '';
         appliedTransform = '';
         noteEl.hidden = true;
-        cellsEl.style.display = 'none';
       } else {
         insetEl.style.width = VIEW_W + 'px';
         insetEl.style.height = viewHeight() + 'px';
         noteEl.style.width = VIEW_W + 'px';
         noteEl.style.height = viewHeight() + 'px';
-        cellsEl.style.display = '';
       }
-      // The panorama measured its host when it was built; the host just changed size.
+      // What the inset holds measured its host when it was built; the host just changed size.
       onModeChange(active);
     }
 
@@ -217,53 +247,82 @@
         noteEl.style.transform = transform;
       }
       noteEl.hidden = insetEl.classList.contains('visible');
-      var nodes = cellsEl.querySelectorAll('polygon');
-      (cellQuads || []).forEach(function (cell, i) {
-        var node = nodes[i];
-        if (!node) {
-          node = document.createElementNS(SVG_NS, 'polygon');
-          cellsEl.appendChild(node);
-        }
-        node.setAttribute('points', cell.map(function (p) {
-          return p[0].toFixed(1) + ',' + p[1].toFixed(1);
-        }).join(' '));
+    }
+
+    function forgetPose() {
+      quad = null;
+      target = null;
+      anchor = null;
+      anchorCount = 0;
+      settle = null;
+    }
+
+    // A fresh fit moves the target only once the tags have moved jitterPx on average, or more of
+    // them are seen than it was fitted from. After a move, the next fits are averaged into the
+    // resting pose, so it does not hang on one noisy frame.
+    function follow(pose) {
+      var shift = anchor ? meanShift(anchor, pose.centers) : Infinity;
+      if (!target || shift >= jitterPx || pose.count > anchorCount) {
+        target = pose.quad;
+        anchor = pose.centers;
+        anchorCount = pose.count;
+        settle = startSettle(pose);
+        return;
+      }
+      if (!settle) return;
+      addToSettle(settle, pose);
+      if (settle.n < SETTLE_FRAMES) return;
+      var n = settle.n;
+      target = settle.quad.map(function (point) { return [point[0] / n, point[1] / n]; });
+      anchor = {};
+      Object.keys(settle.centers).forEach(function (id) {
+        var sum = settle.centers[id];
+        anchor[id] = [sum[0] / sum[2], sum[1] / sum[2]];
       });
+      settle = null;
     }
 
     // Called every frame with every tag the camera sees; toPx maps surface uv to container px.
     function update(tags, toPx, nowMs) {
       if (!layout) return;
+      var ids = {};
+      tags.forEach(function (tag) { ids[tag.id] = true; });
+      seenTags = layout.tags.filter(function (tag) { return ids[tag.id]; }).length;
       var pose = sheetPose(layout, tags, toPx);
       if (pose) {
-        if (moved(quad, pose.quad, STILL_PX)) {
-          quad = blend(quad, pose.quad);
-          cellQuads = pose.cells.map(function (cell, i) {
-            return blend(cellQuads ? cellQuads[i] : null, cell);
-          });
-        }
+        follow(pose);
         lastSeen = nowMs;
       }
-      if (!quad || (nowMs - lastSeen) >= HOLD_MS) {
-        quad = null;
-        cellQuads = null;
+      if (!target || (nowMs - lastSeen) >= HOLD_MS) {
+        forgetPose();
         setActive(false);
         return;
       }
+      quad = ease(quad, target);
       setActive(true);
       render();
     }
 
     // The quads are in container pixels, so a resize drops them and the next frame refits.
-    window.addEventListener('resize', function () {
-      quad = null;
-      cellQuads = null;
-    });
+    window.addEventListener('resize', forgetPose);
 
     return {
       update: update,
-      isActive: function () { return active; }
+      isActive: function () { return active; },
+      visibleTagCount: function () { return layout ? seenTags : 0; },
+      // The inset's size on the sheet, in CSS px before the warp; null until the layout is in.
+      viewSize: function () { return layout ? { width: VIEW_W, height: viewHeight() } : null; },
+      // The text shown while the inset is hidden; null puts the default back.
+      setNote: function (text) { noteEl.textContent = text == null ? options.noteText : String(text); }
     };
   }
 
-  window.CompactStreetViewScreen = { createStreetViewScreen: createStreetViewScreen };
+  window.CompactPrintedScreen = {
+    createPrintedScreen: createPrintedScreen,
+    // Container px the tags must move on average before every sheet's view follows; 0 follows all.
+    setJitterPx: function (px) {
+      var value = Number(px);
+      if (isFinite(value) && value >= 0) jitterPx = value;
+    }
+  };
 })();

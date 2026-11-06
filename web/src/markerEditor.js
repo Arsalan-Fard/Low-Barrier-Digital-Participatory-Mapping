@@ -16,18 +16,43 @@
     slots: [],
     availableFamilies: []
   };
+  var flippedBySlot = {};
   var saveTimer = 0;
   var defaultDrawOffsetCm = 3;
 
-  var GROUP_MULTI = 'Multi-state pointer';
+  var GROUP_MULTI = 'Pointer';
   var GROUP_SINGLE = 'Single-state pointer';
-  var GROUP_SCREEN = 'Street view screen';
-  var GROUP_HINTS = {};
-  GROUP_HINTS[GROUP_MULTI] = 'A folding pen made of two tags. Closed it points; pinched open it acts, and its tool-selection pair switches between draw, move, erase and sticker.';
-  GROUP_HINTS[GROUP_SINGLE] = 'One tag with a single job. Placed on the map it chooses where the street view looks from; turning it turns the view.';
-  GROUP_HINTS[GROUP_SCREEN] = 'A printed A3 sheet with tags round its border. Laid on the table it becomes the screen the street view is shown in. Without it the view floats next to the pointer.';
+  var GROUP_SCREEN = 'Screens';
 
-  // The screen's border slots in frameTagIds order, with each one's place on
+  // Per screen tool: the PDF the server draws for it (a map view sheet other than the first adds
+  // ?sheet=<its key>). The sheet's label is the word in its diagram's middle.
+  var SCREEN_KINDS = {
+    'street-screen': {
+      pdfUrl: '/api/street-screen/frame.pdf',
+      pdfTitle: 'The sheet to print: page 1 is the screen, page 2 the street view pointer'
+    },
+    'map-screen': {
+      pdfUrl: '/api/map-screen/frame.pdf',
+      pdfTitle: 'The sheet to print. It shows the view the Project panel assigned to it, or else follows the street view pointer'
+    }
+  };
+  // Map view sheets: the first is "map-screen", the others "map-screen-<n>" (n is printed on the
+  // sheet, so it stays with it). Keep in step with marker_settings.py.
+  var MAP_SHEET_KEY = 'map-screen';
+  var MAX_MAP_SHEETS = 20;
+
+  function mapSheetNumber(key) {
+    if (key === MAP_SHEET_KEY) return 1;
+    var match = /^map-screen-(\d{1,2})$/.exec(String(key || ''));
+    var n = match ? Number(match[1]) : 0;
+    return n >= 2 && n <= MAX_MAP_SHEETS ? n : null;
+  }
+
+  function mapSheets() {
+    return state.slots.filter(function (slot) { return slot.tool === 'map-screen'; });
+  }
+
+  // A screen's border slots in frameTagIds order, with each one's place on
   // the sheet diagram in percent of its width and height.
   var SCREEN_SLOTS = [
     { slot: 'tl', name: 'Top left', x: 0, y: 0 },
@@ -65,9 +90,11 @@
 
   function cloneSlot(slot) {
     var tool = String(slot.tool || '');
+    var rawGroup = String(slot.group || '');
+    var group = (tool === 'draw' || rawGroup === 'Multi-state pointer') ? GROUP_MULTI : rawGroup;
     var out = {
       key: String(slot.key || ''),
-      group: String(slot.group || ''),
+      group: group,
       tool: tool,
       label: String(slot.label || ''),
       tagId: toId(slot.tagId),
@@ -77,7 +104,7 @@
       color: String(slot.color || ''),
       offsetCm: tool === 'draw' ? normalizeOffsetCm(slot.offsetCm) : undefined
     };
-    if (tool === 'street-screen') out.frameTagIds = cloneFrameTagIds(slot.frameTagIds);
+    if (SCREEN_KINDS[tool]) out.frameTagIds = cloneFrameTagIds(slot.frameTagIds);
     return out;
   }
 
@@ -191,9 +218,9 @@
   }
 
   // Ids another slot holds are marked, not hidden: picking one moves it here.
-  function buildTagSelect(slot, current, title, onPick) {
+  function buildTagSelect(slot, current, title, onPick, className) {
     var select = document.createElement('select');
-    select.className = 'marker-tag-select';
+    select.className = className || 'marker-tag-select';
     select.title = title;
     var emptyOpt = document.createElement('option');
     emptyOpt.value = '';
@@ -219,19 +246,161 @@
     return select;
   }
 
-  function buildPropSelect(slot, prop, title) {
-    return buildTagSelect(slot, slot[prop], title, function (next) {
+  // Every tag is picked the same way: the tag's own image (or an empty square) is the button, and
+  // clicking it opens the list of ids. className sizes and places it.
+  function buildTagPicker(slot, current, title, onPick, className) {
+    var pick = document.createElement('div');
+    pick.className = 'tag-pick' + (className ? ' ' + className : '');
+    function emptyBox(text) {
+      var box = document.createElement('div');
+      box.className = 'tag-pick-empty';
+      box.textContent = text;
+      return box;
+    }
+    if (current == null) {
+      pick.appendChild(emptyBox('Empty'));
+    } else {
+      var img = document.createElement('img');
+      img.alt = 'AprilTag ' + current;
+      img.src = markerSvgPath(current);
+      img.onerror = function () { img.replaceWith(emptyBox('Missing')); };
+      pick.appendChild(img);
+      var badge = document.createElement('span');
+      badge.className = 'tag-pick-id';
+      badge.textContent = String(current);
+      pick.appendChild(badge);
+    }
+    var hint = current == null ? title + ': click to pick a tag' : title + ' (ID ' + current + '): click to change';
+    pick.appendChild(buildTagSelect(slot, current, hint, onPick, 'tag-pick-select'));
+    return pick;
+  }
+
+  function buildPropPicker(slot, prop, title, className) {
+    return buildTagPicker(slot, slot[prop], title, function (next) {
       claimTagId(slot, next, prop, -1);
       slot[prop] = next;
+    }, className);
+  }
+
+  function buildPointerWing(slot, prop, sideClass, title) {
+    return buildPropPicker(slot, prop, title, 'pointer-wing ' + sideClass);
+  }
+
+  function renderPointerPreview(slot, preview) {
+    preview.classList.add('pointer-preview');
+    var isBack = !!flippedBySlot[slot.key];
+    var colorHex = /^#[0-9a-fA-F]{6}$/.test(slot.color || '') ? slot.color : '#ff5b5b';
+    var curOffset = normalizeOffsetCm(slot.offsetCm);
+
+    var centerCol = document.createElement('div');
+    centerCol.className = 'pointer-center-col';
+
+    // 1. Colored circle on top of the pointer (click to change color; moves up/down with offset)
+    var circleTrack = document.createElement('div');
+    circleTrack.className = 'pointer-circle-track';
+    var stem = document.createElement('span');
+    stem.className = 'pointer-circle-stem';
+    circleTrack.appendChild(stem);
+
+    var circle = document.createElement('label');
+    circle.className = 'pointer-color-circle';
+    circle.style.background = colorHex;
+    circle.title = 'Click to change pointer color';
+    var colorInput = document.createElement('input');
+    colorInput.type = 'color';
+    colorInput.value = colorHex;
+    colorInput.setAttribute('aria-label', 'Pointer color');
+    colorInput.addEventListener('input', function () {
+      slot.color = colorInput.value;
+      circle.style.background = colorInput.value;
+      scheduleMarkerSave();
     });
+    circle.appendChild(colorInput);
+    circleTrack.appendChild(circle);
+    centerCol.appendChild(circleTrack);
+
+    function syncCircleOffset(cm) {
+      var travelPx = Math.round((Math.max(0, Math.min(20, cm)) / 20) * 26);
+      circle.style.bottom = travelPx + 'px';
+      stem.style.height = travelPx + 'px';
+    }
+    syncCircleOffset(curOffset);
+
+    // 2. Folding pointer silhouette with clickable tag squares on both wings
+    var fig = document.createElement('div');
+    fig.className = 'pointer-figure';
+    var bodyFill = isBack ? '#f2ece1' : '#ffffff';
+    var sideLabel = isBack ? 'Tools' : 'Draw';
+    fig.innerHTML =
+      '<svg class="pointer-shape-svg" viewBox="4 8 92 82" aria-hidden="true">' +
+        '<path d="M 80.5,84.4 V 54.4 H 90.5 V 14.4 H 10.5 V 54.4 H 20.5 V 84.4 H 45.5 L 50.5,50.6 L 55.5,84.4 Z" ' +
+          'fill="' + bodyFill + '" stroke="#16302b" stroke-width="1.4" stroke-linejoin="round" />' +
+        '<path d="M 50.5,14.4 V 50.6" fill="none" stroke="#16302b" stroke-width="1.1" stroke-dasharray="2.4,2" />' +
+        '<path d="M 10.5,34.4 H 16.5 M 84.5,34.4 H 90.5" fill="none" stroke="#16302b" stroke-width="1.2" />' +
+        '<text x="68" y="71.5" text-anchor="middle" fill="#16302b" font-size="8.2" font-weight="800" font-family="system-ui, sans-serif">' + sideLabel + '</text>' +
+      '</svg>';
+
+    var leftProp = isBack ? 'selectorTagId' : 'tagId';
+    var rightProp = isBack ? 'selectorTagId2' : 'tagId2';
+    var leftTitle = isBack ? 'Left tool-selection tag' : 'Left pointer tag';
+    var rightTitle = isBack ? 'Right tool-selection tag' : 'Right pointer tag';
+
+    fig.appendChild(buildPointerWing(slot, leftProp, 'left', leftTitle));
+    fig.appendChild(buildPointerWing(slot, rightProp, 'right', rightTitle));
+    centerCol.appendChild(fig);
+
+    // 3. Flip button at the bottom of the pointer preview
+    var turn = document.createElement('button');
+    turn.className = 'pointer-turn-btn' + (isBack ? ' is-back' : '');
+    turn.type = 'button';
+    turn.title = 'Flip pointer to see and edit the tags on its other side';
+    turn.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>' +
+      '<span>Flip</span>';
+    turn.addEventListener('click', function () {
+      flippedBySlot[slot.key] = !flippedBySlot[slot.key];
+      renderMarkerEditor();
+    });
+    centerCol.appendChild(turn);
+    preview.appendChild(centerCol);
+
+    // 4. Long vertical offset slider beside the pointer
+    var sliderWrap = document.createElement('div');
+    sliderWrap.className = 'pointer-offset-slider-wrap';
+    sliderWrap.title = 'Offset from the pointer to the tip, in centimeters';
+    var curOffset = normalizeOffsetCm(slot.offsetCm);
+    var offsetVal = document.createElement('span');
+    offsetVal.className = 'pointer-offset-val';
+    offsetVal.textContent = curOffset + ' cm';
+    var trackBox = document.createElement('div');
+    trackBox.className = 'pointer-offset-track-box';
+    var slider = document.createElement('input');
+    slider.className = 'pointer-offset-slider';
+    slider.type = 'range';
+    slider.min = '0';
+    slider.max = '20';
+    slider.step = '0.5';
+    slider.value = String(curOffset);
+    slider.setAttribute('aria-label', 'Pen tip offset in centimeters');
+    slider.addEventListener('input', function () {
+      var next = normalizeOffsetCm(slider.value);
+      slot.offsetCm = next;
+      offsetVal.textContent = next + ' cm';
+      syncCircleOffset(next);
+      scheduleMarkerSave();
+    });
+    trackBox.appendChild(slider);
+    sliderWrap.appendChild(offsetVal);
+    sliderWrap.appendChild(trackBox);
+    preview.appendChild(sliderWrap);
   }
 
   function renderMarkerCard(slot) {
-    // Multi-state pointers are the only slots that can be added or removed,
-    // and they get a wider card for their two pairs of dropdowns.
+    // Pointers are the only slots that can be added or removed,
+    // and they show the folding pointer silhouette with clickable tags on both wings.
     var isDraw = slot.tool === 'draw';
     var card = document.createElement('div');
-    card.className = 'marker-card';
+    card.className = 'marker-card' + (isDraw ? ' wide' : '');
 
     var preview = document.createElement('div');
     preview.className = 'marker-preview';
@@ -251,103 +420,29 @@
         scheduleMarkerSave();
       });
       preview.appendChild(del);
-    }
-    if (slot.tagId == null) {
-      var empty = document.createElement('div');
-      empty.className = 'marker-empty';
-      empty.textContent = 'Empty';
-      preview.appendChild(empty);
+      renderPointerPreview(slot, preview);
     } else {
-      var img = document.createElement('img');
-      img.alt = 'AprilTag ' + slot.tagId;
-      img.src = markerSvgPath(slot.tagId);
-      img.onerror = function () {
-        preview.innerHTML = '';
-        var missing = document.createElement('div');
-        missing.className = 'marker-empty';
-        missing.textContent = 'Missing';
-        preview.appendChild(missing);
-      };
-      preview.appendChild(img);
+      preview.appendChild(buildPropPicker(slot, 'tagId', (slot.label || slot.tool || 'Marker') + ' tag', 'tag-pick--card'));
     }
     card.appendChild(preview);
 
     var label = document.createElement('div');
-    label.className = 'marker-card-label' + (isDraw ? ' draw-label' : '');
+    label.className = 'marker-card-label';
     label.textContent = slot.label || slot.tool || '';
     card.appendChild(label);
-    if (isDraw) card.classList.add('wide');
-
-    var controls = document.createElement('div');
-    controls.className = 'marker-controls ' + (isDraw ? 'draw-controls' : 'no-color');
-    controls.appendChild(buildPropSelect(slot, 'tagId', isDraw ? 'First tag of the pen' : 'Marker ID'));
-    if (isDraw) {
-      controls.appendChild(buildPropSelect(slot, 'tagId2', 'Fold-partner ID (second tag of the pen)'));
-
-      var color = document.createElement('input');
-      color.className = 'marker-color';
-      color.type = 'color';
-      color.value = /^#[0-9a-fA-F]{6}$/.test(slot.color || '') ? slot.color : '#ff5b5b';
-      color.title = 'Tool color';
-      color.addEventListener('input', function () {
-        slot.color = color.value;
-        scheduleMarkerSave();
-      });
-      controls.appendChild(color);
-
-      var selectorWrap = document.createElement('div');
-      selectorWrap.className = 'marker-tool-selector-row';
-      var selectorLabel = document.createElement('div');
-      selectorLabel.className = 'marker-tool-selector-label';
-      selectorLabel.textContent = 'Tool selection';
-      selectorWrap.appendChild(selectorLabel);
-      var selectorGrid = document.createElement('div');
-      selectorGrid.className = 'marker-tool-selector-grid';
-      selectorGrid.appendChild(buildPropSelect(slot, 'selectorTagId', 'First tag of the tool-selection pair'));
-      selectorGrid.appendChild(buildPropSelect(slot, 'selectorTagId2', 'Second tag of the tool-selection pair'));
-      selectorWrap.appendChild(selectorGrid);
-      controls.appendChild(selectorWrap);
-
-      var offsetBlock = document.createElement('div');
-      offsetBlock.className = 'marker-offset-block';
-      var offsetLabel = document.createElement('div');
-      offsetLabel.className = 'marker-offset-label';
-      offsetLabel.textContent = 'Offset';
-      offsetBlock.appendChild(offsetLabel);
-
-      var offsetWrap = document.createElement('label');
-      offsetWrap.className = 'marker-offset-wrap';
-      offsetWrap.title = 'Distance from each tag to the pen tip, in centimeters';
-      var offset = document.createElement('input');
-      offset.className = 'marker-offset';
-      offset.type = 'number';
-      offset.min = '0';
-      offset.max = '20';
-      offset.step = '0.1';
-      offset.inputMode = 'decimal';
-      offset.value = String(normalizeOffsetCm(slot.offsetCm));
-      offset.setAttribute('aria-label', 'Pen tip offset in centimeters');
-      offset.addEventListener('input', function () {
-        var next = Number(offset.value);
-        if (!Number.isFinite(next)) return;
-        slot.offsetCm = Math.max(0, Math.min(20, next));
-        scheduleMarkerSave();
-      });
-      offset.addEventListener('change', function () {
-        slot.offsetCm = normalizeOffsetCm(offset.value);
-        offset.value = String(slot.offsetCm);
-        scheduleMarkerSave();
-      });
-      var offsetUnit = document.createElement('span');
-      offsetUnit.className = 'marker-offset-unit';
-      offsetUnit.textContent = 'cm';
-      offsetWrap.appendChild(offset);
-      offsetWrap.appendChild(offsetUnit);
-      offsetBlock.appendChild(offsetWrap);
-      controls.appendChild(offsetBlock);
-    }
-    card.appendChild(controls);
     return card;
+  }
+
+  // The single-state pointer that opens the street view: picked inside the street view sheet.
+  function streetViewPointerSlot() {
+    for (var i = 0; i < state.slots.length; i++) {
+      if (state.slots[i].tool === 'street-view') return state.slots[i];
+    }
+    return null;
+  }
+
+  function hasStreetScreen() {
+    return state.slots.some(function (slot) { return slot.tool === 'street-screen'; });
   }
 
   // The lowest free ids, in order. Ids the screen already holds count as free
@@ -366,7 +461,10 @@
     return Math.min(free.length, SCREEN_SLOTS.length);
   }
 
-  function downloadScreenSheet() {
+  function downloadScreenSheet(slot) {
+    var kind = SCREEN_KINDS[slot.tool];
+    var url = kind.pdfUrl + (slot.key !== slot.tool ? '?sheet=' + encodeURIComponent(slot.key) : '');
+    var name = String(slot.label || slot.tool).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-screen-A3.pdf';
     // The server draws the PDF from the SAVED settings, so a pending save goes first.
     if (saveTimer) {
       window.clearTimeout(saveTimer);
@@ -375,8 +473,8 @@
     saveMarkerSettings().then(function (ok) {
       if (!ok) return;
       var link = document.createElement('a');
-      link.href = '/api/street-screen/frame.pdf';
-      link.download = 'street-view-screen-A3.pdf';
+      link.href = url;
+      link.download = name;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -386,6 +484,7 @@
   }
 
   function renderScreenCard(slot) {
+    var kind = SCREEN_KINDS[slot.tool];
     if (!Array.isArray(slot.frameTagIds)) slot.frameTagIds = cloneFrameTagIds(null);
     var card = document.createElement('div');
     card.className = 'screen-card';
@@ -394,24 +493,31 @@
     sheet.className = 'screen-sheet';
     var inside = document.createElement('div');
     inside.className = 'screen-sheet-inside';
-    inside.textContent = 'Street view';
+    var name = document.createElement('span');
+    name.className = 'screen-sheet-name';
+    name.textContent = slot.label || slot.tool;
+    inside.appendChild(name);
+    var pointer = slot.tool === 'street-screen' ? streetViewPointerSlot() : null;
+    if (pointer) {
+      var pointerWrap = document.createElement('div');
+      pointerWrap.className = 'screen-pointer';
+      pointerWrap.appendChild(buildPropPicker(pointer, 'tagId', 'Street view pointer tag', 'tag-pick--pointer'));
+      var pointerLabel = document.createElement('span');
+      pointerLabel.className = 'screen-pointer-label';
+      pointerLabel.textContent = 'Street view pointer';
+      pointerWrap.appendChild(pointerLabel);
+      inside.appendChild(pointerWrap);
+    }
     sheet.appendChild(inside);
     SCREEN_SLOTS.forEach(function (entry, index) {
       var cell = document.createElement('div');
       cell.className = 'screen-cell';
       cell.style.left = entry.x + '%';
       cell.style.top = entry.y + '%';
-      var id = slot.frameTagIds[index];
-      if (id != null) {
-        var img = document.createElement('img');
-        img.alt = '';
-        img.src = markerSvgPath(id);
-        cell.appendChild(img);
-      }
-      cell.appendChild(buildTagSelect(slot, id, entry.name + ' tag', function (next) {
+      cell.appendChild(buildTagPicker(slot, slot.frameTagIds[index], entry.name + ' tag', function (next) {
         claimTagId(slot, next, '', index);
         slot.frameTagIds[index] = next;
-      }));
+      }, 'tag-pick--cell'));
       sheet.appendChild(cell);
     });
     card.appendChild(sheet);
@@ -424,11 +530,13 @@
     count.textContent = assigned + ' of ' + SCREEN_SLOTS.length + ' tags assigned'
       + (assigned < 2 ? ' — the screen needs at least 2' : '');
     side.appendChild(count);
+    var buttons = document.createElement('div');
+    buttons.className = 'screen-buttons';
+    side.appendChild(buttons);
 
     var auto = document.createElement('button');
     auto.className = 'action';
     auto.type = 'button';
-    auto.id = 'screenAutoAssign';
     auto.textContent = 'Assign automatically';
     auto.title = 'Give all seven positions the lowest tag ids no other tool is using';
     auto.addEventListener('click', function () {
@@ -441,7 +549,7 @@
         }, 400);
       }
     });
-    side.appendChild(auto);
+    buttons.appendChild(auto);
 
     var clear = document.createElement('button');
     clear.className = 'action ghost';
@@ -452,20 +560,71 @@
       renderMarkerEditor();
       scheduleMarkerSave();
     });
-    side.appendChild(clear);
+    buttons.appendChild(clear);
 
     var pdf = document.createElement('button');
     pdf.className = 'action ghost';
     pdf.type = 'button';
-    pdf.id = 'screenDownload';
     pdf.textContent = 'Download screen (A3 PDF)';
-    pdf.title = 'The sheet to print: page 1 is the screen, page 2 the street view pointer';
+    pdf.title = kind.pdfTitle;
     pdf.disabled = assigned < 2;
-    pdf.addEventListener('click', downloadScreenSheet);
-    side.appendChild(pdf);
+    pdf.addEventListener('click', function () { downloadScreenSheet(slot); });
+    buttons.appendChild(pdf);
+
+    // The first map view sheet stays (clear its tags to switch it off); added ones can go.
+    if (slot.tool === 'map-screen' && slot.key !== MAP_SHEET_KEY) {
+      var remove = document.createElement('button');
+      remove.className = 'action ghost danger';
+      remove.type = 'button';
+      remove.textContent = 'Remove sheet';
+      remove.title = 'Remove ' + (slot.label || 'this map view sheet') + ' and free its tags';
+      remove.addEventListener('click', function () {
+        state.slots = state.slots.filter(function (candidate) { return candidate.key !== slot.key; });
+        renderMarkerEditor();
+        scheduleMarkerSave();
+      });
+      buttons.appendChild(remove);
+    }
 
     card.appendChild(side);
     return card;
+  }
+
+  // A new map view sheet takes the lowest free number and, straight away, the lowest free tags.
+  function addMapSheet() {
+    var used = {};
+    mapSheets().forEach(function (slot) { used[mapSheetNumber(slot.key)] = true; });
+    var number = 2;
+    while (used[number] && number <= MAX_MAP_SHEETS) number += 1;
+    if (number > MAX_MAP_SHEETS) {
+      setMarkerStatus('At most ' + MAX_MAP_SHEETS + ' map view sheets.', 'err');
+      return;
+    }
+    var slot = {
+      key: 'map-screen-' + number,
+      group: GROUP_SCREEN,
+      tool: 'map-screen',
+      label: 'Map view ' + number,
+      tagId: null,
+      color: '',
+      frameTagIds: cloneFrameTagIds(null)
+    };
+    // Right after the last map view sheet, so the sheets stay together and in order.
+    var last = -1;
+    state.slots.forEach(function (candidate, i) {
+      var n = candidate.tool === 'map-screen' ? mapSheetNumber(candidate.key) : null;
+      if (n !== null && n < number) last = i;
+    });
+    state.slots.splice(last + 1, 0, slot);
+    var got = autoAssignScreen(slot);
+    renderMarkerEditor();
+    scheduleMarkerSave();
+    if (got < 4) {
+      window.setTimeout(function () {
+        setMarkerStatus('Only ' + got + ' free ids in ' + state.family + ' for ' + slot.label +
+          ' — drawings on it are read with 4 or more. Pick a larger tag family or free some ids.', 'err');
+      }, 400);
+    }
   }
 
   function addPointerSlot() {
@@ -492,17 +651,11 @@
     var title = document.createElement('h3');
     title.textContent = groupName;
     wrap.appendChild(title);
-    if (GROUP_HINTS[groupName]) {
-      var hint = document.createElement('p');
-      hint.className = 'marker-group-hint';
-      hint.textContent = GROUP_HINTS[groupName];
-      wrap.appendChild(hint);
-    }
 
     var row = document.createElement('div');
     row.className = 'marker-card-row';
     state.slots.filter(function (slot) { return slot.group === groupName; }).forEach(function (slot) {
-      row.appendChild(slot.tool === 'street-screen' ? renderScreenCard(slot) : renderMarkerCard(slot));
+      row.appendChild(SCREEN_KINDS[slot.tool] ? renderScreenCard(slot) : renderMarkerCard(slot));
     });
 
     if (groupName === GROUP_MULTI) {
@@ -510,9 +663,19 @@
       add.className = 'marker-add-card';
       add.type = 'button';
       add.textContent = '+';
-      add.title = 'Add a multi-state pointer';
+      add.title = 'Add a pointer';
       add.addEventListener('click', addPointerSlot);
       row.appendChild(add);
+    }
+    if (groupName === GROUP_SCREEN) {
+      var addSheet = document.createElement('button');
+      addSheet.className = 'marker-add-card screen-add-card';
+      addSheet.type = 'button';
+      addSheet.textContent = '+';
+      addSheet.setAttribute('aria-label', 'Add a map view');
+      addSheet.title = 'Add a map view: another sheet with its own border tags. In the Project panel of Run a Workshop, each sheet gets a button that puts the current map view on it.';
+      addSheet.addEventListener('click', addMapSheet);
+      row.appendChild(addSheet);
     }
     wrap.appendChild(row);
     return wrap;
@@ -526,11 +689,18 @@
         slot.label = 'Pointer ' + pointerNumber;
       }
     });
+    // As marker_settings.py names them: "Map view" while there is one, else "Map view <n>".
+    var sheets = mapSheets();
+    sheets.forEach(function (slot) {
+      slot.label = sheets.length <= 1 ? 'Map view' : 'Map view ' + mapSheetNumber(slot.key);
+    });
     renderFamilyOptions();
     // A re-render must not scroll the list back to the top.
     var scrollTop = els.body.scrollTop;
     els.body.innerHTML = '';
-    [GROUP_MULTI, GROUP_SINGLE, GROUP_SCREEN].forEach(function (groupName) {
+    // The single-state pointer is picked inside the street view sheet; on its own only without one.
+    var groups = hasStreetScreen() ? [GROUP_MULTI, GROUP_SCREEN] : [GROUP_MULTI, GROUP_SINGLE, GROUP_SCREEN];
+    groups.forEach(function (groupName) {
       var hasSlots = state.slots.some(function (slot) { return slot.group === groupName; });
       if (!hasSlots && groupName !== GROUP_MULTI) return;
       var section = document.createElement('section');
@@ -553,8 +723,8 @@
     els.body.scrollTop = scrollTop;
   }
 
-  // What goes on the cut-out marker sheet. The screen's border tags are not
-  // on it: they are printed in place on the screen's own PDF.
+  // What goes on the cut-out marker sheet. The screens' border tags are not
+  // on it: they are printed in place on each screen's own PDF.
   function selectedMarkerEntries() {
     var entries = [];
     var seen = {};

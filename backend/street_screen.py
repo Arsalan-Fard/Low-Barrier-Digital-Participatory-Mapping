@@ -1,6 +1,10 @@
-"""The street view screen: an A3 sheet with AprilTags round its border, laid on the table. The map
-page fits the sheet's pose from the tags and projects the street view into its white inside.
-The layout JSON and the PDF come from the same numbers, so they cannot drift apart."""
+"""The printed screens: A3 sheets with AprilTags round their border, laid on the table. The map
+page fits each sheet's pose from its tags and projects into its white inside: the street view on
+one, a map on each map view sheet (a close-up round the street view pointer, or the view the
+Project panel assigned to it). Every sheet carries its own tags. The layout JSON and the PDF come
+from the same numbers, so they cannot drift apart. The pen drawings on the map view sheets are
+photographed by paper_watch.py, whenever no hand is over the paper."""
+import re
 import io
 import logging
 import random
@@ -8,80 +12,113 @@ import random
 import cv2
 from flask import Blueprint, Response, jsonify, request
 
-from .marker_settings import APRILTAG_DICTS, STREET_SCREEN_SLOTS, load_marker_settings
+from .marker_settings import APRILTAG_DICTS, SCREEN_SLOTS, load_marker_settings, map_sheet_number
 
 bp = Blueprint("street_screen", __name__)
 
-STREET_SCREEN_PAGE_MM = (420.0, 297.0)  # A3 landscape
-STREET_SCREEN_EDGE_MM = 3.0  # left blank: most printers cannot reach the edge
-STREET_SCREEN_QUIET_MM = 3.0  # white round the black square inside its cell
-STREET_SCREEN_LABEL = "STREET VIEW"
-STREET_SCREEN_MIN_TAGS = 2
+SCREEN_PAGE_MM = (420.0, 297.0)  # A3 landscape
+SCREEN_EDGE_MM = 3.0  # left blank: most printers cannot reach the edge
+SCREEN_QUIET_MM = 3.0  # white round the black square inside its cell
+SCREEN_MIN_TAGS = 2
+# Per screen tool: the label printed on its border when the slot has none, the mosaic's seed (so
+# the sheets do not look alike; map view sheet n adds 100 * (n - 1)) and whether the street view
+# pointer is printed too. The PDF's title and file name come from the label.
+SCREENS = {
+    "street-screen": {"label": "Street view", "seed": 7, "pointerPage": True},
+    "map-screen": {"label": "Map view", "seed": 8, "pointerPage": False},
+}
 
 
-def street_screen_settings():
-    """(family, {slot: tag id}, pointer tag id or None) from the marker settings."""
+def screen_settings(tool, sheet=None):
+    """(family, {slot: tag id}, street view pointer tag id or None, the screen's marker slot) from
+    the marker settings. sheet picks a map view sheet by its key; the first when not given."""
     settings = load_marker_settings()
-    slot_ids = {}
+    key = str(sheet) if tool == "map-screen" and sheet else tool
+    screen = None
     pointer_id = None
     for slot in settings["slots"]:
-        if slot["tool"] == "street-screen":
-            for name, tag_id in zip(STREET_SCREEN_SLOTS, slot["frameTagIds"]):
-                if tag_id is not None:
-                    slot_ids[name] = int(tag_id)
+        if slot["tool"] == tool and slot["key"] == key:
+            screen = slot
         elif slot["tool"] == "street-view" and pointer_id is None and slot.get("tagId") is not None:
             pointer_id = int(slot["tagId"])
-    return settings["family"], slot_ids, pointer_id
+    if screen is None:
+        raise ValueError("unknown_sheet")
+    slot_ids = {name: int(tag_id) for name, tag_id in zip(SCREEN_SLOTS, screen["frameTagIds"]) if tag_id is not None}
+    return settings["family"], slot_ids, pointer_id, screen
 
 
-def street_screen_layout(border_mm=24.0, tag_mm=32.0):
-    """Millimetres from the top-left, y down. The tag cells are bigger than the border band and
-    stand proud of it into the white inside, their outer edge on the page margin."""
-    family, slot_ids, pointer_id = street_screen_settings()
-    if len(slot_ids) < STREET_SCREEN_MIN_TAGS:
-        raise ValueError("screen_tags_unassigned")
-    width, height = STREET_SCREEN_PAGE_MM
-    edge = STREET_SCREEN_EDGE_MM
-    cell = tag_mm + 2.0 * STREET_SCREEN_QUIET_MM
-    near = edge + cell / 2.0  # a cell centre's distance from the page edge
-    centres = [
+def screen_label(tool, screen):
+    return str(screen.get("label") or SCREENS[tool]["label"])
+
+
+def screen_seed(tool, screen):
+    return SCREENS[tool]["seed"] + 100 * ((map_sheet_number(screen["key"]) or 1) - 1)
+
+
+def slot_centres(page_mm=SCREEN_PAGE_MM, tag_mm=32.0):
+    """[(slot, cx, cy)] in SCREEN_SLOTS order: where each border tag's cell is centred, in mm."""
+    width, height = page_mm
+    cell = tag_mm + 2.0 * SCREEN_QUIET_MM
+    near = SCREEN_EDGE_MM + cell / 2.0  # a cell centre's distance from the page edge
+    return [
         ("tl", near, near), ("tr", width - near, near),
         ("br", width - near, height - near), ("bl", near, height - near),
         ("rm", width - near, height / 2.0), ("bm", width / 2.0, height - near),
         ("lm", near, height / 2.0),
     ]
+
+
+def frame_layout(family, slot_ids, label_text, pointer_id=None, border_mm=24.0, tag_mm=32.0,
+                 page_mm=SCREEN_PAGE_MM):
+    """A sheet with tags round its border ({slot: tag id}), in millimetres from the top-left, y down.
+    The tag cells are bigger than the border band and stand proud of it into the white inside,
+    their outer edge on the page margin."""
+    width, height = page_mm
+    edge = SCREEN_EDGE_MM
+    cell = tag_mm + 2.0 * SCREEN_QUIET_MM
     half = tag_mm / 2.0
     tags = []
-    for slot, cx, cy in centres:
+    for slot, cx, cy in slot_centres(page_mm, tag_mm):
         if slot in slot_ids:
             tags.append({
                 "id": slot_ids[slot], "slot": slot, "cx": cx, "cy": cy,
                 # the black square's corners as OpenCV reports an upright marker: clockwise from top-left
                 "corners": [[cx - half, cy - half], [cx + half, cy - half], [cx + half, cy + half], [cx - half, cy + half]],
             })
-    label_w = 150.0
+    # Between the two top corner cells, with a margin (an A4 portrait page is narrower than 150 mm allows).
+    label_w = min(150.0, width - 2.0 * (edge + cell + 6.0))
     return {
         "pageMm": [width, height],
         "edgeMm": edge,
         "borderMm": border_mm,
         "tagMm": tag_mm,
-        "quietMm": STREET_SCREEN_QUIET_MM,
+        "quietMm": SCREEN_QUIET_MM,
         "cellMm": cell,
         "interiorMm": [edge + border_mm, edge + border_mm, width - edge - border_mm, height - edge - border_mm],
         "labelMm": [width / 2.0 - label_w / 2.0, edge + 2.0, width / 2.0 + label_w / 2.0, edge + border_mm - 2.0],
-        "labelText": STREET_SCREEN_LABEL,
+        "labelText": label_text,
         "tags": tags,
         "pointerTagId": pointer_id,
         "family": family,
     }
 
 
-def _screen_args():
+def screen_layout(tool, border_mm=24.0, tag_mm=32.0, sheet=None):
+    """The layout of a printed screen from its tags on the Marker Setting page."""
+    family, slot_ids, pointer_id, screen = screen_settings(tool, sheet)
+    if len(slot_ids) < SCREEN_MIN_TAGS:
+        raise ValueError("screen_tags_unassigned")
+    layout = frame_layout(family, slot_ids, screen_label(tool, screen).upper(), pointer_id, border_mm, tag_mm)
+    layout["sheet"] = screen["key"]
+    return layout
+
+
+def _screen_args(default_seed):
     """borderMm, tagMm and seed from the query string, bounded to what prints and still decodes."""
     try:
         border = float(request.args.get("borderMm", 24.0))
         tag = float(request.args.get("tagMm", 32.0))
-        seed = int(request.args.get("seed", 7))
+        seed = int(request.args.get("seed", default_seed))
     except (TypeError, ValueError):
         raise ValueError("invalid_size")
     if not (10.0 <= border <= 60.0) or not (8.0 <= tag <= 60.0):
@@ -96,7 +133,7 @@ def _marker_bitmap(family, tag_id):
     return cv2.aruco.generateImageMarker(dictionary, int(tag_id), cells), cells
 
 
-def street_screen_mosaic(layout, seed=7, density=0.5, moat_modules=1):
+def screen_mosaic(layout, seed=7, density=0.5, moat_modules=1):
     """The border as random black squares on the tags' own module grid, so the band reads as one big
     tag; rectangles in mm clipped to the band. Each real tag keeps a one-module white moat beyond
     its cell, or a square touching its border would fuse with it on camera. Random rather than
@@ -143,18 +180,18 @@ def street_screen_mosaic(layout, seed=7, density=0.5, moat_modules=1):
     return squares
 
 
-def _draw_street_screen_pdf(layout, pointer_size_cm, seed=7):
-    """Page 1: the screen. Page 2: two copies of the street view pointer tag to cut out."""
+def draw_screen_pdf(layout, title, pointer_size_cm, seed=7):
+    """Page 1: the screen, at the layout's page size. Page 2, when pointer_size_cm is given: two
+    copies of the street view pointer tag to cut out."""
     try:
-        from reportlab.lib.pagesizes import A3, landscape
         from reportlab.lib.units import mm
         from reportlab.pdfgen import canvas
     except ImportError as exc:
         raise RuntimeError("reportlab_not_installed") from exc
 
-    page = landscape(A3)
-    page_h = page[1]
     width, height = layout["pageMm"]
+    page = (width * mm, height * mm)
+    page_h = page[1]
     family = layout["family"]
 
     def px(x_mm):
@@ -165,7 +202,7 @@ def _draw_street_screen_pdf(layout, pointer_size_cm, seed=7):
 
     out = io.BytesIO()
     pdf = canvas.Canvas(out, pagesize=page, pageCompression=1)
-    pdf.setTitle("Street view screen")
+    pdf.setTitle(title)
     pdf.setAuthor("Low-Barrier Digital Participatory Mapping")
 
     def draw_marker(cx, cy, size_mm, tag_id):
@@ -180,7 +217,7 @@ def _draw_street_screen_pdf(layout, pointer_size_cm, seed=7):
                     pdf.rect(px(left + column * cell), py(top + (row + 1) * cell), cell * mm, cell * mm, fill=1, stroke=0)
 
     pdf.setFillColorRGB(0, 0, 0)
-    for x, y, w, h in street_screen_mosaic(layout, seed):
+    for x, y, w, h in screen_mosaic(layout, seed):
         pdf.rect(px(x), py(y + h), w * mm, h * mm, fill=1, stroke=0)
     cell = layout["cellMm"]
     for tag in layout["tags"]:
@@ -204,7 +241,7 @@ def _draw_street_screen_pdf(layout, pointer_size_cm, seed=7):
     pdf.showPage()
 
     pointer_id = layout["pointerTagId"]
-    if pointer_id is not None:
+    if pointer_id is not None and pointer_size_cm is not None:
         pointer = float(pointer_size_cm) * 10.0
         card_w = pointer + 40.0
         card_h = pointer + 58.0
@@ -242,29 +279,38 @@ def _draw_street_screen_pdf(layout, pointer_size_cm, seed=7):
     return out.getvalue()
 
 
-@bp.route("/api/street-screen/frame", methods=["GET"])
-def api_street_screen_frame():
+# /api/street-screen/... and /api/map-screen/...; a map view sheet other than the first is picked
+# with ?sheet=<its key>.
+@bp.route("/api/<any(street, map):kind>-screen/frame", methods=["GET"])
+def api_screen_frame(kind):
+    tool = kind + "-screen"
     try:
-        border, tag, _seed = _screen_args()
-        layout = street_screen_layout(border, tag)
+        border, tag, _seed = _screen_args(0)
+        layout = screen_layout(tool, border, tag, request.args.get("sheet"))
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     return jsonify({"ok": True, **layout})
 
 
-@bp.route("/api/street-screen/frame.pdf", methods=["GET"])
-def api_street_screen_frame_pdf():
+@bp.route("/api/<any(street, map):kind>-screen/frame.pdf", methods=["GET"])
+def api_screen_frame_pdf(kind):
+    tool = kind + "-screen"
+    title = SCREENS[tool]["label"] + " screen"
     try:
-        border, tag, seed = _screen_args()
-        layout = street_screen_layout(border, tag)
-        pointer_cm = float(load_marker_settings()["tagSizeCm"] or 3.0)
-        pdf_bytes = _draw_street_screen_pdf(layout, pointer_cm, seed)
+        _family, _ids, _pointer, screen = screen_settings(tool, request.args.get("sheet"))
+        label = screen_label(tool, screen)
+        title = label + " screen"
+        border, tag, seed = _screen_args(screen_seed(tool, screen))
+        layout = screen_layout(tool, border, tag, screen["key"])
+        pointer_cm = float(load_marker_settings()["tagSizeCm"] or 3.0) if SCREENS[tool]["pointerPage"] else None
+        pdf_bytes = draw_screen_pdf(layout, title, pointer_cm, seed)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except RuntimeError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
     except Exception:
-        logging.exception("Failed to create the street view screen PDF")
+        logging.exception("Failed to create the %s PDF", title.lower())
         return jsonify({"ok": False, "error": "screen_export_failed"}), 500
+    filename = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-") + "-screen-A3.pdf"
     return Response(pdf_bytes, mimetype="application/pdf",
-                    headers={"Content-Disposition": 'attachment; filename="street-view-screen-A3.pdf"'})
+                    headers={"Content-Disposition": 'attachment; filename="%s"' % filename})

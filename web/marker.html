@@ -87,74 +87,182 @@
     .marker-section { border-bottom: 1px solid var(--line); padding-bottom: 14px; }
     .marker-section:last-child { border-bottom: 0; }
     .marker-section h3 { margin: 0 0 12px; font-size: 18px; font-weight: 700; }
-    .marker-section h3:has(+ .marker-group-hint) { margin-bottom: 4px; }
-    .marker-group-hint { margin: 0 0 12px; max-width: 78ch; font-size: 13px; line-height: 1.5; color: var(--muted); }
     .marker-card-row { display: flex; flex-wrap: wrap; gap: 14px 16px; align-items: flex-start; }
     .marker-card { position: relative; width: 116px; display: flex; flex-direction: column; gap: 8px; }
-    .marker-card.wide { width: 176px; }  /* two-tag tools: room for both dropdowns */
+    .marker-card.wide { width: 224px; }
     .marker-preview,
     .marker-add-card {
       border: 1px solid var(--line); border-radius: 12px; background: var(--green-tint); box-sizing: border-box;
     }
     .marker-preview { position: relative; height: 112px; display: flex; align-items: center; justify-content: center; padding: 10px; background: #fff; }
-    .marker-preview img { width: 88px; height: 88px; object-fit: contain; image-rendering: pixelated; }
-    .marker-empty { color: var(--muted); font-size: 13px; text-align: center; }
+    .marker-preview.pointer-preview {
+      height: 254px; padding: 8px 8px 8px 10px;
+      display: flex; flex-direction: row; align-items: stretch; justify-content: space-between; gap: 4px;
+      background: #f8fcfb;
+    }
+    .pointer-center-col {
+      flex: 1; min-width: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px;
+    }
+    .pointer-circle-track {
+      position: relative; width: 100%; height: 48px;
+      flex-shrink: 0;
+    }
+    .pointer-circle-stem {
+      position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
+      width: 0; border-left: 1.5px dashed var(--line);
+      pointer-events: none;
+    }
     .marker-card-label { min-height: 16px; font-size: 12px; font-weight: 700; color: var(--muted); text-align: center; line-height: 1.2; }
-    .marker-card-label.draw-label { text-align: left; }
     .marker-delete {
       position: absolute; top: 6px; left: 6px; width: 24px; height: 24px;
       display: none; align-items: center; justify-content: center;
       border: 1px solid #e6c6c0; border-radius: 7px; background: #fff;
-      color: var(--danger); cursor: pointer; padding: 0; z-index: 2;
+      color: var(--danger); cursor: pointer; padding: 0; z-index: 3;
     }
     .marker-card:hover .marker-delete { display: flex; }
     .marker-delete:hover { background: #fbeeeb; border-color: var(--danger); }
-    .marker-controls { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 6px; align-items: center; }
-    .marker-controls.draw-controls { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px; }
-    .marker-controls.no-color { grid-template-columns: minmax(0, 1fr); }
-    .marker-tag-select {
-      width: 100%; height: 32px; border: 1px solid var(--line); border-radius: 8px;
-      background: #fff; color: var(--ink); font: 600 14px var(--font-ui);
-      text-align: center; text-align-last: center; cursor: pointer;
+
+    /* Colored circle on top of the pointer (click to pick color; moves up/down with offset). */
+    .pointer-color-circle {
+      position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
+      width: 22px; height: 22px; border-radius: 50%;
+      border: 2px solid var(--ink);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
+      cursor: pointer;
     }
-    .marker-tag-select:focus { outline: none; border-color: var(--green); }
-    .marker-tag-select option.taken { color: #b00000; font-weight: 700; }
-    .marker-color { width: 34px; height: 32px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: #fff; cursor: pointer; }
-    .marker-tool-selector-row { grid-column: 1 / -1; display: grid; gap: 5px; }
-    .marker-tool-selector-label { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; }
-    .marker-tool-selector-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
-    .marker-offset-block { grid-column: 1 / -1; display: grid; gap: 5px; margin-top: 5px; }
-    .marker-offset-label { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; }
-    .marker-offset-wrap { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 5px; }
-    .marker-offset {
-      width: 100%; height: 32px; min-width: 0; border: 1px solid var(--line); border-radius: 8px;
-      background: #fff; color: var(--ink); font: 600 13px var(--font-ui); text-align: center; box-sizing: border-box;
+    .pointer-color-circle:hover { transform: translateX(-50%) scale(1.1); }
+    .pointer-color-circle input[type="color"] {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      opacity: 0; border: 0; padding: 0; cursor: pointer;
     }
-    .marker-offset-unit { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; }
-    .marker-add-card { width: 116px; height: 112px; font-size: 26px; line-height: 1; color: var(--green-dark); cursor: pointer; }
+
+    /* Long vertical offset slider beside the pointer. */
+    .pointer-offset-slider-wrap {
+      width: 38px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+      flex-shrink: 0;
+    }
+    .pointer-offset-track-box {
+      position: relative; width: 24px; height: 146px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .pointer-offset-slider {
+      width: 142px; height: 18px; margin: 0;
+      transform: rotate(-90deg);
+      accent-color: var(--green);
+      cursor: pointer; flex-shrink: 0;
+    }
+    .pointer-offset-val {
+      font-size: 10.5px; font-weight: 700; color: var(--muted); white-space: nowrap;
+      text-align: center; line-height: 1.1;
+      pointer-events: none;
+    }
+
+    /* Folding pointer shape and its two clickable tag squares. */
+    .pointer-figure {
+      position: relative; width: 162px; aspect-ratio: 92 / 82;
+      flex-shrink: 0;
+    }
+    .pointer-shape-svg {
+      display: block; width: 100%; height: 100%; overflow: visible;
+    }
+    /* Every tag picker (markerEditor.js buildTagPicker): the tag's image is the button, and clicking
+       it opens the list of ids. The modifiers below size and place it. */
+    .tag-pick {
+      position: relative; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 4px;
+      border: 1.5px solid transparent;
+      transition: border-color 0.14s ease, transform 0.12s ease;
+      box-sizing: border-box;
+    }
+    .tag-pick:hover,
+    .tag-pick:focus-within {
+      border-color: var(--green);
+      transform: scale(1.03);
+    }
+    .tag-pick img {
+      width: 100%; height: 100%;
+      object-fit: contain; image-rendering: pixelated;
+      pointer-events: none;
+    }
+    .tag-pick-empty {
+      width: 100%; height: 100%;
+      display: flex; align-items: center; justify-content: center;
+      border: 1.5px dashed var(--line); border-radius: 4px;
+      color: var(--muted); font-size: 11px; font-weight: 700;
+      background: rgba(255, 255, 255, 0.78);
+      pointer-events: none;
+    }
+    .tag-pick-select {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      opacity: 0; cursor: pointer; z-index: 2;
+      font: 600 13px var(--font-ui);
+    }
+    .tag-pick-select option.taken { color: #b00000; font-weight: 700; }
+    /* The id, small, at the tag's corner. */
+    .tag-pick-id {
+      position: absolute; right: -7px; bottom: -7px; z-index: 1;
+      min-width: 17px; padding: 0 4px; box-sizing: border-box;
+      border-radius: 8px; background: var(--ink); color: #fff;
+      font: 700 10px/15px var(--font-ui); text-align: center;
+      pointer-events: none;
+    }
+    .tag-pick--card { width: 88px; height: 88px; }
+    .tag-pick--cell { width: 46px; height: 46px; }
+    .tag-pick--pointer { width: 62px; height: 62px; }
+    .pointer-wing { position: absolute; top: 10.5%; height: 43.5%; width: 38.5%; }
+    .pointer-wing.left { left: 9.6%; }
+    .pointer-wing.right { left: 53.1%; }
+
+    /* Flip button at the bottom of the pointer preview. */
+    .pointer-turn-btn {
+      height: 24px;
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 0 10px; border: 1px solid var(--line); border-radius: 7px;
+      background: #fff; color: var(--ink);
+      font: 700 11.5px var(--font-ui); cursor: pointer; flex-shrink: 0;
+    }
+    .pointer-turn-btn:hover { background: var(--green-tint); border-color: var(--green); }
+    .pointer-turn-btn.is-back { background: var(--green-soft); border-color: var(--green); color: var(--green-dark); }
+
+    .marker-add-card { width: 116px; height: 254px; font-size: 26px; line-height: 1; color: var(--green-dark); cursor: pointer; }
     .marker-add-card:hover { background: var(--green-soft); border-color: var(--green); }
-    /* full row width, so the sheet keeps its own size instead of shrinking to fit */
-    .screen-card { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 8px 36px; align-items: flex-start; }
+    /* After the screens: adds another map view, like the pointers' add card. As tall as a sheet diagram, beside it. */
+    .marker-add-card.screen-add-card {
+      height: auto; align-self: stretch; margin: 48px 0 50px;
+    }
+    .action.ghost.danger { color: var(--danger); border-color: #e6c6c0; }
+    .action.ghost.danger:hover { background: #fbeeeb; border-color: var(--danger); }
+    /* the two screens side by side, each with its controls under its sheet */
+    .screen-card { flex: 0 1 auto; max-width: 100%; display: flex; flex-direction: column; align-items: flex-start; }
     .screen-sheet {
-      position: relative; flex: 0 0 auto; width: 500px; max-width: calc(100% - 92px); aspect-ratio: 420 / 297; /* A3 sheet */
+      position: relative; flex: 0 0 auto; width: 460px; max-width: calc(100% - 92px); aspect-ratio: 420 / 297; /* A3 sheet */
       /* room for the cells, which are centred ON the sheet's edge */
       margin: 48px 46px 50px;
       border: 2px solid var(--ink); border-radius: 6px; background: #fff; box-sizing: border-box;
     }
     .screen-sheet-inside {
-      position: absolute; inset: 11%; display: flex; align-items: center; justify-content: center;
+      position: absolute; inset: 11%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
       border: 1px dashed var(--line); border-radius: 4px; background: var(--green-tint);
-      color: var(--muted); font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
     }
-    .screen-cell {
-      position: absolute; width: 78px; transform: translate(-50%, -50%);
-      display: flex; flex-direction: column; align-items: center; gap: 4px;
-      padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: #fff;
+    .screen-sheet-name { color: var(--muted); font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+    /* The street view pointer, picked inside its sheet. */
+    .screen-pointer {
+      display: flex; flex-direction: column; align-items: center; gap: 7px;
+      padding: 9px 12px 7px; border: 1px solid var(--line); border-radius: 10px; background: #fff;
       box-shadow: 0 4px 12px rgba(31, 114, 107, 0.10);
     }
-    .screen-cell img { width: 40px; height: 40px; image-rendering: pixelated; }
-    .screen-cell .marker-tag-select { height: 28px; font-size: 13px; }
-    .screen-side { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding-top: 48px; }
+    .screen-pointer-label { font-size: 12px; font-weight: 700; color: var(--muted); }
+    .screen-cell {
+      position: absolute; transform: translate(-50%, -50%);
+      display: flex; align-items: center; justify-content: center;
+      padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: #fff;
+      box-shadow: 0 4px 12px rgba(31, 114, 107, 0.10);
+    }
+    .screen-side { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 0 0 4px 46px; }
+    .screen-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
     .screen-count { font-size: 13px; font-weight: 700; color: var(--green-dark); }
     .screen-count.warn { color: var(--danger); }
 
@@ -192,6 +300,6 @@
   </div>
 
   <script src="src/config.js"></script>
-  <script src="src/markerEditor.js?v=4"></script>
+  <script src="src/markerEditor.js?v=11"></script>
 </body>
 </html>

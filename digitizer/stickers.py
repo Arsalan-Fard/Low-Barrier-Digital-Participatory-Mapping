@@ -49,11 +49,8 @@ class Sticker:
     colour: str | None = None
     colour_confidence: float = 0.0
     colour_alternatives: list = field(default_factory=list)
-    category: str | None = None
-    label: str | None = None
     flags: list[str] = field(default_factory=list)
     source: str = "auto"
-    vlm: dict | None = None
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -588,7 +585,7 @@ def detect_stickers(corrected: np.ndarray, score: np.ndarray, valid: np.ndarray,
                 own = mask & union & (labels == item["cluster"]) & ~same_others
             else:
                 own = mask & union & ~others
-            lab_value, spread, used = _robust_colour(lab[y0:y1, x0:x1], own)
+            lab_value, spread, used = robust_colour(lab[y0:y1, x0:x1], own)
             # hidden = covered by another colour, not merely overlapped by
             # another outline: the sticker on top of a stack hides nothing
             if item["cluster"] is not None:
@@ -660,7 +657,7 @@ def _fill_holes(mask: np.ndarray, max_hole: float) -> np.ndarray:
     return filled
 
 
-def _robust_colour(lab: np.ndarray, own: np.ndarray) -> tuple[list[float], float, int]:
+def robust_colour(lab: np.ndarray, own: np.ndarray) -> tuple[list[float], float, int]:
     """Median Lab of a sticker's own pixels, ignoring glare, pen marks and edges."""
     inner = cv2.erode(own.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
     if inner.sum() < 30:

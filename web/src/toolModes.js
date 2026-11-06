@@ -1,6 +1,5 @@
-// Map page: the tool mode of each draw-tool tag (draw, erase, select, sticker or
-// comment), the tool-selector menus that switch it, and the mouse cursor that
-// stands in for a draw-tool tag (Ctrl/Cmd+drag, Q cycles its tool).
+// Map page: the tool mode of each draw-tool tag (draw, erase, select or sticker)
+// and the tool-selector menus that switch it.
 const drawToolTagIds = tagAssignments.getToolTagIds('draw');
 const DRAW_TOOL_TAG_IDS = drawToolTagIds.length ? drawToolTagIds : [11, 12, 13, 14];
 const DRAW_TOOL_DEFAULT_COLOR = '#ff5b5b';
@@ -8,26 +7,6 @@ const drawToolModeByTagId = {};
 DRAW_TOOL_TAG_IDS.forEach(function (tagId) {
   drawToolModeByTagId[tagId] = 'draw';
 });
-// The cursor borrows this draw-tool tag: its colour, and the mode Q gives it.
-const CURSOR_TAG_ID = 11;
-const CURSOR_TOOL_MODE_CYCLE = ['draw', 'comment', 'erase', 'select'];
-// Longer than annotationPlacement's lostHoldMs (500), so a comment box opened by a click is not
-// expired before anyone types.
-const CURSOR_COMMENT_HOLD_MS = 900;
-const cursorTag = {
-  // mapView-local px
-  x: 0,
-  y: 0,
-  // draw, erase and select act while the button is held
-  pressed: false,
-  mode: 'draw',
-  // A comment opens at the click point and is presented there until commentHoldUntilMs.
-  pressX: 0,
-  pressY: 0,
-  commentHoldUntilMs: 0,
-  // map.dragPan's state to restore when the gesture ends; null while there is none
-  dragPanWasEnabled: null
-};
 // A selector pair at rest shows a fixed arc of options above it; folding the pair
 // toward one switches its drawing pair to that tool. The options sit on the top
 // half only, so a press aimed downward selects nothing.
@@ -38,7 +17,7 @@ const TOOL_PAIR_MENU_OPTIONS = [
   { key: 'draw', label: 'Draw', angleDeg: -157.5, accent: '#ff6b6b' },
   { key: 'erase', label: 'Erase', angleDeg: -112.5, accent: '#f8fafc' },
   { key: 'select', label: 'Select', angleDeg: -67.5, accent: '#7dd3fc' },
-  { key: 'sticker', label: 'Sticker', angleDeg: -22.5, accent: '#facc15' }
+  { key: 'sticker', label: 'Mark', angleDeg: -22.5, accent: '#facc15' }
 ];
 const TOOL_PAIR_DRAW_COLOR = '#ff5b5b';
 const toolPairRuntimeByKey = {};
@@ -74,63 +53,10 @@ function effectiveAssignmentForTag(tagId, baseAssignment) {
   if (mode === 'erase') {
     return { tagId: base.tagId, tool: 'eraser', colorName: 'white', color: '#ffffff' };
   }
-  if (mode === 'comment') {
-    return { tagId: base.tagId, tool: 'annotation', colorName: 'white', color: '#ffffff' };
-  }
   if (mode === 'select') {
     return { tagId: base.tagId, tool: 'drag', colorName: 'blue', color: '#7dd3fc' };
   }
   return { tagId: base.tagId, tool: 'draw', colorName: base.colorName, color: base.color };
-}
-
-function cycleCursorToolMode() {
-  var idx = CURSOR_TOOL_MODE_CYCLE.indexOf(cursorTag.mode);
-  var next = CURSOR_TOOL_MODE_CYCLE[(idx + 1) % CURSOR_TOOL_MODE_CYCLE.length];
-  cursorTag.mode = next;
-  setDrawToolMode(CURSOR_TAG_ID, next);
-  return next;
-}
-
-// This frame's cursor entry, { point, assignment }, or null. It gives way to the
-// physical tag it borrows when that tag is on the table.
-function cursorTagEntry(mapPolygon, visibleDrawTagMap) {
-  var continuous = cursorTag.mode !== 'comment';
-  var point = continuous ? { x: cursorTag.x, y: cursorTag.y } : { x: cursorTag.pressX, y: cursorTag.pressY };
-  var present = continuous ? cursorTag.pressed : Date.now() < cursorTag.commentHoldUntilMs;
-  if (!present || !pointInPolygon(point, mapPolygon)) return null;
-  if (!isDrawToolTagId(CURSOR_TAG_ID) || visibleDrawTagMap[CURSOR_TAG_ID]) return null;
-  var assignment = effectiveAssignmentForTag(CURSOR_TAG_ID, tagAssignments.getAssignment(CURSOR_TAG_ID));
-  return { point: point, assignment: assignment };
-}
-
-function updateCursorTagFromEvent(e) {
-  var rect = mapView.getBoundingClientRect();
-  cursorTag.x = e.clientX - rect.left;
-  cursorTag.y = e.clientY - rect.top;
-}
-
-// Ctrl/Cmd+click engages the cursor; a plain click still pans the map, so map panning is paused
-// for the gesture.
-function beginCursorTagGesture(e) {
-  if (!(e.ctrlKey || e.metaKey) || e.button !== 0) return;
-  e.preventDefault();
-  e.stopPropagation();
-  updateCursorTagFromEvent(e);
-  cursorTag.pressed = true;
-  cursorTag.pressX = cursorTag.x;
-  cursorTag.pressY = cursorTag.y;
-  cursorTag.commentHoldUntilMs = Date.now() + CURSOR_COMMENT_HOLD_MS;
-  if (cursorTag.dragPanWasEnabled === null) {
-    cursorTag.dragPanWasEnabled = map.dragPan.isEnabled();
-  }
-  map.dragPan.disable();
-}
-
-function endCursorTagGesture() {
-  cursorTag.pressed = false;
-  if (cursorTag.dragPanWasEnabled === null) return;
-  if (cursorTag.dragPanWasEnabled) map.dragPan.enable();
-  cursorTag.dragPanWasEnabled = null;
 }
 
 function normalizeAngle(a) {

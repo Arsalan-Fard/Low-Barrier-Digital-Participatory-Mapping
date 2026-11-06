@@ -17,6 +17,9 @@
     var liveSourceId = sourceId + '-live';
     var committedLineLayerId = layerId;
     var liveLineLayerId = layerId + '-live';
+    // Places marked on paper (a dot, an X or a small circle; mapViewInset.js) are Points, drawn as dots.
+    var committedPointLayerId = layerId + '-points';
+    var POINT_ONLY = ['==', ['geometry-type'], 'Point'];
 
     var committedFeatures = [];
     var liveFeatures = [];
@@ -48,6 +51,9 @@
       [committedLineLayerId, liveLineLayerId].forEach(function (id) {
         if (map.getLayer(id)) map.setFilter(id, filter);
       });
+      if (map.getLayer(committedPointLayerId)) {
+        map.setFilter(committedPointLayerId, filter ? ['all', POINT_ONLY, filter] : POINT_ONLY);
+      }
     }
 
     function ensureSourcesAndLayers() {
@@ -71,6 +77,21 @@
           }
         });
       });
+      if (!map.getLayer(committedPointLayerId)) {
+        map.addLayer({
+          id: committedPointLayerId,
+          type: 'circle',
+          source: committedSourceId,
+          filter: POINT_ONLY,
+          paint: {
+            'circle-color': ['coalesce', ['get', 'color'], DEFAULT_STROKE_COLOR],
+            'circle-radius': 7,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 2,
+            'circle-opacity': 0.95
+          }
+        });
+      }
     }
 
     // Runs after every style load: a basemap switch drops the custom sources and layers.
@@ -151,7 +172,8 @@
     }
 
     // New strokes start live and move to the committed source once they stop.
-    function startStroke(runtime, tagId, lng, lat, color, nowMs, px) {
+    // input: what drew it when not a tag ('mouse').
+    function startStroke(runtime, tagId, lng, lat, color, nowMs, px, input) {
       var strokeId = makeStrokeId();
       var props = {
         strokeId: strokeId,
@@ -160,6 +182,7 @@
         step: currentStep
       };
       if (currentWorkshopId) props.workshopId = currentWorkshopId;
+      if (input) props.input = String(input);
       var feature = {
         type: 'Feature',
         properties: props,
@@ -190,6 +213,8 @@
       for (var key in runtimeByTag) {
         if (activeById[key]) continue;
         var runtime = runtimeByTag[key];
+        // A held stroke (the mouse) ends on release, not when its point stops coming.
+        if (runtime.held) continue;
         if ((nowMs - (runtime.lastSeenMs || 0)) >= strokeStopMs && finishRuntime(runtime)) graduated = true;
       }
       return graduated;
@@ -298,26 +323,46 @@
       return false;
     }
 
+    // Starts the key's stroke at the point, or extends it. Returns whether the live strokes changed.
+    function feedPoint(key, entry, nowMs) {
+      var lng = Number(entry.lng);
+      var lat = Number(entry.lat);
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return false;
+      var px = projectLngLatToPx(lng, lat);
+      var runtime = ensureRuntime(key, nowMs);
+      var existing = strokeIndex[runtime.activeStrokeId];
+      if (!existing) {
+        startStroke(runtime, key, lng, lat, entry.color, nowMs, px, entry.input);
+        return true;
+      }
+      return appendToStroke(runtime, existing, lng, lat, px, nowMs);
+    }
+
     function update(activeDrawPointsByTagId, nowMs) {
       var liveChanged = false;
       var graduated = stopExpired(nowMs, activeDrawPointsByTagId);
       for (var key in activeDrawPointsByTagId) {
-        var entry = activeDrawPointsByTagId[key];
-        var lng = Number(entry.lng);
-        var lat = Number(entry.lat);
-        if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
-        var px = projectLngLatToPx(lng, lat);
-        var runtime = ensureRuntime(key, nowMs);
-        var existing = strokeIndex[runtime.activeStrokeId];
-        if (!existing) {
-          startStroke(runtime, key, lng, lat, entry.color, nowMs, px);
-          liveChanged = true;
-        } else if (appendToStroke(runtime, existing, lng, lat, px, nowMs)) {
-          liveChanged = true;
-        }
+        if (feedPoint(key, activeDrawPointsByTagId[key], nowMs)) liveChanged = true;
       }
       if (liveChanged || graduated) setLiveData();
       if (graduated) setCommittedData();
+    }
+
+    // The mouse: a stroke held from press (the first point) to releaseStroke, however long the
+    // pointer rests in between. entry: { lng, lat, color, input }.
+    function holdStroke(key, entry, nowMs) {
+      ensureRuntime(key, nowMs).held = true;
+      if (feedPoint(String(key), entry, Number(nowMs) || Date.now())) setLiveData();
+    }
+
+    function releaseStroke(key) {
+      var runtime = runtimeByTag[String(key)];
+      if (!runtime) return;
+      runtime.held = false;
+      if (finishRuntime(runtime)) {
+        setLiveData();
+        setCommittedData();
+      }
     }
 
     function eraseAtPoint(lng, lat, radiusPxValue) {
@@ -338,6 +383,12 @@
             return;
           }
           var coords = feature.geometry.coordinates;
+          if (feature.geometry.type === 'Point') {
+            var at = projectLngLatToPx(coords[0], coords[1]);
+            if (distanceSqPoints(at, centerPt) <= radius * radius) changed = true;
+            else next.push(feature);
+            return;
+          }
           var clipped = clipStrokeCoordsByCircle(coords, projectCoordsToPoints(coords), centerPt, radius);
           if (!clipped.changed) {
             next.push(feature);
@@ -362,6 +413,39 @@
       if (committedRes.changed) setCommittedData();
       if (liveRes.changed) setLiveData();
       return true;
+    }
+
+    // Lines and points digitized from a sheet of paper (mapViewInset.js). Each photo reads all the
+    // ink on the page again, so its features replace the ones the page gave before. A point keeps
+    // the mark it was ("kind": dot, x or circle).
+    function setPaperStrokes(pageId, features) {
+      var page = String(pageId);
+      committedFeatures = committedFeatures.filter(function (feature) {
+        return feature.properties.paperPage !== page;
+      });
+      (features || []).forEach(function (src) {
+        var geometry = src && src.geometry;
+        var coords = geometry && geometry.coordinates;
+        var isPoint = !!geometry && geometry.type === 'Point';
+        if (!Array.isArray(coords) || coords.length < 2) return;
+        if (isPoint && !(isFinite(coords[0]) && isFinite(coords[1]))) return;
+        var props = {
+          strokeId: makeStrokeId(),
+          tagId: 'paper',
+          color: String((src.properties && src.properties.color) || DEFAULT_STROKE_COLOR),
+          step: currentStep,
+          paperPage: page
+        };
+        if (isPoint && src.properties && src.properties.kind) props.kind = String(src.properties.kind);
+        if (currentWorkshopId) props.workshopId = currentWorkshopId;
+        committedFeatures.push({
+          type: 'Feature',
+          properties: props,
+          geometry: { type: isPoint ? 'Point' : 'LineString', coordinates: coords }
+        });
+      });
+      rebuildStrokeIndex();
+      setCommittedData();
     }
 
     // Saved sessions include the strokes still being drawn.
@@ -403,7 +487,10 @@
     return {
       ensureLayer: ensureLayer,
       update: update,
+      holdStroke: holdStroke,
+      releaseStroke: releaseStroke,
       eraseAtPoint: eraseAtPoint,
+      setPaperStrokes: setPaperStrokes,
       getDrawnGeoJSON: getDrawnGeoJSON,
       clearAll: clearAll,
       setCurrentStep: setCurrentStep,

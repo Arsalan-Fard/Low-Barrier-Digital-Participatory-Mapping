@@ -5,9 +5,8 @@ import time
 import cv2
 import numpy as np
 from flask import Blueprint, jsonify, request
-from pupil_apriltags import Detector
 
-from . import camera, shutdown_event, surface
+from . import camera, paper_watch, shutdown_event, surface
 from .marker_settings import APRILTAG_DICTS, marker_settings_family
 
 bp = Blueprint("detection", __name__)
@@ -21,12 +20,16 @@ detector_manager = None
 
 # ArUco detector parameters shown as sliders on the setup page, in the integer units of the
 # reference tuning script. "start" is the tuning applied by default (better for 16h5);
-# "opencv" is OpenCV's own default, shown as the reference.
+# "opencv" is OpenCV's own default, shown as the reference. "hint" says which way helps, beside the name.
 ARUCO_TUNING_CONTROLS = {
-    "winMax": {"param": "adaptiveThreshWinSizeMax", "label": "Win max", "min": 3, "max": 181, "step": 2, "start": 53, "opencv": 23, "scale": 1, "odd": True},
-    "poly": {"param": "polygonalApproxAccuracyRate", "label": "Poly ×1000", "min": 10, "max": 120, "step": 1, "start": 100, "opencv": 30, "scale": 0.001},
-    "minPerim": {"param": "minMarkerPerimeterRate", "label": "MinPerim ×1000", "min": 1, "max": 100, "step": 1, "start": 10, "opencv": 30, "scale": 0.001},
-    "pixCell": {"param": "perspectiveRemovePixelPerCell", "label": "PixCell", "min": 1, "max": 20, "step": 1, "start": 8, "opencv": 4, "scale": 1},
+    "winMax": {"param": "adaptiveThreshWinSizeMax", "label": "Win max", "min": 3, "max": 181, "step": 2, "start": 53, "opencv": 23, "scale": 1, "odd": True,
+               "hint": "higher = more tags in uneven light, slower"},
+    "poly": {"param": "polygonalApproxAccuracyRate", "label": "Poly ×1000", "min": 10, "max": 120, "step": 1, "start": 100, "opencv": 30, "scale": 0.001,
+             "hint": "higher = accepts blurred or bent tags, more false ones"},
+    "minPerim": {"param": "minMarkerPerimeterRate", "label": "MinPerim ×1000", "min": 1, "max": 100, "step": 1, "start": 10, "opencv": 30, "scale": 0.001,
+                 "hint": "lower = smaller, farther tags, more noise"},
+    "pixCell": {"param": "perspectiveRemovePixelPerCell", "label": "PixCell", "min": 1, "max": 20, "step": 1, "start": 8, "opencv": 4, "scale": 1,
+                "hint": "higher = reads tags more reliably, slower"},
 }
 aruco_tuning_values = {key: meta["start"] for key, meta in ARUCO_TUNING_CONTROLS.items()}
 
@@ -34,11 +37,19 @@ aruco_tuning_values = {key: meta["start"] for key, meta in ARUCO_TUNING_CONTROLS
 # distant tags. Off by default, as it measured ~90 ms per 720p frame.
 aruco_upscale_enabled = False
 ARUCO_UPSCALE_CONTROLS = {
-    "upTarget": {"label": "Upscale target px", "min": 100, "max": 300, "step": 5, "default": 190},
-    "upMinSide": {"label": "Upscale min side", "min": 6, "max": 60, "step": 1, "default": 12},
-    "upMaxSide": {"label": "Upscale max side", "min": 40, "max": 200, "step": 5, "default": 110},
+    "upTarget": {"label": "Upscale target px", "min": 100, "max": 300, "step": 5, "default": 190,
+                 "hint": "higher = small tags read better, slower"},
+    "upMinSide": {"label": "Upscale min side", "min": 6, "max": 60, "step": 1, "default": 12,
+                  "hint": "lower = rescues tinier tags, slower"},
+    "upMaxSide": {"label": "Upscale max side", "min": 40, "max": 200, "step": 5, "default": 110,
+                  "hint": "higher = rescues larger missed tags, slower"},
 }
 aruco_upscale_values = {key: meta["default"] for key, meta in ARUCO_UPSCALE_CONTROLS.items()}
+# How far, on average, a printed sheet's tags must move (in map pixels) before the view projected
+# onto the sheet follows them; smaller shifts count as jitter. Read by printedScreen.js via /api/tags.
+SCREEN_JITTER_CONTROL = {"key": "jitterPx", "label": "Sheet jitter px", "min": 0, "max": 30, "step": 1, "default": 3,
+                         "hint": "higher = projected sheets ignore bigger shifts"}
+screen_jitter_px = SCREEN_JITTER_CONTROL["default"]
 ARUCO_UPSCALE_PAD = 1.0
 ARUCO_UPSCALE_MAX_ASPECT = 1.7
 ARUCO_UPSCALE_MERGE_TOL = 15.0
@@ -114,7 +125,7 @@ def _quad_area(c):
 
 
 class ArucoDetection:
-    """An OpenCV ArUco result shaped like a pupil_apriltags Detection."""
+    """One detected tag: its id and its four corners."""
     __slots__ = ("tag_id", "corners")
 
     def __init__(self, tag_id, corners):
@@ -123,7 +134,7 @@ class ArucoDetection:
 
 
 class ArucoDetector:
-    """pupil_apriltags.Detector's interface on OpenCV ArUco, merging results over several families."""
+    """OpenCV ArUco over several families, merging their results."""
 
     def __init__(self, families, min_area_px):
         self.detectors = []
@@ -134,7 +145,7 @@ class ArucoDetector:
             self.detectors.append(cv2.aruco.ArucoDetector(dictionary, _tuned_parameters()))
         self.min_area = float(min_area_px)
 
-    def detect(self, gray, **_):
+    def detect(self, gray):
         seen_ids = set()
         results = []
         for det in self.detectors:
@@ -178,22 +189,6 @@ def normalize_apriltag_families(raw):
     return families
 
 
-def create_detector(args, families):
-    """(detector, description) for the backend chosen on the command line."""
-    if args.detector == "aruco":
-        detector = ArucoDetector(families, args.aruco_min_area)
-        return detector, f"OpenCV ArUco  families={families}  min_area={args.aruco_min_area}px²"
-    detector = Detector(
-        families=" ".join(families),
-        nthreads=max(1, int(args.apriltag_threads)),
-        quad_decimate=float(args.apriltag_quad_decimate),
-        quad_sigma=float(args.apriltag_quad_sigma),
-        refine_edges=bool(args.apriltag_refine_edges),
-        decode_sharpening=float(args.apriltag_decode_sharpening),
-    )
-    return detector, f"pupil_apriltags  families={families}"
-
-
 class DetectorManager:
     """Owns the live detector; rebuilds it when the marker family or the tuning changes."""
 
@@ -208,11 +203,12 @@ class DetectorManager:
         with detector_lock:
             if not force and families == self.families:
                 return
-        detector, description = create_detector(self.args, families)
+        min_area = self.args.aruco_min_area
+        detector = ArucoDetector(families, min_area)
         with detector_lock:
             self.detector = detector
             self.families = families
-        print(f"[Detector] {description}", flush=True)
+        print(f"[Detector] OpenCV ArUco  families={families}  min_area={min_area}px²", flush=True)
 
     def rebuild(self):
         with detector_lock:
@@ -283,12 +279,13 @@ def detector_loop():
             time.sleep(0.01)
             continue
         try:
-            detections = detector.detect(gray, estimate_tag_pose=False)
+            detections = detector.detect(gray)
         except Exception as exc:
             print(f"[Detector] detect failed: {exc}", flush=True)
             time.sleep(0.05)
             continue
 
+        paper_watch.offer(seq, frame, detections)
         surface.update_from_detections(detections)
         transform = surface.surface_transform()
         mapped = [map_detection(det, transform) for det in detections]
@@ -300,18 +297,22 @@ def detector_loop():
 def aruco_tuning_payload():
     controls = []
     for key, meta in ARUCO_TUNING_CONTROLS.items():
-        controls.append({"key": key, "label": meta["label"], "min": meta["min"], "max": meta["max"],
-                         "step": meta["step"], "default": meta["opencv"], "value": aruco_tuning_values[key]})
+        controls.append({"key": key, "label": meta["label"], "hint": meta["hint"], "min": meta["min"],
+                         "max": meta["max"], "step": meta["step"], "default": meta["opencv"],
+                         "value": aruco_tuning_values[key]})
     upscale = []
     for key, meta in ARUCO_UPSCALE_CONTROLS.items():
-        upscale.append({"key": key, "label": meta["label"], "min": meta["min"], "max": meta["max"],
-                        "step": meta["step"], "default": meta["default"], "value": aruco_upscale_values[key]})
+        upscale.append({"key": key, "label": meta["label"], "hint": meta["hint"], "min": meta["min"],
+                        "max": meta["max"], "step": meta["step"], "default": meta["default"],
+                        "value": aruco_upscale_values[key]})
+    jitter = SCREEN_JITTER_CONTROL
     return {
         "controls": controls,
         "upscale": upscale,
         "upscaleEnabled": aruco_upscale_enabled,
-        "appliesTo": "aruco",
-        "activeBackend": detector_manager.args.detector if detector_manager else None,
+        "screen": [{"key": jitter["key"], "label": jitter["label"], "hint": jitter["hint"], "min": jitter["min"],
+                    "max": jitter["max"], "step": jitter["step"], "default": jitter["default"],
+                    "value": screen_jitter_px}],
     }
 
 
@@ -326,6 +327,7 @@ def api_tags():
         "corners": surface.snapshot_corners(),
         "frame": camera.frame_info(),
         "source": camera.camera_source,
+        "screenJitterPx": screen_jitter_px,
     })
 
 
@@ -347,7 +349,7 @@ def _slider_value(payload, key, meta):
 
 @bp.route("/api/aruco-tuning", methods=["PUT"])
 def api_aruco_tuning_set():
-    global aruco_upscale_enabled
+    global aruco_upscale_enabled, screen_jitter_px
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify({"ok": False, "error": "invalid_payload"}), 400
@@ -364,6 +366,9 @@ def api_aruco_tuning_set():
             aruco_upscale_values[key] = value
     if "upEnabled" in payload:
         aruco_upscale_enabled = bool(payload["upEnabled"])
+    jitter = _slider_value(payload, SCREEN_JITTER_CONTROL["key"], SCREEN_JITTER_CONTROL)
+    if jitter is not None:
+        screen_jitter_px = jitter
     if changed and detector_manager is not None:
         try:
             detector_manager.rebuild()

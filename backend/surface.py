@@ -1,14 +1,12 @@
-"""Where the projected surface is in the camera image: its four corners (set by hand or fitted from
-a projected grid of tags) and the saved per-tool calibration offsets."""
-import json
-import math
+"""Where the projected surface is in the camera image: its four corners, set by hand or fitted from
+a projected grid of tags."""
 import threading
 
 import cv2
 import numpy as np
 from flask import Blueprint, jsonify, request
 
-from . import camera, config, marker_settings
+from . import camera, marker_settings
 
 bp = Blueprint("surface", __name__)
 
@@ -30,8 +28,6 @@ CALIB_MIN_INLIER_RATIO = 0.65
 CALIB_MAX_REPROJ_PX = 10.0
 CALIB_CONFIRM_FRAMES = 5
 CALIB_CANDIDATE_SHIFT_PX = 8.0  # an estimate this far from the others restarts the count
-
-CALIBRATION_GROUPS = {"draw": True, "sticker": False, "annotation": False, "selector": False}  # group -> has compX/compY
 
 corners_lock = threading.Lock()
 surface_corners = [None, None, None, None]  # TL, TR, BR, BL in camera pixels
@@ -140,39 +136,6 @@ def _process_grid_calibration(detections):
         grid_calib_candidates.clear()
 
 
-def _number(value):
-    return isinstance(value, (int, float)) and math.isfinite(float(value))
-
-
-def normalize_calibration_payload(raw):
-    """{"groups": {group: {ox, oy[, compX, compY]}}} with defaults for missing groups; None if invalid."""
-    source = raw.get("groups", raw) if isinstance(raw, dict) else None
-    if not isinstance(source, dict):
-        return None
-    groups = {}
-    saw_group = False
-    for key, allow_comp in CALIBRATION_GROUPS.items():
-        # The draw pen starts right under its tag; the other tools 20 px below.
-        entry = {"ox": 0.0, "oy": 0.0 if key == "draw" else 20.0}
-        if allow_comp:
-            entry["compX"] = 0.0
-            entry["compY"] = 0.0
-        groups[key] = entry
-        if key not in source:
-            continue
-        offset = source[key]
-        if not isinstance(offset, dict) or not _number(offset.get("ox")) or not _number(offset.get("oy")):
-            return None
-        entry["ox"] = float(offset["ox"])
-        entry["oy"] = float(offset["oy"])
-        if allow_comp:
-            for comp in ("compX", "compY"):
-                if _number(offset.get(comp)):
-                    entry[comp] = float(offset[comp])
-        saw_group = True
-    return groups if saw_group else None
-
-
 @bp.route("/api/corners", methods=["GET"])
 def api_corners_get():
     return jsonify({"corners": snapshot_corners()})
@@ -244,37 +207,3 @@ def api_auto_calibrate_set():
             "error": None, "done": False, "found_ids": [], "reason": None,
         })
     return jsonify({"ok": True, "enabled": enabled})
-
-
-@bp.route("/api/calibration", methods=["GET"])
-def api_calibration_get():
-    if not config.CALIBRATION_FILE.exists():
-        return jsonify({"ok": False, "error": "not_found"}), 404
-    try:
-        groups = normalize_calibration_payload(json.loads(config.CALIBRATION_FILE.read_text(encoding="utf-8")))
-    except Exception:
-        return jsonify({"ok": False, "error": "read_failed"}), 500
-    if groups is None:
-        return jsonify({"ok": False, "error": "invalid_file"}), 400
-    return jsonify({"ok": True, "groups": groups})
-
-
-@bp.route("/api/calibration", methods=["POST"])
-def api_calibration_set():
-    groups = normalize_calibration_payload(request.get_json(silent=True))
-    if groups is None:
-        return jsonify({"ok": False, "error": "invalid_offsets"}), 400
-    try:
-        config.CALIBRATION_FILE.write_text(json.dumps({"groups": groups}, ensure_ascii=True, indent=2), encoding="utf-8")
-    except Exception:
-        return jsonify({"ok": False, "error": "write_failed"}), 500
-    return jsonify({"ok": True, "path": config.CALIBRATION_FILE.name})
-
-
-@bp.route("/api/calibration", methods=["DELETE"])
-def api_calibration_clear():
-    try:
-        config.CALIBRATION_FILE.unlink(missing_ok=True)
-    except Exception:
-        return jsonify({"ok": False, "error": "delete_failed"}), 500
-    return jsonify({"ok": True})

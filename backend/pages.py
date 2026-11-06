@@ -32,11 +32,6 @@ def map_page():
     return send_from_directory(config.WEB_DIR, "index.html")
 
 
-@bp.route("/results")
-def results_page():
-    return send_from_directory(config.WEB_DIR, "results.html")
-
-
 @bp.route("/data/<path:filename>")
 def data_asset(filename):
     # data/ is outside the static web/ folder (it mixes shipped datasets with app state).

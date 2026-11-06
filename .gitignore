@@ -60,9 +60,8 @@ launcher.log
 /web/temp-sketchmap-result-2.geojson
 /web/temp-sketchmap-raster-*.png
 
-# Site/deployment-specific data & calibration
+# Site/deployment-specific data
 ip_paris_amenities.geojson
-calibration_offsets.json
 
 # Large regenerable datasets (rebuild with Expo/school-scenario/tools/download_paris_arrondissement_roads.py)
 /Expo

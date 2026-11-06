@@ -1,6 +1,5 @@
-"""Backend recording of the camera feed, the microphone and the screen, toggled by Ctrl+Shift+R or
-the map page's Record button (/api/record). Streams rotate into segments that end up as MP4s."""
-import ctypes
+"""Backend recording of the camera feed, the microphone and the screen, toggled by the map page's
+Record button (/api/record). Streams rotate into segments that end up as MP4s."""
 import json
 import math
 import os
@@ -19,14 +18,12 @@ from flask import Blueprint, jsonify, request
 from . import camera, config, shutdown_event
 from .helpers import utc_now_iso
 
-try:
-    import ctypes.wintypes  # the hotkey's message loop; Windows only
-except (ImportError, ValueError):
-    pass
-
 bp = Blueprint("recorder", __name__)
 
-camera_recorder = None  # set by setup_recorder(); shared by the hotkey and /api/record
+camera_recorder = None  # set by setup_recorder()
+
+RECORDING_FPS = 20.0
+SEGMENT_SECONDS = 300.0  # each stream rotates into a new MP4 every 5 minutes
 
 
 class RecordingIndicator:
@@ -99,14 +96,9 @@ class RecordingIndicator:
 
 
 class CameraVoiceRecorder:
-    def __init__(self, fps=20.0, audio_device=None, output_format="mp4", keep_raw=False,
-                 segment_seconds=300.0, show_indicator=True):
-        self.fps = max(1.0, float(fps))
-        self.audio_device = audio_device
-        self.output_format = str(output_format or "mp4").lower()
-        self.keep_raw = bool(keep_raw)
-        self.segment_seconds = max(10.0, float(segment_seconds or 300.0))
-        self.show_indicator = bool(show_indicator)
+    def __init__(self):
+        self.fps = RECORDING_FPS
+        self.segment_seconds = SEGMENT_SECONDS
         self.indicator = RecordingIndicator()
         self.lock = threading.Lock()
         self.recording = False
@@ -194,8 +186,7 @@ class CameraVoiceRecorder:
             self.screen_thread = threading.Thread(target=self._screen_loop, daemon=True)
             self.screen_thread.start()
             self._start_audio()
-            if self.show_indicator:
-                self.indicator.start()
+            self.indicator.start()
             print(f"[Recorder] Started camera+voice recording: {session_dir}", flush=True)
             return True, str(session_dir)
 
@@ -216,7 +207,7 @@ class CameraVoiceRecorder:
         try:
             import sounddevice as sd
 
-            device = sd.query_devices(self.audio_device, kind="input")
+            device = sd.query_devices(kind="input")  # the system's default microphone
             channels = min(2, max(1, int(device.get("max_input_channels") or 1)))
             samplerate = int(float(device.get("default_samplerate") or 44100))
             self.audio_channels = channels
@@ -224,12 +215,11 @@ class CameraVoiceRecorder:
             self.audio_device_info = {
                 "name": str(device.get("name") or ""),
                 "hostapi": int(device.get("hostapi") or 0),
-                "selector": self.audio_device,
             }
             self.audio_thread = threading.Thread(target=self._audio_writer_loop, daemon=True)
             self.audio_thread.start()
-            self.audio_stream = sd.InputStream(device=self.audio_device, samplerate=samplerate,
-                                               channels=channels, dtype="int16", callback=self._audio_callback)
+            self.audio_stream = sd.InputStream(samplerate=samplerate, channels=channels, dtype="int16",
+                                               callback=self._audio_callback)
             self.audio_stream.start()
             print(f"[Recorder] Microphone: {self.audio_device_info['name']} ({channels} ch, {samplerate} Hz)", flush=True)
         except Exception as exc:
@@ -395,7 +385,7 @@ class CameraVoiceRecorder:
         return False, detail[-1] if detail else f"ffmpeg_exit_{result.returncode}"
 
     def _finalize_segments(self):
-        """Turn each recorded segment into an MP4 (when asked to), dropping its raw streams unless kept."""
+        """Turn each recorded segment into an MP4 and drop its raw streams; they stay if encoding fails."""
         indexes = set()
         pattern = re.compile(r"^segment_(\d{4})_(?:camera_feed\.avi|microphone\.wav)$")
         for path in self.session_dir.iterdir():
@@ -410,17 +400,16 @@ class CameraVoiceRecorder:
             has_audio = audio_path.exists() and audio_path.stat().st_size > 44
             mp4_file = ""
             error = ""
-            if self.output_format == "mp4" and has_video:
+            if has_video:
                 ok, error = self._write_mp4(video_path, audio_path if has_audio else None, mp4_path)
                 if ok:
                     mp4_file = mp4_path.name
                     print(f"[Recorder] Created MP4 segment: {mp4_path}", flush=True)
-                    if not self.keep_raw:
-                        for path in (video_path, audio_path):
-                            try:
-                                path.unlink(missing_ok=True)
-                            except Exception as exc:
-                                print(f"[Recorder] Could not remove raw stream {path}: {exc}", flush=True)
+                    for path in (video_path, audio_path):
+                        try:
+                            path.unlink(missing_ok=True)
+                        except Exception as exc:
+                            print(f"[Recorder] Could not remove raw stream {path}: {exc}", flush=True)
                 else:
                     print(f"[Recorder] MP4 segment creation failed: {error}", flush=True)
             finalized.append({
@@ -456,11 +445,10 @@ class CameraVoiceRecorder:
             ok, error = self._write_mp4(self.screen_path, None, self.screen_mp4_path)
             if ok:
                 screen_mp4 = self.screen_mp4_path.name
-                if not self.keep_raw:
-                    try:
-                        self.screen_path.unlink()
-                    except Exception:
-                        pass
+                try:
+                    self.screen_path.unlink()
+                except Exception:
+                    pass
             elif not self.screen_error:
                 self.screen_error = error
 
@@ -535,106 +523,9 @@ class CameraVoiceRecorder:
         return {"directory": str(session_dir), **metadata}, None
 
 
-def _show_recorder_info(message):
-    """Show `message` in a Windows message box, on its own thread: a modal box on the hotkey
-    thread would swallow the next Ctrl+Shift+R."""
-    print(f"[Recorder] {message}", flush=True)
-    if os.name == "nt":
-        threading.Thread(target=ctypes.windll.user32.MessageBoxW,
-                         args=(None, str(message), "Camera Recorder", 0x40), daemon=True).start()
-
-
-def _handle_recording_hotkey(recorder):
-    if not recorder.is_recording():
-        ok, detail = recorder.start()
-        if ok:
-            _show_recorder_info("Camera and microphone recording started.\nPress Ctrl+Shift+R again to stop and save.")
-        else:
-            _show_recorder_info(f"Recording could not start: {detail}")
-        return
-
-    result, error = recorder.stop()
-    if error:
-        _show_recorder_info(f"Recording could not stop: {error}")
-        return
-    output = result.get("output") or {}
-    files = output.get("files") or []
-    saved_file = output.get("file") or (files[0] if len(files) == 1 else "")
-    if len(files) > 1:
-        _show_recorder_info(f"Recording saved:\n{result.get('directory')}\n{len(files)} MP4 parts")
-    elif saved_file:
-        _show_recorder_info(f"Recording saved:\n{result.get('directory')}\\{saved_file}")
-    else:
-        _show_recorder_info(f"Recording saved as raw streams:\n{output.get('error') or result.get('directory')}")
-
-
-def start_recording_hotkey(recorder):
-    if os.name != "nt":
-        print("[Recorder] Ctrl+Shift+R hotkey is only enabled on Windows.", flush=True)
-        return
-
-    def hotkey_loop():
-        user32 = ctypes.windll.user32
-        hotkey_id = 0x524543
-        mod_control_shift_norepeat = 0x0002 | 0x0004 | 0x4000
-        vk_r = 0x52
-        wm_hotkey = 0x0312
-        if not user32.RegisterHotKey(None, hotkey_id, mod_control_shift_norepeat, vk_r):
-            print("[Recorder] Could not register Ctrl+Shift+R hotkey.", flush=True)
-            return
-        print("[Recorder] Ctrl+Shift+R starts/stops backend camera+voice recording.", flush=True)
-        msg = ctypes.wintypes.MSG()
-        try:
-            while not shutdown_event.is_set():
-                if user32.GetMessageW(ctypes.byref(msg), None, 0, 0) in (0, -1):
-                    break
-                if msg.message == wm_hotkey and msg.wParam == hotkey_id:
-                    _handle_recording_hotkey(recorder)
-        finally:
-            user32.UnregisterHotKey(None, hotkey_id)
-
-    threading.Thread(target=hotkey_loop, daemon=True).start()
-
-
-def audio_device_selector(value):
-    """--recording-audio-device: a device index, a name, or None for the default microphone."""
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        return int(text)
-    except ValueError:
-        return text
-
-
-def print_audio_devices():
-    try:
-        import sounddevice as sd
-    except Exception as exc:
-        print(f"[Recorder] Could not import sounddevice: {exc}")
-        return
-    hostapis = sd.query_hostapis()
-    for index, device in enumerate(sd.query_devices()):
-        inputs = int(device.get("max_input_channels") or 0)
-        if inputs <= 0:
-            continue
-        hostapi = hostapis[int(device.get("hostapi") or 0)].get("name", "unknown")
-        samplerate = int(float(device.get("default_samplerate") or 0))
-        print(f"{index}: {device.get('name')} | {hostapi} inputs={inputs} default_samplerate={samplerate}")
-
-
-def setup_recorder(args):
+def setup_recorder():
     global camera_recorder
-    camera_recorder = CameraVoiceRecorder(
-        fps=args.recording_fps,
-        audio_device=audio_device_selector(args.recording_audio_device),
-        output_format=args.recording_output,
-        keep_raw=args.keep_recording_raw,
-        segment_seconds=max(10.0, float(args.recording_segment_minutes) * 60.0),
-        show_indicator=not args.no_recording_indicator,
-    )
-    if not args.no_recording_hotkey:
-        start_recording_hotkey(camera_recorder)
+    camera_recorder = CameraVoiceRecorder()
 
 
 @bp.route("/api/record", methods=["GET"])
@@ -646,7 +537,7 @@ def api_record_status():
 
 @bp.route("/api/record", methods=["POST"])
 def api_record_control():
-    """{"action": "start" | "stop" | "toggle"} for the same recorder the hotkey drives."""
+    """{"action": "start" | "stop" | "toggle"}."""
     recorder = camera_recorder
     if recorder is None:
         return jsonify({"ok": False, "error": "recorder_unavailable"}), 503

@@ -1,59 +1,55 @@
-"""One sheet, end to end: photo in, reviewed-ready result out.
+"""One sheet, in two steps: photo in, digitised sheet out.
 
-    map photo ──► register (tags) ──► rectify map + panel ──► colour-fit + diff
-                                                        │
-          stickers (shape only) ◄──────────────────────┤
-          colours ◄── session palette (+ your corrections)
-          routes (ink graph) ◄─────────────────────────┘
-          VLM: questionnaire panel, doubtful stickers
-                                                        │
-                                   runs/<id>/result.json, result.geojson, images
+  prepare   map photo ──► register (tags) ──► rectify map ──► colour-fit + diff
+                                                                        │ map.jpg: the page shows it
+  digitize  the photo's list (which stickers, which pens) ─────────────┤
+              stickers (shape only) ◄──────────────────────────────────┤
+              colours ◄── every look of the listed names (workshop.py)  │
+              routes (ink graph) ◄─────────────────────────────────────┘
+                                                                        │
+                       data/digitized_sheets/<id>/result.json, images
+                       sessions/<id>.geojson: the sheet in the Results panel
 
-Everything a reviewer changes later is applied to ``result.json`` by
-``review.py`` without re-running the vision steps.
+The page prepares a photo, lets its list be set, then digitizes it. Everything
+a reviewer changes later is applied to ``result.json`` by ``review.py`` without
+re-running the vision steps, and each save rewrites the sheet's GeoJSON in the
+results folder the Results panel of Run a Workshop reads.
 """
 from __future__ import annotations
 
 import json
 import math
+import threading
 import time
-from dataclasses import dataclass, field
+from collections import OrderedDict
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from .palette import SessionPalette
+from backend import config
+from .palette import Palettes
 from .photometric import analyse_map
-from .register import choose_map_width, rectify_map, rectify_panel, register_page
+from .register import choose_map_width, rectify_map, register_page
 from .sheet import MapSheet, load_sheet
 from .stickers import detect_stickers
 from .strokes import extract_routes
-
-PACKAGE_DIR = Path(__file__).resolve().parent
-DEFAULT_LEGEND = PACKAGE_DIR / "legend.json"
-DEFAULT_RUNS = PACKAGE_DIR / "runs"
-DEFAULT_SESSIONS = PACKAGE_DIR / "sessions"
+from .workshop import Workshop
 
 
 @dataclass
 class Options:
     map_id: str
     map_photo: Path
-    legend_path: Path = DEFAULT_LEGEND
+    legend_path: Path = field(default_factory=lambda: config.DIGITIZER_LEGEND_FILE)
     session: str = "default"
-    sessions_dir: Path = DEFAULT_SESSIONS
-    runs_dir: Path = DEFAULT_RUNS
-    sheets_dir: Path | None = None
-    use_vlm: bool = True
-    verify_stickers: bool = True
-    vlm_backend: str = "transformers"
-    vlm_model: str | None = None
-    vlm_url: str | None = None
-    vlm_quant: str = "4bit"
-    map_width: int | None = None
+    sessions_dir: Path = field(default_factory=lambda: config.DIGITIZER_PALETTES_DIR)
+    runs_dir: Path = field(default_factory=lambda: config.DIGITIZED_SHEETS_DIR)
+    sheets_dir: Path = field(default_factory=lambda: config.MAP_SHEETS_DIR)
     sheet_number: int | None = None     # the participant's sheet within its map: 1, 2, ...
     run_id: str | None = None
+    vlm: str = ""                       # the handwriting model (vlm.MODELS), or "" for none
     log: list = field(default_factory=list)
 
 
@@ -77,13 +73,6 @@ def legend_class(legend: dict, shape: str, colour: str | None) -> dict | None:
             return item
     return None
 
-
-def category_label(legend: dict, category: str | None) -> str | None:
-    """The review page's name for a category ("Home"), not the French printed on the sheet."""
-    for item in legend["stickers"]["classes"]:
-        if item["category"] == category:
-            return item["label"]
-    return None
 
 
 def fixed_colours(legend: dict) -> dict[str, str]:
@@ -185,18 +174,18 @@ def shape_gate(legend: dict, palette):
 PEN_INK_MARGIN = 5.0
 
 
-def not_stickers(stickers: list, legend: dict, session, gate) -> dict[int, str]:
+def not_stickers(stickers: list, legend: dict, palettes: Palettes, gate) -> dict[int, str]:
     """Fits that are not stickers, with why: pen ink beside a sticker, a star whose
     measured colour cannot be gold, a second star lying on a better one."""
     fixed = fixed_colours(legend)
-    colours = session.stickers.without(reserved_colours(legend))
+    colours = palettes.stickers.without(reserved_colours(legend))
     why: dict[int, str] = {}
     for sticker in stickers:
         weak = sticker.occluded > 0.35 or sticker.fill < 0.5
         chroma = math.hypot(sticker.lab[1] - 128.0, sticker.lab[2] - 128.0)
         if weak and sticker.shape not in fixed and chroma >= 12.0:
             to_sticker = min(colours.distances_to(sticker.lab).values(), default=math.inf)
-            to_pen = min(session.pens.distances_to(sticker.lab).values(), default=math.inf)
+            to_pen = min(palettes.pens.distances_to(sticker.lab).values(), default=math.inf)
             if to_pen + PEN_INK_MARGIN < to_sticker:
                 why[sticker.id] = "pen ink"
         elif sticker.shape in fixed and gate is not None and sticker.shape not in gate(sticker.lab):
@@ -231,19 +220,16 @@ def drop_fits(stickers: list, cover: np.ndarray, why: dict[int, str]) -> tuple[l
     return kept, dropped
 
 
-def classify_stickers(stickers: list, palette, legend: dict, clamp: dict[int, str] | None = None) -> dict:
-    """Colours from the session palette, then the legend's category for (shape, colour).
+def classify_stickers(stickers: list, palette, legend: dict) -> dict:
+    """Each sticker's colour, from the looks of the photo's colours.
 
     A shape that comes in one colour only takes that colour (a star is gold);
     the others are measured against every colour except those reserved for
-    such a shape.
+    such a shape. A shape x colour the photo's list does not have is flagged.
     """
     fixed, reserved = fixed_colours(legend), reserved_colours(legend)
     measured = [s for s in stickers if s.shape not in fixed]
-    index_of = {s.id: i for i, s in enumerate(measured)}
-    clamp_by_index = {index_of[sid]: colour for sid, colour in (clamp or {}).items()
-                      if sid in index_of and colour not in reserved}
-    assignments, info = palette.without(reserved).classify([s.lab for s in measured], clamp_by_index)
+    assignments, info = palette.without(reserved).classify([s.lab for s in measured])
     by_id = {s.id: a for s, a in zip(measured, assignments)}
     for sticker in stickers:
         sticker.flags = [f for f in sticker.flags if not f.startswith("colour-") and f != "no-legend-class"]
@@ -254,27 +240,26 @@ def classify_stickers(stickers: list, palette, legend: dict, clamp: dict[int, st
             sticker.colour = assignment.colour
             sticker.colour_confidence = assignment.confidence
             sticker.colour_alternatives = assignment.alternatives
-            sticker.flags += [f for f in assignment.flags if f != "human"]
-            if "human" in assignment.flags:
-                sticker.source = "human"
-        entry = legend_class(legend, sticker.shape, sticker.colour)
-        sticker.category = entry["category"] if entry else None
-        sticker.label = entry["label"] if entry else None
-        if entry is None:
+            sticker.flags += assignment.flags
+        if legend_class(legend, sticker.shape, sticker.colour) is None:
             sticker.flags.append("no-legend-class")
     return info
 
 
-def _haversine_m(a: list[float], b: list[float]) -> float:
-    lon1, lat1, lon2, lat2 = map(math.radians, (a[0], a[1], b[0], b[1]))
-    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
-    return 2 * 6_371_000 * math.asin(math.sqrt(h))
+def export_source(item: dict) -> str:
+    """"auto" for what the detector found, "manual" for what was added or corrected by hand."""
+    source = item.get("source", "auto")
+    return "manual" if source == "human" else source
 
 
 def to_geojson(result: dict, sheet: MapSheet, legend: dict) -> dict:
-    """Stickers and routes as GeoJSON (the property names the old Digitize panel exported).
+    """The sheet's marks (its stickers), routes and handwriting as GeoJSON.
 
-    Private questionnaire fields (the name) are never exported.
+    A mark keeps its shape and colour (the legend says what that pair
+    means), a route its line and pen colour, a handwritten text its words at
+    the middle of where they were written. A route the child labelled METRO
+    gets a note: it is a metro trip, not a bike route. Beside the features:
+    which sheet it is.
     """
     width, height = result["map"]["width"], result["map"]["height"]
     colours = {c["id"]: c for c in legend["stickers"]["colours"]}
@@ -285,29 +270,36 @@ def to_geojson(result: dict, sheet: MapSheet, legend: dict) -> dict:
             continue
         colour = colours.get(s.get("colour") or "", {})
         features.append({"type": "Feature", "properties": {
-            "kind": "sticker", "id": s["id"], "shape": s["shape"],
-            "color": colour.get("display"), "colorClass": s.get("colour"), "colorLabel": colour.get("label"),
-            "category": s.get("category"),
-            "categoryLabel": category_label(legend, s.get("category")) or s.get("label"),
-            "confidence": s.get("colour_confidence"), "flags": s.get("flags", []), "source": s.get("source", "auto"),
+            "kind": "mark", "id": s["id"], "shape": s["shape"],
+            "color": colour.get("display"), "colorLabel": colour.get("label"),
+            "confidence": s.get("colour_confidence"), "source": export_source(s),
         }, "geometry": {"type": "Point", "coordinates": sheet.pixel_to_lnglat(s["x"], s["y"], width, height)}})
     for r in result["routes"]:
         if r.get("deleted") or r.get("kind") != "route":
             continue
-        coords = [sheet.pixel_to_lnglat(x, y, width, height) for x, y in r["points"]]
-        length = sum(_haversine_m(coords[i], coords[i + 1]) for i in range(len(coords) - 1))
         pen = pens.get(r.get("pen") or "", {})
+        properties = {"kind": "line", "color": pen.get("display"), "colorLabel": pen.get("label")}
+        if "labelled-metro" in r.get("flags", []):
+            properties["note"] = "labelled METRO by the child: a metro trip, not a bike route"
+        coords = [sheet.pixel_to_lnglat(x, y, width, height) for x, y in r["points"]]
+        features.append({"type": "Feature", "properties": properties,
+                         "geometry": {"type": "LineString", "coordinates": coords}})
+    for text in result.get("texts") or []:
+        if text.get("deleted"):
+            continue
         features.append({"type": "Feature", "properties": {
-            "kind": "line", "id": r["id"], "color": pen.get("display"), "colorClass": r.get("pen"),
-            "colorLabel": pen.get("label"), "mode": pen.get("mode"), "modeLabel": pen.get("modeLabel"),
-            "lengthM": round(length, 1), "flags": r.get("flags", []), "source": r.get("source", "auto"),
-        }, "geometry": {"type": "LineString", "coordinates": coords}})
-    # only fields the legend still asks for, and never a private one
-    exported = {f["id"] for f in (legend.get("questionnaire") or {}).get("fields", []) if not f.get("private")}
-    answers = {k: v for k, v in ((result.get("questionnaire") or {}).get("fields") or {}).items() if k in exported}
-    return {"type": "FeatureCollection", "features": features, "properties": {
-        "mapId": result["mapId"], "runId": result["runId"], "questionnaire": answers,
-    }}
+            "kind": "text", "id": text["id"], "text": text["text"], "source": export_source(text),
+        }, "geometry": {"type": "Point", "coordinates": sheet.pixel_to_lnglat(text["x"], text["y"], width, height)}})
+    info = result.get("sheet") or {}
+    return {"type": "FeatureCollection", "sheet": info.get("label") or result.get("runId"),
+            "mapId": str(result.get("mapId", "")), "features": features}
+
+
+def geojson_text(data: dict) -> str:
+    """GeoJSON with one feature per line: still one JSON document, but readable in a text editor."""
+    head = json.dumps({k: v for k, v in data.items() if k != "features"}, ensure_ascii=False)[:-1]
+    features = ",\n".join(json.dumps(f, ensure_ascii=False) for f in data["features"])
+    return f'{head}, "features": [\n{features}\n]}}\n'
 
 
 def render_overlay(image: np.ndarray, result: dict, legend: dict) -> np.ndarray:
@@ -337,10 +329,125 @@ def render_overlay(image: np.ndarray, result: dict, legend: dict) -> np.ndarray:
     return canvas
 
 
-def run(options: Options, vlm=None) -> Path:
-    """Digitise one sheet. Pass ``vlm`` to share one loaded model across a batch."""
+# ---------------------------------------------------------------- prepare, digitize
+
+# A prepared photo's images, kept for its digitizing (the page prepares, the
+# list is set, then it digitizes); without them, preparing is redone from the
+# photo. Only what digitizing reads is kept, for the last few photos.
+_PREPARED: "OrderedDict[str, dict]" = OrderedDict()
+_PREPARED_LOCK = threading.Lock()
+PREPARED_KEPT = 3
+
+
+def _run_id(options: Options) -> str:
+    if options.run_id:
+        return options.run_id
+    if options.sheet_number is not None:
+        return sheet_run_id(options.map_id, options.sheet_number)
+    return f"{time.strftime('%Y%m%d-%H%M%S')}-map{options.map_id}"
+
+
+def _straighten(photo_path: Path, sheet: MapSheet, map_width: int | None, timings: dict) -> dict:
+    """Register, rectify and colour-correct a photo: everything digitizing reads."""
+    t = time.time()
+    photo = cv2.imread(str(photo_path), cv2.IMREAD_COLOR)
+    if photo is None:
+        raise FileNotFoundError(f"cannot read the photo {photo_path}")
+    registration = register_page(photo, sheet)
+    width = choose_map_width(sheet, registration, map_width)
+    px_per_mm = width / sheet.map_width_mm
+    rectified, coverage = rectify_map(photo, sheet, registration, width)
+    timings["register"] = round(time.time() - t, 2)
+    t = time.time()
+    images = analyse_map(rectified, sheet.reference, sheet.mask_rects, px_per_mm, coverage=coverage)
+    timings["photometry"] = round(time.time() - t, 2)
+    images = replace(images, observed=None, predicted=None, normalized=None)
+    return {"registration": registration, "width": width, "px_per_mm": px_per_mm, "images": images}
+
+
+def _keep(out: Path, data: dict) -> None:
+    with _PREPARED_LOCK:
+        _PREPARED[str(Path(out).resolve())] = data
+        _PREPARED.move_to_end(str(Path(out).resolve()))
+        while len(_PREPARED) > PREPARED_KEPT:
+            _PREPARED.popitem(last=False)
+
+
+def photo_of(out: Path, result: dict) -> Path:
+    """The sheet's photo: where it was read from, else the copy kept in its folder."""
+    recorded = Path(result["inputs"]["mapPhoto"])
+    if recorded.exists():
+        return recorded
+    kept = sorted(Path(out).glob("photo.*"))
+    if kept:
+        return kept[0]
+    raise FileNotFoundError(f"the photo of sheet {result['runId']} is gone ({recorded})")
+
+
+def _prepared(out: Path, result: dict, sheet: MapSheet, timings: dict) -> dict:
+    with _PREPARED_LOCK:
+        data = _PREPARED.get(str(Path(out).resolve()))
+    if data is not None:
+        return data
+    data = _straighten(photo_of(out, result), sheet, result["map"]["width"], timings)
+    if data["images"].corrected.shape[:2] != (result["map"]["height"], result["map"]["width"]):
+        raise ValueError("the photo no longer straightens to the same map size")
+    return data
+
+
+def prepare(options: Options) -> Path:
+    """Straighten and colour-correct the photo; the sheet then waits for its list and ``digitize``."""
     started = time.time()
+    stock = load_legend(options.legend_path)
+    out = Path(options.runs_dir) / _run_id(options)
+    out.mkdir(parents=True, exist_ok=True)
+    sheet = load_sheet(options.map_id, options.sheets_dir)
     timings: dict[str, float] = {}
+    data = _straighten(Path(options.map_photo), sheet, None, timings)
+    images, width = data["images"], data["width"]
+    workshop = Workshop(stock, options.runs_dir, options.session, options.sessions_dir)
+    result = {
+        "runId": out.name, "mapId": sheet.id, "session": options.session,
+        "sheet": {"map": sheet.id, "number": options.sheet_number,
+                  "label": sheet_label(sheet.id, options.sheet_number)},
+        "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "inputs": {"mapPhoto": str(options.map_photo)},
+        "registration": data["registration"].to_dict(),
+        "map": {"width": width, "height": images.corrected.shape[0], "pxPerMm": round(data["px_per_mm"], 3),
+                "groundMetresPerPx": round(sheet.ground_width_m() / width, 4),
+                "corners": sheet.lnglat_corners, "alignment": images.info},
+        "stage": "prepared",
+        "legend": workshop.default_list(),
+        "looks": [],
+        "stickers": [], "routes": [],
+        "timings": timings,
+        "review": {"status": "pending", "corrections": 0},
+        "seconds": round(time.time() - started, 1),
+    }
+    cv2.imwrite(str(out / "map.jpg"), images.corrected, [cv2.IMWRITE_JPEG_QUALITY, 94])
+    cv2.imwrite(str(out / "score.png"), images.score)   # added ink, for the eyedropper on a drawn line
+    write_result(out, result, sheet, workshop.export_legend(result))
+    _keep(out, data)
+    return out
+
+
+def digitize(out: Path, options: Options) -> Path:
+    """Find the stickers and pens on the photo's list.
+
+    A sheet digitised again keeps what was done by hand (``carry_over``).
+    """
+    started = time.time()
+    out = Path(out)
+    result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+    stock = load_legend(options.legend_path)
+    sheet = load_sheet(result["mapId"], options.sheets_dir)
+    timings: dict[str, float] = {k: v for k, v in (result.get("timings") or {}).items()
+                                 if k in ("register", "photometry")}
+    data = _prepared(out, result, sheet, timings)
+    images, px_per_mm = data["images"], data["px_per_mm"]
+    workshop = Workshop(stock, out.parent, result.get("session", "default"), options.sessions_dir)
+    legend = workshop.photo_legend(result)
+    palettes = Palettes.of(legend)
 
     def tick(name: str, since: float) -> float:
         now = time.time()
@@ -348,97 +455,191 @@ def run(options: Options, vlm=None) -> Path:
         options.log.append(f"{name}: {timings[name]} s")
         return now
 
-    legend = load_legend(options.legend_path)
-    session = SessionPalette(legend, Path(options.sessions_dir) / options.session)
-    if options.run_id:
-        run_id = options.run_id
-    elif options.sheet_number is not None:
-        run_id = sheet_run_id(options.map_id, options.sheet_number)
-    else:
-        run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-map{options.map_id}"
-    out = Path(options.runs_dir) / run_id
-    out.mkdir(parents=True, exist_ok=True)
-
     t = time.time()
-    sheet = load_sheet(options.map_id, options.sheets_dir)
-    photo = cv2.imread(str(options.map_photo), cv2.IMREAD_COLOR)
-    if photo is None:
-        raise FileNotFoundError(options.map_photo)
-    registration = register_page(photo, sheet)
-    width = choose_map_width(sheet, registration, options.map_width)
-    px_per_mm = width / sheet.map_width_mm
-    rectified, coverage = rectify_map(photo, sheet, registration, width)
-    panel = rectify_panel(photo, sheet, registration, px_per_mm=min(10.0, registration.photo_px_per_mm))
-    t = tick("register", t)
-    images = analyse_map(rectified, sheet.reference, sheet.mask_rects, px_per_mm, coverage=coverage)
-    t = tick("photometry", t)
-
     sizes = legend["stickers"]["sizesMm"]
-    gate = shape_gate(legend, session.stickers)
-    stickers, cover = detect_stickers(images.corrected, images.score, images.valid, px_per_mm, sizes,
-                                      covered=images.covered, shape_gate=gate)
-    stickers, dropped = drop_fits(stickers, cover, not_stickers(stickers, legend, session, gate))
-    colour_info = classify_stickers(stickers, session.stickers, legend)
+    if sizes:
+        gate = shape_gate(legend, palettes.stickers)
+        stickers, cover = detect_stickers(images.corrected, images.score, images.valid, px_per_mm, sizes,
+                                          covered=images.covered, shape_gate=gate)
+        stickers, dropped = drop_fits(stickers, cover, not_stickers(stickers, legend, palettes, gate))
+        colour_info = classify_stickers(stickers, palettes.stickers, legend)
+    else:   # no sticker on this photo's list
+        stickers, cover, dropped, colour_info = [], np.zeros(images.score.shape, np.int32), [], {}
     t = tick("stickers", t)
-    routes, ink, route_info = extract_routes(images, cover, session.pens, px_per_mm, sizes["circle"] * px_per_mm)
+    if legend["pens"]:
+        circle_px = stock["stickers"]["sizesMm"].get("circle", 10.0) * px_per_mm
+        routes, ink, route_info = extract_routes(images, cover, palettes.pens, px_per_mm, circle_px)
+    else:   # no pen on this photo's list: nothing drawn
+        routes, ink, route_info = [], np.zeros(images.score.shape, bool), {"routes": 0, "marks": 0}
     t = tick("routes", t)
 
-    questionnaire, vlm_stats = None, None
-    if not options.use_vlm and panel is not None:
-        from .checkboxes import read_checkboxes
-        questionnaire = read_checkboxes(panel, legend) or None   # the ticks, from pixels alone
-    if options.use_vlm:
-        from .reading import read_questionnaire, verify_stickers
-        from .vlm import DEFAULT_MODEL, VLM
-        shared = vlm is not None
-        if not shared:
-            vlm = VLM(model_id=options.vlm_model or DEFAULT_MODEL, backend=options.vlm_backend,
-                      base_url=options.vlm_url, quant=options.vlm_quant,
-                      cache_path=Path(options.runs_dir) / "vlm_cache.jsonl")
-        stats_before = dict(vlm.stats)
-        if panel is not None:
-            questionnaire = read_questionnaire(vlm, panel, legend)
-            t = tick("vlm-questionnaire", t)
-        if options.verify_stickers:
-            verify_stickers(vlm, images.corrected, stickers, session.stickers, fixed_colours(legend))
-            t = tick("vlm-stickers", t)
-        vlm_stats = {k: round(vlm.stats[k] - stats_before.get(k, 0), 2) for k in vlm.stats}
-        vlm_stats.update(model=vlm.model_id, backend=vlm.backend)
-        if not shared:
-            vlm.unload()
-
-    height = images.corrected.shape[0]
-    result = {
-        "runId": run_id, "mapId": sheet.id, "session": options.session,
-        "sheet": {"map": sheet.id, "number": options.sheet_number,
-                  "label": sheet_label(sheet.id, options.sheet_number)},
-        "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "inputs": {"mapPhoto": str(options.map_photo)},
-        "registration": registration.to_dict(),
-        "map": {"width": width, "height": height, "pxPerMm": round(px_per_mm, 3),
-                "groundMetresPerPx": round(sheet.ground_width_m() / width, 4),
-                "corners": sheet.lnglat_corners, "alignment": images.info},
+    again = result.get("stage") != "prepared"
+    new = {
+        **result,
+        "stage": "digitized", "digitized": time.strftime("%Y-%m-%dT%H:%M:%S"), "listChanged": False,
+        "legend": workshop.photo_list(result),
         "stickers": [s.to_dict() for s in stickers],
         "droppedFits": dropped,
         "colourAdaptation": colour_info,
         "routes": [r.to_dict() for r in routes],
         "routeInfo": route_info,
-        "questionnaire": questionnaire,
-        "vlm": vlm_stats,
         "timings": timings,
-        "review": {"status": "pending", "corrections": 0},
     }
-    result["seconds"] = round(time.time() - started, 1)
-    cv2.imwrite(str(out / "map.jpg"), images.corrected, [cv2.IMWRITE_JPEG_QUALITY, 94])
-    cv2.imwrite(str(out / "overlay.jpg"), render_overlay(images.corrected, result, legend), [cv2.IMWRITE_JPEG_QUALITY, 88])
+    if again:
+        carry_over(result, new)
+    new["seconds"] = round(time.time() - started, 1)
+    names = workshop.export_legend(new)
+    cv2.imwrite(str(out / "overlay.jpg"), render_overlay(images.corrected, new, names), [cv2.IMWRITE_JPEG_QUALITY, 88])
     cv2.imwrite(str(out / "ink.png"), (ink.astype(np.uint8) * 255))
-    if panel is not None:
-        cv2.imwrite(str(out / "panel.jpg"), panel, [cv2.IMWRITE_JPEG_QUALITY, 92])
-    write_result(out, result, sheet, legend)
+    write_result(out, new, sheet, names)
     return out
 
 
+# ---------------------------------------------------------------- digitizing again
+
+def _resampled(points: list, step: float) -> np.ndarray:
+    line = np.asarray(points, np.float64).reshape(-1, 2)
+    if len(line) < 2:
+        return line
+    out = [line[0]]
+    for a, b in zip(line[:-1], line[1:]):
+        n = max(1, int(math.ceil(float(np.linalg.norm(b - a)) / step)))
+        out.extend(a + (b - a) * (i / n) for i in range(1, n + 1))
+    return np.asarray(out)
+
+
+def _share_near(points: list, other: list, tolerance: float) -> float:
+    """Share of a line lying within ``tolerance`` of another line."""
+    samples = _resampled(points, tolerance / 2.0)
+    line = np.asarray(other, np.float64).reshape(-1, 2)
+    if len(samples) == 0 or len(line) == 0:
+        return 0.0
+    if len(line) == 1:
+        near = np.linalg.norm(samples - line[0], axis=1)
+    else:
+        a, b = line[:-1], line[1:]
+        ab = b - a
+        t = np.clip((((samples[:, None, :] - a[None]) * ab[None]).sum(-1)) / np.maximum((ab * ab).sum(-1), 1e-9), 0, 1)
+        near = np.linalg.norm(samples[:, None, :] - (a[None] + t[..., None] * ab[None]), axis=-1).min(axis=1)
+    return float((near <= tolerance).mean())
+
+
+def _same_spot(a: dict, b: dict) -> bool:
+    return a["shape"] == b["shape"] and math.hypot(a["x"] - b["x"], a["y"] - b["y"]) < 0.5 * max(
+        a["diameter_px"], b["diameter_px"])
+
+
+def carry_over(old: dict, new: dict) -> None:
+    """Digitizing again keeps the hand's work: stickers and lines placed by hand
+    stay (a new find at the same place gives way to them), and what was erased
+    stays erased where it is found again."""
+    tolerance = 1.5 * old["map"]["pxPerMm"]
+    hand_stickers = [s for s in old["stickers"] if s.get("source", "auto") != "auto"]
+    hand_routes = [r for r in old["routes"] if r.get("source", "auto") != "auto"]
+    erased_stickers = [s for s in old["stickers"] if s.get("source", "auto") == "auto" and s.get("deleted")]
+    erased_routes = [r for r in old["routes"] if r.get("source", "auto") == "auto" and r.get("deleted")]
+    placed = [s for s in hand_stickers if not s.get("deleted")]
+    drawn = [r for r in hand_routes if not r.get("deleted")]
+    stickers = [s for s in new["stickers"] if not any(_same_spot(s, h) for h in placed)]
+    for sticker in stickers:
+        if any(_same_spot(sticker, e) for e in erased_stickers):
+            sticker["deleted"] = True
+    routes = [r for r in new["routes"] if not any(_share_near(r["points"], h["points"], tolerance) >= 0.6
+                                                    for h in drawn)]
+    for route in routes:
+        if any(_share_near(route["points"], e["points"], tolerance) >= 0.6
+               and _share_near(e["points"], route["points"], tolerance) >= 0.6 for e in erased_routes):
+            route["deleted"] = True
+    for number, item in enumerate(hand_stickers, start=len(stickers) + 1):
+        item["id"] = number
+    for number, item in enumerate(hand_routes, start=len(routes) + 1):
+        item["id"] = number
+    new["stickers"] = stickers + hand_stickers
+    new["routes"] = routes + hand_routes
+
+
+# ---------------------------------------------------------------- handwriting
+
+def _box_overlap(a: list, b: list) -> float:
+    """Intersection over the smaller box's area."""
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+    return w * h / smaller if w > 0 and h > 0 and smaller > 0 else 0.0
+
+
+def merge_texts(old: list, found: list) -> list:
+    """A new reading of the handwriting, with the hand's work kept: texts typed or fixed by hand stay
+    (a find in the same place gives way to them), and a text erased by hand stays erased where it
+    is found again."""
+    hand = [dict(t) for t in old if t.get("source") == "human"]
+    erased = [t for t in old if t.get("source") != "human" and t.get("deleted")]
+    texts = []
+    for item in found:
+        if any(_box_overlap(item["box"], h["box"]) >= 0.5 for h in hand if not h.get("deleted")):
+            continue
+        text = {**item, "source": "vlm"}
+        if any(_box_overlap(item["box"], e["box"]) >= 0.5 for e in erased):
+            text["deleted"] = True
+        texts.append(text)
+    merged = texts + hand
+    for number, text in enumerate(merged, start=1):
+        text["id"] = number
+    return merged
+
+
+def _added_ink(out: Path, result: dict, sheet: MapSheet) -> np.ndarray | None:
+    """The sheet's added-ink strength (score.png): kept when it was prepared, else measured again from
+    its photo (~15 s) and kept; None when the photo is gone."""
+    path = out / "score.png"
+    score = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if score is not None and score.shape == (result["map"]["height"], result["map"]["width"]):
+        return score
+    try:
+        data = _prepared(out, result, sheet, {})
+    except (FileNotFoundError, ValueError):
+        return None
+    cv2.imwrite(str(path), data["images"].score)
+    return data["images"].score
+
+
+def read_texts(out: Path, options: Options, vlm=None) -> Path:
+    """Read the handwriting on a digitised sheet with ``options.vlm`` and place it on the map
+    (``texts``); pass ``vlm`` to share one loaded model across sheets."""
+    from .handwriting import read_handwriting
+    from .vlm import MODELS, VLM
+
+    started = time.time()
+    out = Path(out)
+    result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+    image = cv2.imread(str(out / "map.jpg"), cv2.IMREAD_COLOR)
+    if image is None:
+        raise FileNotFoundError(f"sheet {result['runId']} has no map image")
+    sheet = load_sheet(result["mapId"], options.sheets_dir)
+    added = _added_ink(out, result, sheet)
+    vlm = vlm or VLM(options.vlm, cache_path=out.parent / "vlm_cache.jsonl")
+    found = read_handwriting(vlm, image, added, options.log)
+    result["texts"] = merge_texts(result.get("texts") or [], found)
+    result["handwriting"] = {"model": MODELS[options.vlm]["label"], "read": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                             "seconds": round(time.time() - started, 1), "printRemoved": added is not None}
+    workshop = Workshop(load_legend(options.legend_path), out.parent, result.get("session", "default"),
+                        options.sessions_dir)
+    write_result(out, result, sheet, workshop.export_legend(result))
+    return out
+
+
+def results_geojson_path(result: dict) -> Path:
+    """Where a sheet's GeoJSON is kept: the results folder the Results panel shows, shared with the
+    workshop's own results (sessions/1_05.geojson for map 1, sheet 5)."""
+    return Path(config.SESSIONS_DIR) / f"{result['runId']}.geojson"
+
+
 def write_result(out: Path, result: dict, sheet: MapSheet, legend: dict) -> None:
+    """The sheet's record, and once digitised (a prepared photo has nothing to show yet) its GeoJSON
+    in the results folder."""
     (out / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
-    (out / "result.geojson").write_text(json.dumps(to_geojson(result, sheet, legend), ensure_ascii=False),
-                                        encoding="utf-8")
+    if result.get("stage") == "prepared":
+        return
+    path = results_geojson_path(result)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(geojson_text(to_geojson(result, sheet, legend)), encoding="utf-8")

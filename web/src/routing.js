@@ -50,6 +50,7 @@
     var visible = true;
     var dashAnimFrame = 0;
     var dashAnimStart = 0;
+    var pendingDone = null; // the mouse waiting on a route: { key, fn }
 
     function ensureLayers() {
       if (!map.getSource(ROUTE_SOURCE_ID)) {
@@ -184,23 +185,26 @@
       if (map.getLayer(ROUTE_CASING_LAYER_ID)) map.setLayoutProperty(ROUTE_CASING_LAYER_ID, 'visibility', v);
     }
 
+    // The marker places its element with a transform, so the pin's grow-in scale goes on a child.
     function makePinEl(label, color) {
       var el = document.createElement('div');
-      el.style.cssText = [
+      var dot = document.createElement('div');
+      dot.style.cssText = [
         'width:18px', 'height:18px', 'border-radius:50%',
         'background:' + color, 'border:2px solid #fff',
         'display:flex', 'align-items:center', 'justify-content:center',
         'font:bold 10px/1 sans-serif', 'color:#fff', 'cursor:default',
         'transform:scale(0)'
       ].join(';');
-      el.textContent = label;
+      dot.textContent = label;
+      el.appendChild(dot);
       return el;
     }
 
     function setPinScale(state, progress) {
       if (!state.marker) return;
       var s = Math.min(1, Math.max(0, Number(progress) || 0));
-      state.marker.getElement().style.transform = 'scale(' + s + ')';
+      state.marker.getElement().firstChild.style.transform = 'scale(' + s + ')';
     }
 
     function updatePin(state, lng, lat, label, color) {
@@ -309,12 +313,23 @@
       drawnRouteKey = lastRouteKey;
     }
 
+    // Tells the mouse whether the route it asked for (key) came.
+    function reportRoute(key, ok) {
+      if (!pendingDone || pendingDone.key !== key) return;
+      var fn = pendingDone.fn;
+      pendingDone = null;
+      fn(!!ok);
+    }
+
     function fetchRouteViaMapbox(a, b) {
+      var key = routeKey(a, b);
       var token = getAccessToken();
       if (!token) {
         fetchInFlight = false;
+        reportRoute(key, false);
         return;
       }
+      var ok = false;
       var url = 'https://api.mapbox.com/directions/v5/mapbox/walking/'
         + a.lng.toFixed(6) + ',' + a.lat.toFixed(6) + ';'
         + b.lng.toFixed(6) + ',' + b.lat.toFixed(6)
@@ -334,12 +349,14 @@
             return;
           }
           drawRouteGeometry(routes[0].geometry, routes[0].distance);
+          ok = true;
         })
         .catch(function (err) {
           console.warn('[routing] Mapbox fetch failed:', err);
         })
         .finally(function () {
           fetchInFlight = false;
+          reportRoute(key, ok);
         });
     }
 
@@ -353,10 +370,7 @@
       lastCallMs = Date.now();
       lastRouteKey = key;
 
-      if (!window.CompactOsmnx.hasNetwork()) {
-        fetchRouteViaMapbox(a, b);
-        return;
-      }
+      // The server's saved walking network first; Mapbox when it has none or the ends are outside it.
       fetch('/api/osmnx-shortest-path', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -372,6 +386,7 @@
           if (!data || !data.ok || !data.geometry) throw { fallback: true };
           drawRouteGeometry(data.geometry, data.distanceMeters);
           fetchInFlight = false;
+          reportRoute(key, true);
         })
         .catch(function (err) {
           if (!(err && err.fallback)) console.warn('[routing] local path failed, falling back:', err);
@@ -424,6 +439,27 @@
       if (tagA.lngLat && tagB.lngLat) fetchRoute(tagA.lngLat, tagB.lngLat);
     }
 
+    // The mouse: sets the start ('a') or the end ('b') at a clicked point. Once both are set the
+    // route is asked for at once; done(ok), when given, hears whether it came.
+    function setEnd(which, lng, lat, done) {
+      lng = Number(lng);
+      lat = Number(lat);
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+      var isEnd = which === 'b';
+      var state = isEnd ? tagB : tagA;
+      state.holdPoint = null;
+      state.holdSinceMs = 0;
+      state.lngLat = { lng: lng, lat: lat };
+      updatePin(state, lng, lat, isEnd ? 'B' : 'A', isEnd ? '#ff5555' : '#22cc66');
+      setPinScale(state, 1);
+      if (!(tagA.lngLat && tagB.lngLat)) return;
+      var key = routeKey(tagA.lngLat, tagB.lngLat);
+      pendingDone = typeof done === 'function' ? { key: key, fn: done } : null;
+      // Not held back by the tags' debounce; while another route is out, update() asks again after it.
+      lastCallMs = 0;
+      fetchRoute(tagA.lngLat, tagB.lngLat);
+    }
+
     function setVisible(show) {
       visible = !!show;
       var v = visible ? 'visible' : 'none';
@@ -444,11 +480,13 @@
       tagB = makeTagState();
       lastRouteKey = '';
       drawnRouteKey = '';
+      pendingDone = null;
     }
 
     return {
       ensureLayers: ensureLayers,
       update: update,
+      setEnd: setEnd,
       setVisible: setVisible,
       clear: clear
     };

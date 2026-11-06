@@ -1,11 +1,11 @@
 # Core
 flask
 numpy
-opencv-python>=4.7      # cv2.aruco with AprilTag dictionaries ships in the main wheel since 4.7
-pupil-apriltags
-scikit-image            # skeletonising detected pen strokes into routes
-# Optional: opencv-contrib-python supplies cv2.ximgproc.thinning, which does the
-# same job several times faster. scikit-image is used automatically without it.
+opencv-contrib-python>=4.7,<5   # cv2.aruco with AprilTag dictionaries, plus cv2.ximgproc.thinning for pen strokes
+scikit-image            # skeletonising pen strokes when cv2.ximgproc.thinning is missing
+scipy                   # the Digitizer: smoothing the paper-curl correction of a photographed sheet
+# Install only opencv-contrib-python, never opencv-python beside it: both write the same
+# cv2 package, and a mix of the two loses cv2.ximgproc.thinning. OpenCV 5 is untested here.
 
 # Audio / video recording
 sounddevice
@@ -13,6 +13,10 @@ imageio-ffmpeg
 
 # Printable georeferenced paper-map sheets
 reportlab
+
+# Hand detection for the photos of the map view sheets (backend/hands.py, model in backend/models/):
+# no photo while a hand is over the paper. Optional: without it the other checks still run.
+mediapipe
 
 # Optional: street-network analysis (isochrones, shortest paths, OSMnx network)
 osmnx

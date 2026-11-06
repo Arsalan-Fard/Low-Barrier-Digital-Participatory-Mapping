@@ -145,7 +145,8 @@
       return distanceSq(last, currentPx) >= (rearmThresholdPx * rearmThresholdPx);
     }
 
-    function placeSticker(key, point, currentPx) {
+    // input: what placed it when not a tag ('mouse').
+    function addPlaced(key, point, input) {
       var wrap = document.createElement('div');
       wrap.className = 'tag-sticker-anchor';
       var dot = document.createElement('div');
@@ -162,13 +163,25 @@
         el: wrap,
         dotEl: dot
       };
+      if (input) item.input = String(input);
       applyItemAppearance(item);
       item.marker = new mapboxgl.Marker({ element: wrap, anchor: 'center', offset: [0, 0] })
         .setLngLat([point.lng, point.lat])
         .addTo(map);
-
-      lastPlacedPxByTag[key] = { x: currentPx.x, y: currentPx.y };
       placed.push(item);
+    }
+
+    function placeSticker(key, point, currentPx) {
+      addPlaced(key, point);
+      lastPlacedPxByTag[key] = { x: currentPx.x, y: currentPx.y };
+    }
+
+    // The mouse: a sticker placed at once, with no hold. raw: { lng, lat, color, tagId, input }.
+    function placeAt(raw) {
+      var point = parsePoint(raw || {});
+      if (!point) return false;
+      addPlaced(String(raw.tagId || 'mouse'), point, raw.input);
+      return true;
     }
 
     function isItemVisible(item) {
@@ -234,18 +247,25 @@
       return {
         type: 'FeatureCollection',
         features: placed.map(function (p) {
+          var properties = {
+            sourceType: 'sticker',
+            tagId: p.tagId,
+            color: p.color,
+            step: p.step
+          };
+          if (p.input) properties.input = p.input;
           return {
             type: 'Feature',
-            properties: {
-              sourceType: 'sticker',
-              tagId: p.tagId,
-              color: p.color,
-              step: p.step
-            },
+            properties: properties,
             geometry: { type: 'Point', coordinates: [p.lng, p.lat] }
           };
         })
       };
+    }
+
+    // [{ lng, lat }] of the stickers the current part filter shows.
+    function getVisiblePoints() {
+      return placed.filter(isItemVisible).map(function (p) { return { lng: p.lng, lat: p.lat }; });
     }
 
     function clearAll() {
@@ -312,7 +332,9 @@
     return {
       setEnabled: setEnabled,
       update: update,
+      placeAt: placeAt,
       getPlacedGeoJSON: getPlacedGeoJSON,
+      getVisiblePoints: getVisiblePoints,
       clearAll: clearAll,
       findNearestPlaced: findNearestPlaced,
       movePlaced: movePlaced,

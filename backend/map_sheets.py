@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 from flask import Blueprint, jsonify, request, send_from_directory
 
-from . import config
+from . import config, projects
 from .helpers import utc_now_iso
 from .map_sheet_docx import build_map_sheet_docx
 from .map_sheet_layout import (MAP_SHEET_PAGE_MARGIN, SHEET_PAGE_SIZES, SIDE_PANEL_MIN_WIDTH, SIDE_PANEL_PAD,
@@ -96,12 +96,18 @@ def _decode_png(image_uri):
     return png_bytes, image
 
 
-def _map_sheet_summary(record):
+def _map_sheet_summary(record, names=None):
+    """`names`: {project id: name}, read once for a whole list."""
     sheet_id = record.get("id")
     has_docx = (config.MAP_SHEETS_DIR / f"{sheet_id}.docx").exists()
+    project_id = str(record.get("projectId") or "")
+    if names is None:
+        names = projects.project_names()
     return {
         "id": sheet_id,
         "title": record.get("title") or "Reference map",
+        "projectId": project_id,
+        "project": names.get(project_id) or record.get("title") or "",
         "createdAt": record.get("createdAt"),
         "corners": record.get("corners"),
         "camera": record.get("camera"),
@@ -333,6 +339,24 @@ def _write_sheet_files(sheet_id, files):
                 path.unlink()
 
 
+def _map_project(sheet_id, name):
+    """The project a saved map belongs to: the one named in the generator (made if new); with no name, the
+    stored map's project, else one named after the stored map's title or "Map <id>"."""
+    name = projects.clean_name(name)
+    if name:
+        return projects.project_for_name(name)
+    stored = {}
+    try:
+        stored = json.loads((config.MAP_SHEETS_DIR / f"{sheet_id}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    stored = stored if isinstance(stored, dict) else {}
+    stored_id = str(stored.get("projectId") or "")
+    if stored_id and stored_id in projects.project_names():
+        return stored_id
+    return projects.project_for_name(stored.get("title") or f"Map {sheet_id}")
+
+
 def _save_map_sheet(payload):
     """POST /api/map-sheets: returns (response body, status)."""
     sheet_id = clean_map_sheet_id(payload.get("id"))
@@ -352,10 +376,14 @@ def _save_map_sheet(payload):
     except (IndexError, TypeError, ValueError):
         return {"ok": False, "error": "invalid_camera"}, 400
 
+    # Only a map that will be saved gets a project.
+    project_id = _map_project(sheet_id, payload.get("project"))
     record = {
         "version": 2,
         "id": sheet_id,
-        "title": str(payload.get("title") or "Reference map").strip()[:80] or "Reference map",
+        "title": (projects.project_names().get(project_id) or projects.clean_name(payload.get("project"))
+                  or f"Map {sheet_id}"),
+        "projectId": project_id,
         "createdAt": utc_now_iso(),
         "coordinateSystem": "EPSG:4326",
         "cornerOrder": ["top-left", "top-right", "bottom-right", "bottom-left"],
@@ -398,13 +426,13 @@ def api_map_sheets():
     if request.method == "POST":
         body, status = _save_map_sheet(request.get_json(silent=True) or {})
         return jsonify(body), status
-    records = []
+    records, names = [], projects.project_names()
     if config.MAP_SHEETS_DIR.exists():
         for path in config.MAP_SHEETS_DIR.glob("*.json"):
             try:
                 record = json.loads(path.read_text(encoding="utf-8"))
                 if clean_map_sheet_id(record.get("id")):
-                    records.append(_map_sheet_summary(record))
+                    records.append(_map_sheet_summary(record, names))
             except (OSError, ValueError, TypeError, AttributeError):
                 continue
     records.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)

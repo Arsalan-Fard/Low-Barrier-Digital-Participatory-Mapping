@@ -11,8 +11,8 @@ const MAP_THEME_STREETS = 'streets';
 // The map generator's own style, the one the paper sheets are printed from; paperMap.js restyles it.
 const MAP_THEME_PAPER = 'paper';
 const MAP_THEME_FLOORPLAN = 'floorplan';
+const MAP_THEME_BLANK = 'blank';
 const INITIAL_MAP_THEME = isFloorplanMode ? MAP_THEME_FLOORPLAN : MAP_THEME_STREETS;
-const MAP_THEMES_CYCLE = isFloorplanMode ? [MAP_THEME_FLOORPLAN] : mapConfig.themeCycle;
 const mapThemeStyles = isFloorplanMode ? {
   floorplan: mapConfig.styles.floorplan
 } : {
@@ -20,7 +20,8 @@ const mapThemeStyles = isFloorplanMode ? {
   satellite: mapConfig.styles.satellite,
   topo: mapConfig.styles.topo,
   [MAP_THEME_PAPER]: window.CompactMapSetup.generatorStyle(),
-  floorplan: mapConfig.styles.floorplan
+  floorplan: mapConfig.styles.floorplan,
+  [MAP_THEME_BLANK]: mapConfig.styles.blank
 };
 
 function mapboxAccessToken() {
@@ -45,11 +46,6 @@ function lngLatToPx(lng, lat) {
   const point = map.project([lng, lat]);
   const viewportPoint = mapWarpController.localToViewport(point.x, point.y);
   return { x: Number(viewportPoint.x), y: Number(viewportPoint.y) };
-}
-
-function uvToLngLat(u, v) {
-  const px = uvToPx(u, v);
-  return pxToLngLat(px.x, px.y);
 }
 
 function isFiniteUv(c) {

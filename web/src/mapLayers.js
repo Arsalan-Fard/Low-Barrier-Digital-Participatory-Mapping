@@ -41,7 +41,6 @@ function whenMapStyleReady(callback) {
 function ensureCustomLayers() {
   ensureFloorplanLayer();
   ensureFloorplanBasemap();
-  overlays.ensureTagMaskLayer();
   drawing.ensureLayer();
   roadSnapping.ensureRoadsLayer();
   isochrone.ensureLayers();
@@ -61,20 +60,38 @@ function setMapTheme(theme) {
   return activeMapTheme;
 }
 
-function toggleMapTheme() {
-  const idx = MAP_THEMES_CYCLE.indexOf(activeMapTheme);
-  const next = MAP_THEMES_CYCLE[(idx + 1) % MAP_THEMES_CYCLE.length];
-  return setMapTheme(next);
+const BLANK_SHEET_LAYER = 'blank-sheet-bg';
+const DEFAULT_BLANK_SHEET_COLOR = '#ffffff';
+
+function blankSheetColor(raw) {
+  return /^#[0-9a-f]{6}$/i.test(String(raw || '')) ? String(raw) : DEFAULT_BLANK_SHEET_COLOR;
 }
 
-// The /floorplan page: the plan's walls, and an isovist from the isovist tag or,
-// after the I key, from the mouse. Analysis runs in a fixed-size plan space.
+// The empty sheet's colour: written into its style for the next load, and onto the map if it shows it.
+function setBlankSheetColor(raw) {
+  var color = blankSheetColor(raw);
+  var style = mapThemeStyles[MAP_THEME_BLANK];
+  if (style && Array.isArray(style.layers) && style.layers[0]) style.layers[0].paint['background-color'] = color;
+  whenMapStyleReady(function () {
+    if (activeMapTheme === MAP_THEME_BLANK && map.getLayer(BLANK_SHEET_LAYER)) {
+      map.setPaintProperty(BLANK_SHEET_LAYER, 'background-color', color);
+    }
+  });
+}
+
+// A workshop step's basemap. Older steps say indoor: true instead of theme 'floorplan'.
+function stepBasemapTheme(step) {
+  if (!step) return MAP_THEME_STREETS;
+  if (step.indoor || step.theme === MAP_THEME_FLOORPLAN) return MAP_THEME_FLOORPLAN;
+  return mapThemeStyles[step.theme] ? String(step.theme) : MAP_THEME_STREETS;
+}
+
+// The /floorplan page: the plan's walls, and an isovist from the isovist tag.
+// Analysis runs in a fixed-size plan space.
 const FLOORPLAN_SOURCE_ID = 'floorplan-source';
 const FLOORPLAN_LAYER_ID = 'floorplan-lines';
 const FLOORPLAN_ANALYSIS_HEIGHT = 4096;
 let floorplanGeoJSON = null;
-let floorplanIsovistKeyboardMode = false;
-let floorplanIsovistPointerPoint = null;
 
 function floorplanBounds() {
   var bounds = floorplanGeoJSON && Array.isArray(floorplanGeoJSON.bounds) ? floorplanGeoJSON.bounds : null;
@@ -114,22 +131,6 @@ function floorplanAnalysisToViewport(point) {
   return lngLatToPx(lngLat.lng, lngLat.lat);
 }
 
-function floorplanLngLatFromClient(clientX, clientY) {
-  var rect = mapView.getBoundingClientRect();
-  var viewport = mapWarpController.getViewportSize();
-  var x = Math.max(0, Math.min(Number(viewport.width) || 0, Number(clientX) - rect.left));
-  var y = Math.max(0, Math.min(Number(viewport.height) || 0, Number(clientY) - rect.top));
-  var lngLat = pxToLngLat(x, y);
-  if (!Number.isFinite(lngLat[0]) || !Number.isFinite(lngLat[1])) return null;
-  return { lng: lngLat[0], lat: lngLat[1] };
-}
-
-function floorplanClientToAnalysis(clientX, clientY) {
-  var lngLat = floorplanLngLatFromClient(clientX, clientY);
-  if (!lngLat) return null;
-  return lngLatToFloorplanAnalysis(lngLat.lng, lngLat.lat);
-}
-
 function rebuildFloorplanWallSegments() {
   if (!isFloorplanMode || !floorplanGeoJSON) return;
   var features = Array.isArray(floorplanGeoJSON.features) ? floorplanGeoJSON.features : [];
@@ -158,47 +159,6 @@ function rebuildFloorplanWallSegments() {
     }
   }
   floorplanIsovist.setSegments(segments);
-  updateFloorplanKeyboardIsovist();
-}
-
-function floorplanIsovistDefaultPoint() {
-  var viewport = mapWarpController.getViewportSize();
-  var width = Number(viewport.width);
-  var height = Number(viewport.height);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
-  return floorplanClientToAnalysis(width / 2, height / 2);
-}
-
-function setFloorplanIsovistPointerFromClient(clientX, clientY) {
-  if (!isFloorplanMode) return;
-  floorplanIsovistPointerPoint = floorplanClientToAnalysis(clientX, clientY);
-}
-
-function updateFloorplanKeyboardIsovist() {
-  if (!isFloorplanMode || !floorplanIsovistKeyboardMode) return;
-  var point = floorplanIsovistPointerPoint || floorplanIsovistDefaultPoint();
-  if (!point) {
-    floorplanIsovist.clear();
-    return;
-  }
-  if (!floorplanIsovist.hasSegments()) {
-    rebuildFloorplanWallSegments();
-  }
-  floorplanIsovist.update(point);
-}
-
-function toggleFloorplanKeyboardIsovistMode() {
-  if (!isFloorplanMode) return false;
-  floorplanIsovistKeyboardMode = !floorplanIsovistKeyboardMode;
-  if (!floorplanIsovistKeyboardMode) {
-    floorplanIsovist.clear();
-    return false;
-  }
-  if (!floorplanIsovistPointerPoint) {
-    floorplanIsovistPointerPoint = floorplanIsovistDefaultPoint();
-  }
-  updateFloorplanKeyboardIsovist();
-  return true;
 }
 
 // Once per poll on the /floorplan page.
@@ -208,8 +168,6 @@ function updateFloorplanIsovist(tagPoint) {
     var analysisPoint = lngLatToFloorplanAnalysis(lngLat[0], lngLat[1]);
     if (analysisPoint) floorplanIsovist.update(analysisPoint);
     else floorplanIsovist.clear();
-  } else if (floorplanIsovistKeyboardMode) {
-    updateFloorplanKeyboardIsovist();
   } else {
     floorplanIsovist.clear();
   }
@@ -251,12 +209,9 @@ function ensureFloorplanLayer() {
         map.fitBounds(payload.bounds, { padding: 48, duration: 0 });
       }
       rebuildFloorplanWallSegments();
-      var entityCount = payload.properties && payload.properties.entityCount || 0;
-      setUiNote('Floorplan loaded: ' + String(entityCount) + ' entities');
     })
     .catch(function (err) {
       console.error('Failed to load floorplan:', err);
-      setUiNote('Failed to load floorplan');
     });
 }
 
@@ -369,19 +324,16 @@ function ensureFloorplanBasemap() {
     .catch(function (err) { console.error('Workshop floorplan load failed:', err); });
 }
 
-// Workshop data layers: 'roads', 'network' (OSMnx), 'objects' (custom objects)
-// and 'custom:<file id>' uploads named by the customGeoLayers registry.
-const DATA_LAYER_LABELS = {
-  roads: 'Roads',
-  network: 'Street network (OSMnx)',
-  objects: 'Custom objects'
-};
+// A step's data layers: 'roads', 'network' (OSMnx), 'objects' (custom objects), 'custom:<file id>'
+// uploads named by the customGeoLayers registry, and 'result:<kind>:<filename>' saved results.
+const BUILTIN_DATA_LAYERS = ['roads', 'network', 'objects'];
 const CUSTOM_LAYER_PREFIX = 'custom:';
+const RESULT_LAYER_PREFIX = 'result:';
 // Bumped by every application, so a slow load finishing after a step change is dropped.
 let dataLayerSeq = 0;
 let activeDataLayerIds = [];
-// Layers the facilitator hid from the Layers picker; reset on every step change.
-let dataLayerHidden = {};
+// The opacity of the layers coloured by a value (0-1), from the step; null = each layer's own.
+let dataLayerOpacity = null;
 let activeWorkshopMeta = null;
 // The session file of the current workshop run, so later saves update it instead of adding files.
 let workshopSessionFile = '';
@@ -390,22 +342,18 @@ function isCustomDataLayerId(id) {
   return String(id || '').indexOf(CUSTOM_LAYER_PREFIX) === 0;
 }
 
-function dataLayerLabel(id) {
-  id = String(id || '');
-  if (DATA_LAYER_LABELS[id]) return DATA_LAYER_LABELS[id];
-  if (isCustomDataLayerId(id)) {
-    return customGeoLayers.getName(id.slice(CUSTOM_LAYER_PREFIX.length)) || 'Custom layer';
-  }
-  return id;
+function isResultDataLayerId(id) {
+  return String(id || '').indexOf(RESULT_LAYER_PREFIX) === 0;
 }
 
 // Deferred past a basemap reload: layer writes to a style being replaced are wiped.
 function applyActiveDataLayers() {
   var want = {};
   var wantCustom = [];
+  var wantResults = [];
   activeDataLayerIds.forEach(function (id) {
-    if (dataLayerHidden[id]) return;
     if (isCustomDataLayerId(id)) wantCustom.push(id.slice(CUSTOM_LAYER_PREFIX.length));
+    else if (isResultDataLayerId(id)) wantResults.push(id.slice(RESULT_LAYER_PREFIX.length));
     else want[id] = true;
   });
   var seq = ++dataLayerSeq;
@@ -423,8 +371,7 @@ function applyActiveDataLayers() {
       osmnxNetwork.loadCached(function (err) {
         if (seq !== dataLayerSeq) return;
         if (err) {
-          setUiNote('No OSMnx network available (press g to fetch one)');
-          refreshHud();
+          console.warn('[layers] no saved street network (data/osmnx_network.geojson):', err);
           return;
         }
         osmnxNetwork.setVisible(true);
@@ -433,6 +380,7 @@ function applyActiveDataLayers() {
       osmnxNetwork.setVisible(false);
     }
     customMapObjects.setPresentationMode(want.objects ? 'expanded' : 'hidden');
+    customGeoLayers.setValueOpacity(dataLayerOpacity);
     customGeoLayers.hideAllExcept(wantCustom);
     wantCustom.forEach(function (cid) {
       customGeoLayers.loadLayer(cid, function (err) {
@@ -440,11 +388,20 @@ function applyActiveDataLayers() {
         customGeoLayers.setLayerVisible(cid, true);
       });
     });
+    window.CompactResultsLayer.setShown(wantResults);
   });
 }
 
-// window.CompactMapApp: what the workshop runtime/editor, the page flow's buttons
-// and paperMap.js use of this page.
+// The stickers shown on the table, counted into the cells of uploaded value layers. Polled while such
+// a layer is active: placing, moving and erasing stickers and the parts shown all change them, and
+// setLivePoints does nothing when they have not.
+setInterval(function () {
+  if (!activeDataLayerIds.some(isCustomDataLayerId)) return;
+  customGeoLayers.setLivePoints(stickerPlacement.getVisiblePoints());
+}, 1000);
+
+// window.CompactMapApp: what the workshop runtime, the Project panel and paperMap.js
+// use of this page.
 const mapAppApi = {
   getMap: function () { return map; },
   // The live camera in the shape the workshop editor stores per step.
@@ -454,12 +411,16 @@ const mapAppApi = {
   },
   setMapTheme: function (theme) { return setMapTheme(theme); },
   getActiveTheme: function () { return activeMapTheme; },
-  getThemeCycle: function () { return MAP_THEMES_CYCLE.slice(); },
-  toggleLightSettings: function () {
-    var visible = toggleViewFilterPanelVisible();
-    setUiNote(visible ? 'Light settings ON' : 'Light settings OFF');
-    refreshHud();
-    return visible;
+  // The basemap names and styles the Project panel draws its basemap buttons from.
+  getThemeStyle: function (theme) { return mapThemeStyles[theme] || null; },
+  stepBasemapTheme: stepBasemapTheme,
+  setBlankSheetColor: setBlankSheetColor,
+  // Shows a step's basemap: its theme, the plan an indoor step uses, the colour of an empty sheet.
+  applyStepBasemap: function (step) {
+    var theme = stepBasemapTheme(step);
+    if (theme === MAP_THEME_FLOORPLAN) mapAppApi.setIndoorFloorplan((step && step.indoorId) || '');
+    if (theme === MAP_THEME_BLANK) setBlankSheetColor(step && step.blankColor);
+    return setMapTheme(theme);
   },
   toggleRecording: function () {
     toggleTimelineRecording();
@@ -482,15 +443,10 @@ const mapAppApi = {
     if (activeMapTheme === MAP_THEME_FLOORPLAN) ensureFloorplanBasemap();
   },
   beginWorkshopSession: function () { workshopSessionFile = ''; },
-  // The first save of a run creates the session file; later ones update it. opts.quiet: no UI note.
-  persistWorkshopSession: function (opts, callback) {
-    var quiet = !!(opts && opts.quiet);
+  // Saves the run's inputs: the first save creates the session file, later ones update it.
+  persistWorkshopSession: function (callback) {
     var done = function (err, result) {
-      if (!quiet) {
-        if (err) setUiNote('Failed to save session');
-        else setUiNote('Session saved' + (result && result.filename ? ': ' + result.filename : ''));
-        refreshHud();
-      }
+      if (err) console.warn('[workshop] session save failed:', err);
       if (typeof callback === 'function') callback(err, result);
     };
     if (workshopSessionFile) {
@@ -498,10 +454,10 @@ const mapAppApi = {
         // The file is gone: start a new one.
         if (err) {
           workshopSessionFile = '';
-          window.CompactMapApp.persistWorkshopSession(opts, callback);
+          window.CompactMapApp.persistWorkshopSession(callback);
           return;
         }
-        done(err, result);
+        done(null, result);
       });
     } else {
       dataExport.saveToBackend(function (err, result) {
@@ -509,9 +465,6 @@ const mapAppApi = {
         done(err, result);
       });
     }
-  },
-  saveSession: function (callback) {
-    return window.CompactMapApp.persistWorkshopSession(null, callback);
   },
   whenStyleReady: whenMapStyleReady,
   applyStepView: function (view) {
@@ -535,22 +488,16 @@ const mapAppApi = {
   setWorkshopContext: function (workshopId) {
     drawing.setWorkshopContext(workshopId || '');
   },
-  setVisibleWorkshopStep: function (stepNumber, workshopId) {
-    var hasStep = stepNumber != null && stepNumber !== '';
-    var steps = hasStep ? new Set([Number(stepNumber) || 0]) : null;
-    drawing.setVisibleSteps(steps);
-    drawing.setVisibleWorkshop(hasStep ? (workshopId || '') : '');
-    stickerPlacement.setVisibleSteps(steps);
-    annotationPlacement.setVisibleSteps(steps);
-  },
-  // Several steps at once, for the workshop bar's per-step show/hide toggles.
+  // The steps of one project whose input is shown, live and in its saved results; null shows every
+  // step of every project.
   setVisibleWorkshopSteps: function (stepNumbers, workshopId) {
-    var list = Array.isArray(stepNumbers) ? stepNumbers.map(function (n) { return Number(n) || 0; }) : [];
-    var steps = new Set(list);
-    drawing.setVisibleSteps(steps);
-    drawing.setVisibleWorkshop(workshopId || '');
-    stickerPlacement.setVisibleSteps(steps);
-    annotationPlacement.setVisibleSteps(steps);
+    var steps = Array.isArray(stepNumbers) ? stepNumbers.map(function (n) { return Number(n) || 0; }) : null;
+    var set = steps ? new Set(steps) : null;
+    drawing.setVisibleSteps(set);
+    drawing.setVisibleWorkshop(set ? (workshopId || '') : '');
+    stickerPlacement.setVisibleSteps(set);
+    annotationPlacement.setVisibleSteps(set);
+    window.CompactResultsLayer.setStepFilter(set ? workshopId : '', steps);
   },
   setWorkshopMeta: function (meta) {
     activeWorkshopMeta = (meta && typeof meta === 'object') ? meta : null;
@@ -561,7 +508,7 @@ const mapAppApi = {
       roadSnapping.toggleRoads();
     }
     if (ov.drawings != null) {
-      ['draw-layer', 'draw-layer-live'].forEach(function (layerId) {
+      ['draw-layer', 'draw-layer-live', 'draw-layer-points'].forEach(function (layerId) {
         if (map.getLayer(layerId)) {
           map.setLayoutProperty(layerId, 'visibility', ov.drawings ? 'visible' : 'none');
         }
@@ -575,28 +522,15 @@ const mapAppApi = {
     }
   },
   // Shows exactly the listed layers, superseding the previous call; each step opens with them all visible.
-  setDataLayers: function (ids) {
+  // opacity: the step's opacity (0-1) for the layers coloured by a value, or null for their own.
+  setDataLayers: function (ids, opacity) {
     activeDataLayerIds = [];
     (Array.isArray(ids) ? ids : []).forEach(function (id) {
       id = String(id);
-      var known = DATA_LAYER_LABELS[id] || isCustomDataLayerId(id);
+      var known = BUILTIN_DATA_LAYERS.indexOf(id) !== -1 || isCustomDataLayerId(id) || isResultDataLayerId(id);
       if (known && activeDataLayerIds.indexOf(id) === -1) activeDataLayerIds.push(id);
     });
-    dataLayerHidden = {};
+    dataLayerOpacity = typeof opacity === 'number' && isFinite(opacity) ? opacity : null;
     applyActiveDataLayers();
-  },
-  // [{ id, label, visible }] for the Layers picker.
-  getDataLayerState: function () {
-    return activeDataLayerIds.map(function (id) {
-      return { id: id, label: dataLayerLabel(id), visible: !dataLayerHidden[id] };
-    });
-  },
-  // The facilitator's show/hide of one activated layer; returns its new visibility.
-  toggleDataLayer: function (id) {
-    id = String(id || '');
-    if (activeDataLayerIds.indexOf(id) === -1) return false;
-    dataLayerHidden[id] = !dataLayerHidden[id];
-    applyActiveDataLayers();
-    return !dataLayerHidden[id];
   }
 };

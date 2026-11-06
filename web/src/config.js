@@ -46,7 +46,6 @@
     pitch: 0,
     bearing: 0,
     markerSettings: null,
-    themeCycle: ['streets', 'satellite', 'topo', 'paper'],
     styles: {
       streets: rasterStyle('osm-streets'),
       satellite: rasterStyle('esri-satellite', {
@@ -67,6 +66,15 @@
         sources: {},
         layers: [
           { id: 'floorplan-white-bg', type: 'background', paint: { 'background-color': '#f8f7f2' } }
+        ]
+      },
+      // An empty sheet in one colour, which the step picks (mapLayers.js setBlankSheetColor).
+      blank: {
+        version: 8,
+        glyphs: GLYPHS_URL,
+        sources: {},
+        layers: [
+          { id: 'blank-sheet-bg', type: 'background', paint: { 'background-color': '#ffffff' } }
         ]
       }
     }

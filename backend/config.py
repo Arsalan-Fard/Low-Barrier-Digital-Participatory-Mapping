@@ -6,7 +6,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT / "web"
 MAPUTNIK_DIST_DIR = ROOT / "map-style-editor" / "maputnik" / "dist"
-CALIBRATION_FILE = ROOT / "calibration_offsets.json"
 MAPBOX_TOKEN_FILE = ROOT / "token.txt"
 
 SESSIONS_DIR = ROOT / "sessions"
@@ -23,11 +22,17 @@ CUSTOM_LAYERS_DIR = ROOT / "data" / "custom_layers"
 WORKSHOP_ASSETS_DIR = ROOT / "data" / "workshop_assets"
 MAP_SHEETS_DIR = ROOT / "data" / "map_sheets"
 
+# The Digitizer (digitizer/, the page at /digitizer/): its sticker and pen legend, one folder per
+# digitised sheet (participant data, never bundled), and the colour palettes it learned before it
+# stopped learning (read only). It reads MAP_SHEETS_DIR and saves each sheet's GeoJSON into SESSIONS_DIR.
+DIGITIZER_LEGEND_FILE = ROOT / "digitizer" / "legend.json"
+DIGITIZED_SHEETS_DIR = ROOT / "data" / "digitized_sheets"
+DIGITIZER_PALETTES_DIR = ROOT / "data" / "digitizer_palettes"
+# The optional handwriting model's server address (set in the Digitizer page).
+DIGITIZER_VLM_FILE = ROOT / "data" / "vlm.json"
+
 FLOORPLAN_DIR = ROOT / "floorplan"
 FLOORPLAN_DXF_FILE = FLOORPLAN_DIR / "Télécom Palaiseau_RDC_simplified.dxf"
-
-DIGITIZER_RUNS_DIR = ROOT / "digitizer" / "runs"
-DIGITIZER_SESSIONS_DIR = ROOT / "digitizer" / "sessions"
 
 
 def token_line(index):

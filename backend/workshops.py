@@ -1,5 +1,5 @@
-"""Workshop definitions, their uploaded images, and the data layers a workshop step can show:
-built-in layers plus facilitator-uploaded GeoJSON / uMap files in data/custom_layers/."""
+"""Projects (the workshop definitions in data/workshops.json), their uploaded images, and the data
+layers a step can show: built-in layers plus uploaded GeoJSON / uMap files in data/custom_layers/."""
 import json
 import os
 import re
@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from flask import Blueprint, jsonify, request, send_from_directory
 
-from . import config
+from . import config, projects
 
 bp = Blueprint("workshops", __name__)
 
@@ -237,14 +237,11 @@ def api_data_layers_delete(layer_id):
 
 @bp.route("/api/workshops", methods=["GET"])
 def api_workshops_load():
-    if not config.WORKSHOPS_FILE.exists():
-        return jsonify({"workshops": []})
-    try:
-        data = json.loads(config.WORKSHOPS_FILE.read_text(encoding="utf-8"))
-    except Exception:
+    """The projects (workshops.json). Paper maps with digitised results and the expo get theirs first."""
+    projects.ensure_result_projects()
+    data = projects.load()
+    if data is None:
         return jsonify({"ok": False, "error": "read_failed"}), 500
-    if not isinstance(data, dict) or not isinstance(data.get("workshops"), list):
-        return jsonify({"workshops": []})
     return jsonify(data)
 
 
@@ -254,8 +251,8 @@ def api_workshops_save():
     if not isinstance(payload, dict) or not isinstance(payload.get("workshops"), list):
         return jsonify({"ok": False, "error": "invalid_payload"}), 400
     try:
-        config.WORKSHOPS_FILE.parent.mkdir(exist_ok=True)
-        config.WORKSHOPS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        with projects.lock:
+            projects.save(payload)
     except Exception:
         return jsonify({"ok": False, "error": "write_failed"}), 500
     return jsonify({"ok": True, "path": config.WORKSHOPS_FILE.name})

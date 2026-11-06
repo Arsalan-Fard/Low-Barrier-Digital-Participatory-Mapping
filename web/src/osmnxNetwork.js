@@ -1,12 +1,11 @@
+// The walking network the server routes on (data/osmnx_network.geojson), shown as a data layer.
 (function () {
   var NETWORK_SOURCE_ID = 'osmnx-network-source';
   var NETWORK_LAYER_ID = 'osmnx-network-layer';
 
   function createOsmnxNetwork(options) {
     var map = options.map;
-    var hasNet = false;
     var visible = false;
-    var fetchInFlight = false;
     var networkData = null; // the GeoJSON on the map, put back after a basemap reload
     var cachedCallbacks = null; // loadCached callbacks waiting for the file
 
@@ -48,14 +47,6 @@
       map.setLayoutProperty(NETWORK_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
     }
 
-    function hasNetwork() {
-      return hasNet;
-    }
-
-    function isFetching() {
-      return fetchInFlight;
-    }
-
     // Loads data/osmnx_network.geojson, the network the server routes on, once. Visibility is
     // left to the caller, so a slow load cannot turn the layer on after the caller changed its mind.
     function loadCached(callback) {
@@ -87,51 +78,7 @@
         });
     }
 
-    // Fetches the walking network of the current view; the server keeps it for routing.
-    function fetchForCurrentView(callback) {
-      if (fetchInFlight) {
-        callback(new Error('busy_or_no_map'), null);
-        return;
-      }
-      var b = map.getBounds();
-      var payload = {
-        minLng: b.getWest(),
-        minLat: b.getSouth(),
-        maxLng: b.getEast(),
-        maxLat: b.getNorth(),
-        networkType: 'walk'
-      };
-
-      fetchInFlight = true;
-      fetch('/api/osmnx-fetch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
-        .then(function (res) {
-          return res.json().then(function (body) { return { status: res.status, body: body }; });
-        })
-        .then(function (r) {
-          if (r.status !== 200 || !r.body || !r.body.ok) {
-            throw new Error((r.body && r.body.error) || ('http_' + r.status));
-          }
-          hasNet = true;
-          setData(r.body.geojson);
-          setVisible(true);
-          callback(null, r.body);
-        })
-        .catch(function (err) {
-          callback(err, null);
-        })
-        .finally(function () {
-          fetchInFlight = false;
-        });
-    }
-
     return {
-      fetchForCurrentView: fetchForCurrentView,
-      hasNetwork: hasNetwork,
-      isFetching: isFetching,
       setVisible: setVisible,
       loadCached: loadCached
     };

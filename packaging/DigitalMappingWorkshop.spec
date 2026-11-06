@@ -2,12 +2,15 @@
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_dynamic_libs
-
 
 # SPECPATH is injected by PyInstaller: the directory containing this spec file
 # (packaging/). The repo root is one level up.
 root = Path(SPECPATH).resolve().parent
+
+
+# Participant data that must never ship: the Digitizer's sheets carry the photos (children's names
+# and handwriting) and their results (home locations).
+LEFT_OUT = [root / "data" / "digitized_sheets"]
 
 
 def add_tree(path):
@@ -16,7 +19,9 @@ def add_tree(path):
         return []
     entries = []
     for child in src.rglob("*"):
-        if not child.is_file():
+        if not child.is_file() or "__pycache__" in child.parts:
+            continue
+        if any(child.is_relative_to(folder) for folder in LEFT_OUT):
             continue
         rel_parent = child.parent.relative_to(root)
         entries.append((str(child), str(rel_parent)))
@@ -30,25 +35,31 @@ for dirname in (
     "web",
     "data",
     "map-style-editor/maputnik/dist",
-    # the Digitizer's page (app.py imports its code); its runs, sessions and
-    # photos are participant data and stay out
-    "digitizer/static",
+    "digitizer/static",   # the Digitizer's page (its Python code is collected like the rest)
 ):
     datas += add_tree(dirname)
 datas.append((str(root / "digitizer" / "legend.json"), "digitizer"))
+
+# Hand detection for the photos of the map view sheets (backend/hands.py): its model, and MediaPipe's
+# native library, which MediaPipe opens by path from the mediapipe.tasks.c package, out of the
+# analysis' sight. Without MediaPipe installed the build simply has no hand detection.
+datas.append((str(root / "backend" / "models" / "hand_landmarker.task"), "backend/models"))
+try:
+    from PyInstaller.utils.hooks import collect_dynamic_libs
+    mediapipe_binaries = collect_dynamic_libs("mediapipe")
+except Exception:
+    mediapipe_binaries = []
 
 
 a = Analysis(
     [str(root / "digital_mapping_workshop_launcher.py")],
     pathex=[str(root)],
-    # pupil_apriltags ships its native apriltag.dll inside the package but has
-    # no PyInstaller hook — collect it explicitly or the detector won't start.
-    binaries=collect_dynamic_libs("pupil_apriltags"),
+    binaries=mediapipe_binaries,
     datas=datas,
     hiddenimports=[
-        "pupil_apriltags",
         "sounddevice",
         "imageio_ffmpeg",
+        "mediapipe.tasks.c",
     ],
     hookspath=[],
     hooksconfig={},
@@ -57,8 +68,8 @@ a = Analysis(
         "torch",
         "torchvision",
         "torchaudio",
-        # Unused by the app (the Digitizer's VLM needs torch, excluded above); on a machine that has
-        # them installed, PyInstaller's analysis drags them in and crashes importing them.
+        # Unused by the app; on a machine that has them installed, PyInstaller's analysis drags them
+        # in and crashes importing them.
         "transformers",
         "tensorflow",
         "sklearn",
@@ -66,6 +77,7 @@ a = Analysis(
         "networkx",
         "shapely",
         "stag",
+        # MediaPipe imports it for a plotting helper only; backend/hands.py stands in for it.
         "matplotlib",
         "IPython",
         "pytest",

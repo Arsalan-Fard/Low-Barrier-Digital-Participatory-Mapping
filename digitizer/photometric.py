@@ -47,7 +47,7 @@ class MapImages:
 
     @property
     def shape(self) -> tuple[int, int]:
-        return self.observed.shape[:2]
+        return self.score.shape[:2]
 
 
 def exclusion_mask(width: int, height: int, normalized_rects: list, edge_mm: float, px_per_mm: float) -> np.ndarray:

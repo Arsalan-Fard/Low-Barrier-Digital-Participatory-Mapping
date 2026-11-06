@@ -1,7 +1,7 @@
 // Map page: the street view inset shown where the single-state pointer (street-view
 // tool) stands, looking the way it points. Panoramas are always found through an
 // OUTDOOR lookup, never by position, so the inset cannot land inside a building.
-// On the printed street view screen, streetViewScreen.js places the inset instead.
+// On the printed street view screen, printedScreen.js places the inset instead.
 const streetViewInset = document.getElementById('streetViewInset');
 const streetViewFrame = document.getElementById('streetViewFrame');
 const STREET_VIEW_FOV = 80;
@@ -209,7 +209,7 @@ function applyStreetViewPanoramaState(lngLat, heading) {
   return !streetViewNoOutdoor;
 }
 
-// streetViewScreen's callback when the printed screen appears or goes.
+// printedScreen's callback when the street view sheet appears or goes.
 function handleStreetScreenModeChange(onScreen) {
   if (!onScreen) {
     streetViewInset.style.left = '';

@@ -2,32 +2,22 @@
 
 Everything here is read-only. A sheet record lives in ``data/map_sheets/<id>.json``
 next to ``<id>.png``, the clean render of the map square the participants drew
-on. The record also carries the page layout in PDF points: where the map square,
-the AprilTags and the side panel sit on the A3 page.
+on. The record also carries the page layout in PDF points: where the map square
+and the AprilTags sit on the A3 page.
 """
 from __future__ import annotations
 
 import json
 import math
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_SHEETS_DIR = REPO_ROOT / "data" / "map_sheets"
+from backend import config
+
 POINTS_PER_MM = 72.0 / 25.4
-
-
-def default_sheets_dir() -> Path:
-    """Where sheet records live: $DIGITIZER_SHEETS (set by --sheets), else the app's data/map_sheets.
-
-    data/ is not in git, so on another computer the records are copied in by hand.
-    """
-    configured = os.environ.get("DIGITIZER_SHEETS")
-    return Path(configured) if configured else DEFAULT_SHEETS_DIR
 
 
 @dataclass
@@ -39,7 +29,6 @@ class MapSheet:
     map_corners_pt: np.ndarray            # (4, 2) TL, TR, BR, BL in page points
     fiducials_pt: dict[int, np.ndarray]   # tag id -> (4, 2) corners in page points
     lnglat_corners: list[list[float]]     # TL, TR, BR, BL as [lng, lat]
-    panels_pt: dict[str, list[float]] = field(default_factory=dict)  # side -> [x, y, w, h]
     mask_rects: list[list[float]] = field(default_factory=list)       # normalised tag cells
 
     @property
@@ -87,7 +76,7 @@ def _record_path(map_id: str, sheets_dir: Path) -> Path:
 
 
 def load_sheet(map_id: str | int, sheets_dir: str | Path | None = None) -> MapSheet:
-    sheets_dir = Path(sheets_dir) if sheets_dir else default_sheets_dir()
+    sheets_dir = Path(sheets_dir) if sheets_dir else config.MAP_SHEETS_DIR
     record_path = _record_path(str(map_id), sheets_dir)
     record = json.loads(record_path.read_text(encoding="utf-8"))
     reference = cv2.imread(str(record_path.with_suffix(".png")), cv2.IMREAD_COLOR)
@@ -103,10 +92,6 @@ def load_sheet(map_id: str | int, sheets_dir: str | Path | None = None) -> MapSh
         }
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"sheet {map_id} has no usable print layout: {exc}") from exc
-    panels = {}
-    for side, panel in (printed.get("sidePanels") or {}).items():
-        if isinstance(panel, dict) and isinstance(panel.get("regionPoints"), list):
-            panels[side] = [float(v) for v in panel["regionPoints"]]
     return MapSheet(
         id=str(record.get("id", map_id)),
         record=record,
@@ -115,6 +100,5 @@ def load_sheet(map_id: str | int, sheets_dir: str | Path | None = None) -> MapSh
         map_corners_pt=map_corners,
         fiducials_pt=fiducials,
         lnglat_corners=[[float(a), float(b)] for a, b in record["corners"]],
-        panels_pt=panels,
         mask_rects=printed.get("maskRectsNormalized") or [],
     )

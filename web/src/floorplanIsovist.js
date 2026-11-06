@@ -245,7 +245,6 @@
     return {
       setSegments: setSegments,
       update: update,
-      hasSegments: function () { return segments.length > 0; },
       clear: clear
     };
   }

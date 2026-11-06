@@ -2,86 +2,388 @@
   "workshops": [
     {
       "id": "ws_mppl13s62b3oe",
+      "mapSheetViews": {},
       "name": "Palaiseau Campus",
       "steps": [
         {
-          "dataLayers": [],
+          "dataLayers": [
+            "result:geojson:1_01.geojson",
+            "result:geojson:1_08.geojson",
+            "result:geojson:1_09.geojson",
+            "result:geojson:1_10.geojson",
+            "result:geojson:1_11.geojson",
+            "result:geojson:1_12.geojson",
+            "result:geojson:1_13.geojson",
+            "result:geojson:1_14.geojson",
+            "result:geojson:1_15.geojson",
+            "result:geojson:1_16.geojson",
+            "result:geojson:1_17.geojson",
+            "result:geojson:1_18.geojson",
+            "result:geojson:1_19.geojson",
+            "result:geojson:1_20.geojson",
+            "result:geojson:1_21.geojson",
+            "result:geojson:1_22.geojson",
+            "result:geojson:1_23.geojson",
+            "result:geojson:1_24.geojson",
+            "result:geojson:1_25.geojson",
+            "result:geojson:1_02.geojson",
+            "result:geojson:1_03.geojson",
+            "result:geojson:1_04.geojson",
+            "result:geojson:1_05.geojson",
+            "result:geojson:1_06.geojson",
+            "result:geojson:1_07.geojson"
+          ],
           "id": 1,
           "images": [],
           "indoor": false,
           "indoorId": "floorplan (2).dxf",
-          "label": "Part 1",
+          "label": "Step 1",
           "labels": [],
-          "mapView": null,
-          "theme": "streets"
+          "mapView": {
+            "bearing": 0,
+            "center": [
+              2.327384573892573,
+              48.835366302349655
+            ],
+            "pitch": 0,
+            "zoom": 14.24925058217937
+          },
+          "theme": "paper"
         },
         {
           "dataLayers": [],
           "id": 2,
-          "images": [
-            {
-              "name": "484681_1_En_3_Fig15_HTML.png",
-              "src": "/api/workshop-assets/484681_1_En_3_Fig15_HTML_1786286188338.png",
-              "widthPct": 0.41041666666666665,
-              "xPct": 0.54375,
-              "yPct": 0.5917338709677419
-            }
-          ],
+          "images": [],
           "indoor": true,
           "indoorId": "floorplan.dxf",
-          "label": "Part 2",
+          "label": "Step 2",
           "labels": [],
           "mapView": null,
-          "theme": "streets"
+          "theme": "floorplan"
         }
-      ]
+      ],
+      "visualization": {
+        "drawings": false,
+        "comments": false,
+        "heatmap": true,
+        "marks": true,
+        "heatStyle": "hexagon",
+        "radius": 52,
+        "intensity": 0.4,
+        "hexMetres": 150,
+        "hexMix": false,
+        "stickerColors": {},
+        "hiddenStickerTypes": [],
+        "marksApart": true
+      }
     },
     {
       "id": "ws_w972ns58gi",
       "name": "Workshop 2",
       "steps": [
         {
+          "dataLayers": [],
           "id": 1,
-          "label": "Part 1",
-          "theme": "streets",
+          "images": [],
           "indoor": false,
           "indoorId": "",
+          "label": "Step 1",
+          "labels": [],
           "mapView": {
+            "bearing": 0,
             "center": [
               2.208499999999958,
               48.711600248434735
             ],
-            "zoom": 15.445811397114664,
-            "bearing": 0,
-            "pitch": 0
+            "pitch": 0,
+            "zoom": 15.445811397114664
           },
-          "labels": [
-            {
-              "text": "6yjttyj",
-              "xPct": 0.3484817661228146,
-              "yPct": 0.807146096882848,
-              "fontSize": 20,
-              "bgOpacity": 0.6
-            }
-          ],
-          "images": [],
-          "dataLayers": [
-            "roads",
-            "custom:umap_backup_institut-polytechnique-de-paris.geojson"
-          ]
+          "theme": "streets"
         },
         {
+          "dataLayers": [],
           "id": 2,
-          "label": "Part 2",
-          "theme": "streets",
+          "images": [],
           "indoor": true,
           "indoorId": "floorplan (2).dxf",
-          "mapView": null,
+          "label": "Step 2",
           "labels": [],
-          "images": [],
-          "dataLayers": []
+          "mapView": null,
+          "theme": "floorplan"
         }
-      ]
+      ],
+      "visualization": {
+        "drawings": true,
+        "comments": false,
+        "heatmap": true,
+        "marks": true,
+        "heatStyle": "density",
+        "radius": 28,
+        "intensity": 1,
+        "hexMetres": 150,
+        "hexMix": false,
+        "stickerColors": {},
+        "hiddenStickerTypes": [],
+        "marksApart": true
+      }
+    },
+    {
+      "id": "ws_c4354a019e",
+      "name": "Collège Alphonse Daudet (14e)",
+      "steps": [
+        {
+          "blankColor": "#ffffff",
+          "dataLayers": [
+            "result:geojson:1_01.geojson",
+            "result:geojson:1_02.geojson",
+            "result:geojson:1_03.geojson",
+            "result:geojson:1_04.geojson",
+            "result:geojson:1_05.geojson",
+            "result:geojson:1_06.geojson",
+            "result:geojson:1_07.geojson",
+            "result:geojson:1_08.geojson",
+            "result:geojson:1_09.geojson",
+            "result:geojson:1_10.geojson",
+            "result:geojson:1_11.geojson",
+            "result:geojson:1_12.geojson",
+            "result:geojson:1_15.geojson",
+            "result:geojson:1_16.geojson",
+            "result:geojson:1_17.geojson",
+            "result:geojson:1_18.geojson",
+            "result:geojson:1_19.geojson",
+            "result:geojson:1_20.geojson",
+            "result:geojson:1_21.geojson",
+            "result:geojson:1_22.geojson",
+            "result:geojson:1_23.geojson",
+            "result:geojson:1_24.geojson",
+            "result:geojson:1_25.geojson",
+            "custom:Shops.geojson"
+          ],
+          "id": 1,
+          "images": [],
+          "indoor": false,
+          "indoorId": "floorplan (2).dxf",
+          "label": "Step 1",
+          "labels": [],
+          "layerOpacity": 0.45,
+          "mapView": {
+            "bearing": 0,
+            "center": [
+              2.3773272592720787,
+              48.87084772296862
+            ],
+            "pitch": 0,
+            "zoom": 13.675194214365861
+          },
+          "theme": "paper"
+        }
+      ],
+      "visualization": {
+        "drawings": false,
+        "comments": false,
+        "heatmap": true,
+        "marks": true,
+        "heatStyle": "hexagon",
+        "radius": 28,
+        "intensity": 1,
+        "hexMetres": 150,
+        "hexMix": true,
+        "stickerColors": {
+          "Blue triangle": "#e02e40"
+        },
+        "hiddenStickerTypes": [
+          "Black circle",
+          "Gold star",
+          "Green circle",
+          "Green triangle",
+          "Pink circle",
+          "Pink triangle",
+          "Red circle",
+          "Red triangle",
+          "Yellow circle",
+          "Yellow triangle"
+        ],
+        "marksApart": true
+      }
+    },
+    {
+      "id": "ws_6e042f6283",
+      "name": "Collège Montgolfier (3e)",
+      "steps": [
+        {
+          "dataLayers": [],
+          "id": 1,
+          "images": [],
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 1",
+          "labels": [],
+          "mapView": null,
+          "theme": "streets"
+        }
+      ],
+      "visualization": {
+        "drawings": true,
+        "comments": false,
+        "heatmap": true,
+        "marks": true,
+        "heatStyle": "density",
+        "radius": 28,
+        "intensity": 1,
+        "hexMetres": 150,
+        "hexMix": false,
+        "stickerColors": {},
+        "hiddenStickerTypes": [],
+        "marksApart": true
+      }
+    },
+    {
+      "id": "ws_e7a520210d",
+      "name": "Collège Jean-Baptiste Clément (20e)",
+      "steps": [
+        {
+          "dataLayers": [
+            "result:geojson:3_01.geojson",
+            "result:geojson:3_02.geojson",
+            "result:geojson:3_03.geojson",
+            "result:geojson:3_04.geojson",
+            "result:geojson:3_05.geojson",
+            "result:geojson:3_06.geojson",
+            "result:geojson:3_07.geojson",
+            "result:geojson:3_08.geojson",
+            "result:geojson:3_09.geojson",
+            "result:geojson:3_10.geojson",
+            "result:geojson:3_11.geojson",
+            "result:geojson:3_12.geojson",
+            "result:geojson:3_15.geojson",
+            "result:geojson:3_16.geojson",
+            "result:geojson:3_17.geojson",
+            "result:geojson:3_18.geojson",
+            "result:geojson:3_19.geojson",
+            "result:geojson:3_20.geojson",
+            "result:geojson:3_21.geojson",
+            "result:geojson:3_22.geojson",
+            "result:geojson:3_23.geojson"
+          ],
+          "id": 1,
+          "images": [],
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 1",
+          "labels": [],
+          "layerOpacity": 0.9,
+          "mapView": {
+            "bearing": 0,
+            "center": [
+              2.3871051103963055,
+              48.87123638863659
+            ],
+            "pitch": 0,
+            "zoom": 14.847797814995172
+          },
+          "theme": "paper"
+        }
+      ],
+      "visualization": {
+        "drawings": false,
+        "comments": false,
+        "heatmap": true,
+        "marks": true,
+        "heatStyle": "hexagon",
+        "radius": 67,
+        "intensity": 0.9,
+        "hexMetres": 170,
+        "hexMix": false,
+        "stickerColors": {
+          "Blue triangle": "#e02e2e",
+          "Green circle": "#0011ff",
+          "Green triangle": "#ff0000",
+          "Pink circle": "#0040ff",
+          "Pink triangle": "#e84f4f",
+          "Red circle": "#5d78fe",
+          "Red triangle": "#fe4134",
+          "Tag drawpair:draw-3": "#000000",
+          "Yellow circle": "#1831f2",
+          "Yellow triangle": "#f21818"
+        },
+        "hiddenStickerTypes": [
+          "Green circle",
+          "Green triangle",
+          "Pink circle",
+          "Pink triangle",
+          "Red circle",
+          "Red triangle",
+          "Yellow circle",
+          "Yellow triangle",
+          "Gold star",
+          "Blue triangle",
+          "Black circle",
+          "Blue circle"
+        ],
+        "marksApart": true
+      }
+    },
+    {
+      "id": "ws_ac2c0d5b0e",
+      "name": "Collège Georges Brassens (19e)",
+      "steps": [
+        {
+          "dataLayers": [],
+          "id": 1,
+          "images": [],
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 1",
+          "labels": [],
+          "mapView": null,
+          "theme": "streets"
+        }
+      ],
+      "visualization": {
+        "drawings": true,
+        "comments": false,
+        "heatmap": true,
+        "marks": true,
+        "heatStyle": "density",
+        "radius": 28,
+        "intensity": 1,
+        "hexMetres": 150,
+        "hexMix": false,
+        "stickerColors": {},
+        "hiddenStickerTypes": [],
+        "marksApart": true
+      }
+    },
+    {
+      "id": "expo",
+      "name": "Expo",
+      "steps": [
+        {
+          "dataLayers": [],
+          "id": 1,
+          "images": [],
+          "indoor": false,
+          "indoorId": "",
+          "label": "Step 1",
+          "labels": [],
+          "mapView": null,
+          "theme": "streets"
+        }
+      ],
+      "visualization": {
+        "drawings": true,
+        "comments": false,
+        "heatmap": true,
+        "marks": true,
+        "heatStyle": "density",
+        "radius": 28,
+        "intensity": 1,
+        "hexMetres": 150,
+        "hexMix": false,
+        "stickerColors": {},
+        "hiddenStickerTypes": [],
+        "marksApart": true
+      }
     }
   ]
 }

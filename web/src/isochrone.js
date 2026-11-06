@@ -26,6 +26,7 @@
     var fetchInFlight = false;
     var pinMarker = null;
     var activeMinutes = DEFAULT_MINUTES;
+    var queued = null; // a mouse request made while a fetch was out: { lng, lat, minutes, done }
 
     function ensureLayers() {
       if (!map.getSource(ISOCHRONE_SOURCE_ID)) {
@@ -73,13 +74,16 @@
     // The pin marks where the isochrone starts.
     function updatePinMarker(lng, lat) {
       if (!pinMarker) {
+        // The marker places its element with a transform, so the pin's grow-in scale goes on a child.
         var el = document.createElement('div');
         el.id = ISOCHRONE_MARKER_ID;
-        el.style.cssText = [
+        var dot = document.createElement('div');
+        dot.style.cssText = [
           'width:14px', 'height:14px', 'border-radius:50%',
           'background:#00aaff', 'border:2.5px solid #fff',
           'box-shadow:0 0 0 2px #00aaff', 'cursor:default'
         ].join(';');
+        el.appendChild(dot);
         pinMarker = new mapboxgl.Marker({ element: el, anchor: 'center' })
           .setLngLat([lng, lat])
           .addTo(map);
@@ -92,7 +96,7 @@
     function setPinScale(progress) {
       if (!pinMarker) return;
       var s = Math.min(1, Math.max(0, Number(progress) || 0));
-      pinMarker.getElement().style.transform = 'scale(' + s + ')';
+      pinMarker.getElement().firstChild.style.transform = 'scale(' + s + ')';
     }
 
     function applyIsochroneResult(lng, lat, geojson) {
@@ -102,12 +106,24 @@
       updatePinMarker(lng, lat);
     }
 
-    function fetchIsochroneViaMapbox(lng, lat, minutes) {
+    // done(ok), when given, hears whether this fetch drew a reach; a queued mouse request goes next.
+    function finishFetch(done, ok) {
+      fetchInFlight = false;
+      if (typeof done === 'function') done(!!ok);
+      if (queued) {
+        var next = queued;
+        queued = null;
+        fetchIsochrone(next.lng, next.lat, next.minutes, next.done);
+      }
+    }
+
+    function fetchIsochroneViaMapbox(lng, lat, minutes, done) {
       var token = getAccessToken();
       if (!token) {
-        fetchInFlight = false;
+        finishFetch(done, false);
         return;
       }
+      var ok = false;
       var url = 'https://api.mapbox.com/isochrone/v1/mapbox/walking/'
         + lng.toFixed(6) + ',' + lat.toFixed(6)
         + '?contours_minutes=' + encodeURIComponent(String(minutes))
@@ -121,25 +137,23 @@
         })
         .then(function (geojson) {
           applyIsochroneResult(lng, lat, geojson);
+          ok = true;
         })
         .catch(function (err) {
           console.warn('[isochrone] Mapbox fetch failed:', err);
         })
         .finally(function () {
-          fetchInFlight = false;
+          finishFetch(done, ok);
         });
     }
 
-    function fetchIsochrone(lng, lat, minutes) {
+    function fetchIsochrone(lng, lat, minutes, done) {
       if (fetchInFlight) return;
       fetchInFlight = true;
       lastCallMs = Date.now();
       lastFetchedLngLat = { lng: lng, lat: lat };
 
-      if (!window.CompactOsmnx.hasNetwork()) {
-        fetchIsochroneViaMapbox(lng, lat, minutes);
-        return;
-      }
+      // The server's saved walking network first; Mapbox when it has none or the point is outside it.
       fetch('/api/osmnx-isochrone', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -154,12 +168,32 @@
         .then(function (data) {
           if (!data || !data.ok || !data.geojson) throw { fallback: true };
           applyIsochroneResult(lng, lat, data.geojson);
-          fetchInFlight = false;
+          finishFetch(done, true);
         })
         .catch(function (err) {
           if (!(err && err.fallback)) console.warn('[isochrone] local reach failed, falling back:', err);
-          fetchIsochroneViaMapbox(lng, lat, minutes);
+          fetchIsochroneViaMapbox(lng, lat, minutes, done);
         });
+    }
+
+    // The mouse: the reach from a clicked point, asked for at once (or right after the fetch already
+    // out). The old reach goes and the pin moves straight away. done(ok) hears whether it worked.
+    function showAt(lng, lat, minutes, done) {
+      lng = Number(lng);
+      lat = Number(lat);
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+      activeMinutes = normalizeMinutes(minutes);
+      holdSinceMs = 0;
+      holdPoint = null;
+      // No ensureLayers here: it throws while a basemap is still loading; the result adds them.
+      setGeoJSON(null);
+      updatePinMarker(lng, lat);
+      setPinScale(1);
+      if (fetchInFlight) {
+        queued = { lng: lng, lat: lat, minutes: activeMinutes, done: done };
+        return;
+      }
+      fetchIsochrone(lng, lat, activeMinutes, done);
     }
 
     // tagPoint: viewport px, or null when no isochrone tag is seen.
@@ -216,11 +250,13 @@
       holdSinceMs = 0;
       holdPoint = null;
       lastFetchedLngLat = null;
+      queued = null;
     }
 
     return {
       ensureLayers: ensureLayers,
       update: update,
+      showAt: showAt,
       setVisible: setVisible,
       clear: clear
     };

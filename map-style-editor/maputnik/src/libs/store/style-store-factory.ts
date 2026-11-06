@@ -9,9 +9,8 @@ export async function createStyleStore(onStyleChanged: OnStyleChangedCallback): 
   const isRepositoryLibertyStyle = styleUrl
     && new URL(styleUrl, window.location.href).origin === window.location.origin
     && new URL(styleUrl, window.location.href).pathname === "/maputnik/styles/liberty.json";
-  const hasStoredStyle = window.localStorage.getItem("maputnik:latest_style") !== null;
   const useStyleUrl = styleUrl
-    && ((isRepositoryLibertyStyle && !hasStoredStyle)
+    && (isRepositoryLibertyStyle
       || window.confirm("Load style from URL: " + styleUrl + " and discard current changes?"));
   let styleStore: IStyleStore;
   if (import.meta.env.MODE === 'desktop' && !useStyleUrl) {
